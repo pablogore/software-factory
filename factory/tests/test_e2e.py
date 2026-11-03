@@ -36,6 +36,8 @@ class E2E(unittest.TestCase):
         cls.sh(f"git init -q --bare -b main {cls.tmp / 'origin.git'}", cwd=cls.tmp)
         shutil.copytree(V3 / "factory", cls.repo / "factory", ignore=shutil.ignore_patterns("jobs", "__pycache__"))
         shutil.copytree(V3 / ".claude", cls.repo / ".claude")
+        cfg = cls.repo / "factory" / "config.json"  # the test's origin has main, whatever the project uses
+        cfg.write_text(json.dumps({**json.loads(cfg.read_text()), "base_branch": "main"}, indent=2))
         (cls.repo / "factory" / "checks.sh").write_text("#!/usr/bin/env bash\nset -e\ntest ! -e BROKEN\necho checks ok\n")
         (cls.repo / ".gitignore").write_text("/factory/jobs/\n/.worktrees/\n__pycache__/\n")
         (cls.repo / "README.md").write_text("# App\n")
