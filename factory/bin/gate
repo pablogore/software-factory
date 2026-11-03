@@ -92,11 +92,25 @@ def hook():
     event = json.load(sys.stdin)
     if event.get("stop_hook_active"):
         sys.exit(0)  # one nudge per stop; the gate decides
+    prompt = ""
     with open(Path(event["agent_transcript_path"]).expanduser()) as f:
-        content = json.loads(f.readline())["message"]["content"]
-    prompt = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content)
+        for line in f:
+            try:
+                entry = json.loads(line)
+                content = entry["message"]["content"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            prompt = content if isinstance(content, str) else " ".join(
+                b.get("text", "") for b in content if isinstance(b, dict))
+            if prompt:
+                break
+    if "Job: " not in prompt:
+        sys.exit(0)  # not a factory builder
     job_id = prompt.split("Job: ", 1)[1].split(".", 1)[0]
-    job = json.loads((FACTORY / "jobs" / job_id / "job.json").read_text())
+    job_file = FACTORY / "jobs" / job_id / "job.json"
+    if not job_file.exists():
+        sys.exit(0)
+    job = json.loads(job_file.read_text())
     code, log, _ = run_checks(job["worktree"])
     if code != 0:
         tail = "\n".join(log.rstrip().splitlines()[-40:])

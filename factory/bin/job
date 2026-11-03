@@ -297,11 +297,36 @@ def transcripts_dir():
     return config / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(REPO))
 
 
-def prompt_text(line):
-    content = json.loads(line)["message"]["content"]
+def message_text(entry):
+    """Text of entry["message"]["content"]; "" if the entry has no message or content."""
+    msg = entry.get("message") if isinstance(entry, dict) else None
+    content = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(content, str):
         return content
-    return " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content
+                        if isinstance(b, dict) and isinstance(b.get("text", ""), str))
+    return ""
+
+
+def read_entries(f):
+    """Yield the JSON entries of a transcript, skipping lines that are not JSON."""
+    for line in f:
+        try:
+            yield json.loads(line)
+        except ValueError:
+            continue
+
+
+def first_prompt(entries, limit=50):
+    """First non-empty message text among the first `limit` entries (the agent's prompt)."""
+    for i, entry in enumerate(entries):
+        if i >= limit:
+            break
+        text = message_text(entry)
+        if text:
+            return text
+    return ""
 
 
 def cost_usd(job):
@@ -317,14 +342,13 @@ def cost_usd(job):
     total = 0.0
     for path in transcripts_dir().glob("*/subagents/agent-*.jsonl"):
         with path.open() as f:
-            first = f.readline()
-            if not first or needle not in prompt_text(first):
+            entries = read_entries(f)
+            if needle not in first_prompt(entries):
                 continue
             usage_by_message = {}
-            for line in f:
-                entry = json.loads(line)
-                msg = entry.get("message")
-                if entry.get("type") == "assistant" and isinstance(msg, dict) and msg.get("usage"):
+            for entry in entries:
+                msg = entry.get("message") if isinstance(entry, dict) else None
+                if isinstance(entry, dict) and entry.get("type") == "assistant" and isinstance(msg, dict) and msg.get("usage"):
                     usage_by_message[msg["id"]] = (msg["model"], msg["usage"])
         for model, u in usage_by_message.values():
             tokens = (u.get("input_tokens", 0) + u.get("output_tokens", 0)
