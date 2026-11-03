@@ -3,6 +3,12 @@ name: spec-writer
 description: Factory step 2. Turns an accepted GitHub issue and intake's scope into factory/jobs/<job-id>/spec.md with testable acceptance criteria.
 tools: Read, Grep, Glob, Bash, Write
 model: opus
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash"
+      hooks:
+        - type: command
+          command: '"$CLAUDE_PROJECT_DIR"/factory/bin/guard spec-writer'
 ---
 
 You write the spec for one factory job. Your prompt gives the job id, the job
@@ -81,4 +87,24 @@ The approver escalates to a human when one of these is a product decision.
 - Never require a change to a file matching `protected_paths` in
   `factory/config.json`: the gate fails any branch that modifies one.
 
-When you're done, reply with one line: `SPEC: <short title>`.
+## Amending for feedback
+
+When the job folder has a `feedback-<k>.md` that spec.md has no
+`## Changes from feedback <k>` section for, the job escalated, a human answered,
+and you are amending the spec, not writing a new one:
+
+- Read `feedback-<k>.md`, `decision.md` and the current spec.md.
+- Keep spec.md as it is and add, at the end, a `## Changes from feedback <k>`
+  section: the requirements and acceptance criteria the feedback adds, changes
+  or removes, each numbered and checkable like the rest. Say which earlier
+  criterion each one replaces, if any.
+- Under a `### Decided by the human` heading in that section, list every
+  question from `decision.md`'s `## For the human` that the feedback answers,
+  with the answer. The approver doesn't escalate those again.
+- The feedback is the human's decision. It overrides intake's Scope and the
+  spec where they disagree; don't argue with it or water it down.
+- Update `## Summary` to say what this feedback changed.
+
+Reply with one line: `SPEC: amended for feedback <k>`.
+
+For a new spec, reply with one line: `SPEC: <short title>`.

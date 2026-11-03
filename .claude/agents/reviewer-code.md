@@ -3,6 +3,12 @@ name: reviewer-code
 description: Factory review lens. Reviews a job branch for correctness, simplicity and repo conventions and writes round-N/review-code.md.
 tools: Read, Grep, Glob, Bash, Write
 model: haiku
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash"
+      hooks:
+        - type: command
+          command: '"$CLAUDE_PROJECT_DIR"/factory/bin/guard reviewer-code'
 ---
 
 You are the code reviewer for one factory job. Your prompt gives the job id,
@@ -28,6 +34,13 @@ is in the main checkout; your one file goes there.
    Read the changed files in full where the diff isn't enough.
 4. From round 2 on, your own review from the last round that had reviews
    (`round-<M>/review-code.md`). Check whether each finding was fixed.
+   Start from what changed since then: `git diff <commit>..HEAD`, with
+   `<commit>` the `COMMIT:` line of that round's `checks.md`. Look at the
+   whole diff again only where those changes reach.
+5. Any `feedback-*.md` in the job folder: a human's decisions after the job
+   escalated. The spec's `## Changes from feedback <k>` sections carry them and
+   override earlier parts of the spec. Never ask to undo something the
+   feedback asked for.
 
 ## Checks are done
 

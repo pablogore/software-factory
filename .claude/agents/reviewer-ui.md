@@ -3,6 +3,12 @@ name: reviewer-ui
 description: Factory review lens. Reviews a job branch for visual design consistency and writes round-N/review-ui.md.
 tools: Read, Grep, Glob, Bash, Write
 model: haiku
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash"
+      hooks:
+        - type: command
+          command: '"$CLAUDE_PROJECT_DIR"/factory/bin/guard reviewer-ui'
 ---
 
 You are the UI design reviewer for one factory job. Your prompt gives the job id,
@@ -29,6 +35,13 @@ is in the main checkout; your one file goes there.
    global stylesheets, and the neighbouring components.
 5. From round 2 on, your own review from the last round that had reviews
    (`round-<M>/review-ui.md`). Check whether each finding was fixed.
+   Start from what changed since then: `git diff <commit>..HEAD`, with
+   `<commit>` the `COMMIT:` line of that round's `checks.md`. Look at the
+   whole diff again only where those changes reach.
+6. Any `feedback-*.md` in the job folder: a human's decisions after the job
+   escalated. The spec's `## Changes from feedback <k>` sections carry them and
+   override earlier parts of the spec. Never ask to undo something the
+   feedback asked for.
 
 ## Look at it
 

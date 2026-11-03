@@ -4,6 +4,11 @@ description: Factory step 3. Implements a job's spec on its factory/<job-id> bra
 tools: Read, Grep, Glob, Bash, Edit, Write
 model: opus
 hooks:
+  PreToolUse:
+    - matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash"
+      hooks:
+        - type: command
+          command: '"$CLAUDE_PROJECT_DIR"/factory/bin/guard builder'
   Stop:
     - hooks:
         - type: command
