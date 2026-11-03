@@ -13,6 +13,7 @@ Usage:
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job>             needs-human → spec, with your feedback (stdin) and new PR comments as feedback-<k>.md
   job reviewers <job>            the reviewers to spawn this round, as lens=model
+  job plan-check                 issues the tech-lead hasn't planned yet (factory/jobs/plan.md)
   job reject <job>               needs-info or needs-human → rejected, with your reason (stdin) as rejection.md
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
@@ -49,6 +50,7 @@ TRANSITIONS = {
     "approve": {"merging", "needs-human"},
     "merging": {"needs-human"},
     "needs-human": {"spec", "rejected"},
+    "triage": {"build", "needs-human"},
 }
 TERMINAL = {"merged", "rejected"}
 # Any unfinished job can move to merged once its PR is merged on GitHub,
@@ -57,6 +59,10 @@ WAITING = {"needs-info", "needs-human"}
 CONCURRENCY = CONFIG["concurrency"]
 # PR authors whose comments count as feedback, besides the operator.
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+# Escalations the scripts raise go to the tech-lead first; the approver's go
+# straight to the human, since it already judged the job.
+TRIAGED_FROM = {"build", "gate", "review", "merging"}
+PLAN = JOBS / "plan.md"
 
 
 class Refused(Exception):
@@ -540,6 +546,22 @@ def advance(job, stage):
         job["round_limit"] = job["round"] + CONFIG["max_rounds"]
         label("issue", job["issue"], remove=LABELS["needs_human"])
 
+    elif old == "triage" and stage == "build":
+        require(first_line(d / "triage.md") == "RETRY", "triage.md doesn't start with RETRY")
+        require(not job.get("tl_retry_used"), "the tech-lead already retried this job once")
+        job["tl_retry_used"] = True
+        job["round_limit"] = job["round"] + 1
+        next_round(job, only=job.get("round_reviewers"))
+
+    elif old == "triage":  # → needs-human
+        require(first_line(d / "triage.md") == "ESCALATE", "triage.md doesn't start with ESCALATE")
+        why = (d / "decision.md").read_text().split("\n", 1)[1].strip()
+        tl = (d / "triage.md").read_text().split("\n", 1)[1].strip()
+        (d / "decision.md").write_text(f"ESCALATE\n\n{tl}\n\n## What stopped the job\n{why}\n")
+
+    if stage == "needs-human" and old in TRIAGED_FROM:
+        stage = "triage"  # decision.md holds why; the tech-lead decides what's next
+
     if stage == "needs-human":
         job["escalated_at"] = now()
         body = f"### Factory: needs a human\n\n{(d / 'decision.md').read_text().split(chr(10), 1)[1].strip()}"
@@ -599,6 +621,32 @@ def cmd_create(number):
     print(job_id)
 
 
+def read_plan(tech_lead_only=False):
+    """From plan.md: the start order (the tech lead's ORDER, else the product
+    owner's PRIORITY), and AFTER: issues that wait for another to merge."""
+    order, priority, after = [], [], {}
+    if PLAN.exists():
+        for line in PLAN.read_text().splitlines():
+            key, _, value = line.partition(":")
+            nums = [int(n) for n in re.findall(r"\d+", value)]
+            if key.strip() == "ORDER":
+                order = nums
+            elif key.strip() == "PRIORITY":
+                priority = nums
+            elif key.strip() == "AFTER" and len(nums) >= 2:
+                after.setdefault(nums[0], set()).update(nums[1:])
+    return (order if tech_lead_only else order or priority), after
+
+
+def cmd_plan_check():
+    order, _ = read_plan(tech_lead_only=True)
+    jobs = {j["issue"] for j in all_jobs()}
+    issues = gh_json("issue", "list", "--label", LABELS["queue"], "--state", "open",
+                     "--limit", "200", "--json", "number")
+    unplanned = [i["number"] for i in issues if i["number"] not in jobs and i["number"] not in order]
+    print(" ".join(map(str, unplanned)) if len(unplanned) >= 2 else "")
+
+
 def cmd_queue():
     """Rows in the order to start them. `resume` and `new` rows fit in the
     concurrency slots; the rest show as `hold` until a running job finishes."""
@@ -610,11 +658,18 @@ def cmd_queue():
     issues = gh_json("issue", "list", "--label", LABELS["queue"], "--state", "open",
                      "--limit", "200", "--json", "number,title")
     open_numbers = {i["number"] for i in issues}
+    order, after = read_plan()
+    rank = {n: i for i, n in enumerate(order)}
+    issues = sorted(issues, key=lambda i: (rank.get(i["number"], len(rank)), i["number"]))
     running_rows, replied_rows, new_rows, other_rows = [], [], [], []
-    for issue in sorted(issues, key=lambda i: i["number"]):
+    for issue in issues:
         n = issue["number"]
         j = jobs.get(n)
-        if not j:
+        waits = [m for m in after.get(n, ()) if m in open_numbers or
+                 (m in jobs and jobs[m]["stage"] not in TERMINAL)]
+        if not j and waits:
+            other_rows.append(("hold", n, "-", "-", f"after #{', #'.join(map(str, sorted(waits)))} (plan.md)"))
+        elif not j:
             new_rows.append(("new", n, "-", "-", issue["title"]))
         elif j["stage"] == "needs-info":
             if replied_since_question(fetch_issue(n)):
@@ -661,8 +716,9 @@ def cmd_merge(job):
 
     def fail(why):
         escalate(job, why)
-        save(advance(sync(job), "needs-human"))
-        print(f"{job['id']}: needs-human: {why.splitlines()[0]}")
+        done = advance(sync(job), "needs-human")
+        save(done)
+        print(f"{job['id']}: {done['stage']}: {why.splitlines()[0]}")
 
     git(job, "fetch", "origin", BASE)
     merged = git(job, "merge", "--no-edit", f"origin/{BASE}", check=False)
@@ -775,6 +831,8 @@ def main(argv):
             cmd_merge(resolve(args[0]))
         elif cmd == "feedback" and len(args) == 1:
             cmd_feedback(resolve(args[0]), "" if sys.stdin.isatty() else sys.stdin.read())
+        elif cmd == "plan-check" and not args:
+            cmd_plan_check()
         elif cmd == "reviewers" and len(args) == 1:
             cmd_reviewers(resolve(args[0]))
         elif cmd == "reject" and len(args) == 1:

@@ -21,6 +21,8 @@ tell the user; never work around it.
 ## The pipeline
 
 ```
+product-owner      → an idea → epic + user stories; owns the backlog: picks the sprint and its priority
+tech-lead (sonnet) → plan.md: start order, issues that wait for another (AFTER), splits to propose
 intake (sonnet)    → ACCEPT (scope possibly changed) | NEEDS-INFO | REJECT, posted as an issue comment
 route (script)     → reviewers + models from risk/surfaces via config.json
 worktree           → factory/<job-id> from origin/<base>
@@ -30,6 +32,8 @@ gate (script)      → checks.sh; FAIL → builder gets the log, no reviewers sp
 reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → reviewers
 approver (opus)    → APPROVE: sync origin/<base>, gate, gh pr merge
                      ESCALATE: PR ready, decision as PR comment, label factory:needs-human
+triage (tech-lead) → a script-detected wall (last gate, rounds out, BLOCKED, merge failed):
+                     RETRY once with a brief for the builder | ESCALATE with one closed question
 feedback           → a human comments on the PR or tells /factory → feedback-<k>.md
                      → spec-writer amends spec.md → build → gate → every reviewer → approver
 ```
@@ -61,6 +65,9 @@ through the scripts. `factory/jobs/` is gitignored runtime state.
 <repo>/factory/jobs/<job-id>/round-<N>/checks.md        the gate's verdict for round N
 <repo>/factory/jobs/<job-id>/round-<N>/review-<r>.md    one per routed reviewer
 <repo>/factory/jobs/<job-id>/decision.md                APPROVE or ESCALATE
+<repo>/factory/jobs/po/<slug>.md               the product owner's epic and stories, before filing
+<repo>/factory/jobs/plan.md                    the tech-lead's plan; `job queue` follows its ORDER and AFTER
+<repo>/factory/jobs/<job-id>/triage.md                  the tech-lead's RETRY or ESCALATE for a stuck job
 <repo>/factory/jobs/<job-id>/feedback-<k>.md            the user's feedback on an escalated job, from /factory and the PR
 <repo>/.worktrees/<job-id>/                    the job's worktree, on factory/<job-id>
 ```
@@ -96,6 +103,10 @@ when this session spawned it; otherwise spawn a new `builder` with that name.
 Start every message to it with `<header>` too.
 
 ## Advancing a job
+
+Whenever you move a job to `needs-human` and `factory/bin/job` prints
+`triage` instead, the scripts hit a wall and the tech-lead looks first: go to
+**triage**. Escalations from the approver go straight to the human.
 
 Each step below runs when the previous agent or script finishes. Report one
 short line per transition, e.g. `004-dark-mode #12: gate PASS → reviewing (code, ux, ui)`.
@@ -155,6 +166,14 @@ finished:
 - `ESCALATE`: `factory/bin/job advance <id> needs-human`. It marks the PR ready,
   posts the decision on it and labels the issue `factory:needs-human`.
 
+**triage.** Spawn `tech-lead` with `<header> Triage.` When it returns, read
+`triage.md`'s first line:
+
+- `RETRY`: `factory/bin/job advance <id> build`, then resume the builder with
+  `The tech lead triaged the job: read triage.md, do what "For the builder" says, push, and update build.md for round <N>.`
+- `ESCALATE`: `factory/bin/job advance <id> needs-human`. The question in
+  triage.md goes on the PR.
+
 A job is finished for this run when it reaches `merged`, `rejected`,
 `needs-info` or `needs-human`.
 
@@ -163,9 +182,12 @@ then moves the job to `merged`; stop any agents still running for it.
 
 ## /factory run
 
-1. Run `factory/bin/job queue`. Each line is `action  issue  job  stage  note`:
-   `resume` (pick it up from its stage), `new` (no job yet), `hold` (no free
-   slot), `wait` (needs the author or you) or `skip`. The script enforces
+1. Run `factory/bin/job plan-check`. If it prints issue numbers, spawn
+   `tech-lead` with `Plan the queue. Unplanned issues: <numbers>.` and wait
+   for it: this one you wait for, since the queue follows its plan.
+   Then run `factory/bin/job queue`. Each line is `action  issue  job  stage  note`:
+   `resume` (pick it up from its stage), `new` (no job yet), `hold` (no free slot, or plan.md says it waits for another
+   issue), `wait` (needs the author or you) or `skip`. The script enforces
    `concurrency`: every job in a running stage holds a slot, and only as many
    `new` and replied `needs-info` lines as there are free slots come out as
    `new` or `resume`; the rest are `hold`. `job create` and the
@@ -186,7 +208,7 @@ stopped. For a `resume` job, run its stage's step again: `intake` and `spec`
 respawn their agent; `build` spawns a new builder told it is resuming (it reads
 `build.md` and `git log` to see how far the last one got); `gate` runs the
 gate; `review` spawns only the reviewers from `factory/bin/job reviewers <id>`
-whose `review-<r>.md` is missing in the current round; `approve` respawns the approver; `merging` runs
+whose `review-<r>.md` is missing in the current round; `approve` respawns the approver; `triage` respawns the tech-lead; `merging` runs
 `factory/bin/job merge <id>`. A `needs-info` job the author has answered shows
 as `resume`: run `factory/bin/job advance <id> intake` and go to **intake**. A
 `needs-human` job with new comments on its PR shows as `resume` with the note
@@ -240,12 +262,27 @@ new feature, ask.
 - **An answer to a `needs-info` question**: post their words on the issue with
   `gh issue comment <n> --body "<their answer>"`, then
   `factory/bin/job advance <id> intake` and go to **intake**.
-- **A new feature**: create the issue, then do **/factory run <n>** with the
-  new number:
+- **A new feature or business idea**: the product owner writes it up. Spawn
+  `product-owner` with `<the idea, verbatim> Write factory/jobs/po/<slug>.md.`
+  (`<slug>`: 2 to 4 lowercase words). Then run `factory/bin/stories check
+  <file>`, show the user the epic and its stories, and file them:
+  `factory/bin/stories create <file>` labels the stories `factory:draft`, for
+  the user to promote; add `--queue` only when the user said to build it now,
+  then do **/factory run**.
+- **Sprint planning** ("what's next", "plan the sprint", or when the queue is
+  empty and drafts wait): run `factory/bin/stories backlog`, spawn
+  `product-owner` with `Plan the sprint. Capacity: <concurrency × 2> stories.`
+  plus any goal the user gave, show the user `sprint.md`'s summary, then
+  `factory/bin/stories sprint factory/jobs/po/sprint.md` and **/factory run**.
+  The product owner decides what enters and its priority; the tech lead only
+  reorders for technical dependencies.
+- **A small, concrete fix** (a bug, a copy change) needs no product owner:
 
   ```bash
-  gh issue create --label factory --title "<short imperative title>" --body "<the feature, verbatim>"
+  gh issue create --label factory --title "<short imperative title>" --body "<the request, verbatim>"
   ```
+
+  then **/factory run <n>** with the new number.
 
 ## Guardrails
 

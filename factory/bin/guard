@@ -28,6 +28,8 @@ OWN_FILES = {
     "spec-writer": ["factory/jobs/*/spec.md"],
     "builder": ["factory/jobs/*/build.md", ".worktrees/*"],
     "approver": ["factory/jobs/*/decision.md"],
+    "tech-lead": ["factory/jobs/plan.md", "factory/jobs/*/triage.md"],
+    "product-owner": ["factory/jobs/po/*.md"],
 }
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
