@@ -107,8 +107,8 @@ command you ran and its result, or what the page showed.
 - If the branch has no PR yet (`gh pr view <branch>` fails), open it as a draft:
   `gh pr create --draft --base <base> --head <branch> --title "<spec title>" --body "<keyword> #<issue>"`
   followed by a blank line and your Summary. `<keyword>` is the `PR keyword`
-  from your prompt (`Closes` or `Refs`): `Closes` would close the issue while
-  later slices remain. Once it exists, just push; the PR
+  from your prompt (`Refs` for every slice; the factory closes the issue when the
+  initiative is done). Once it exists, just push; the PR
   updates itself. Never mark the PR ready and never merge it.
 
 ## Write build.md

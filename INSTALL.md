@@ -5,7 +5,7 @@ what's generic, adapt what's repo-specific, verify it, and report. Work in the
 project's root. Don't clone this repository.
 
 The source is the folder the user pointed you at. On GitHub, read files from
-`https://raw.githubusercontent.com/zazencodes/zazencodes-season-3/main/src/software-factory-claude-code-v2/<path>`.
+`https://raw.githubusercontent.com/pablogore/software-factory/main/<path>`.
 
 ## 0. Check the project
 
@@ -44,7 +44,7 @@ factory/dashboard.html
 ```
 
 ```bash
-SRC=https://raw.githubusercontent.com/zazencodes/zazencodes-season-3/main/src/software-factory-claude-code-v2
+SRC=https://raw.githubusercontent.com/pablogore/software-factory/main
 for f in <the paths above>; do
   mkdir -p "$(dirname "$f")" && curl -fsSL "$SRC/$f" -o "$f"
 done

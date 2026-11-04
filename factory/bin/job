@@ -55,7 +55,7 @@ TRANSITIONS = {
     "spec": {"build", "rate", "needs-info", "needs-human"},
     "rate": {"build"},
     "replan": {"checkpoint", "merged", "done", "needs-human", "rejected"},
-    "checkpoint": {"merged", "done"},
+    "checkpoint": {"merged", "done", "rejected"},
     "build": {"gate", "needs-human", "replan"},
     "gate": {"review", "build", "needs-human"},
     "review": {"approve", "build", "needs-human"},
@@ -462,6 +462,17 @@ def first_prompt(entries, limit=50):
     return ""
 
 
+_unpriced = set()
+
+
+def warn_unpriced(model):
+    """A model without a price is left out of the cost, once per process, never fatal."""
+    if model not in _unpriced:
+        _unpriced.add(model)
+        print(f"job: warning: no price for model {model} in factory/config.json "
+              "prices_usd_per_mtok; its tokens aren't counted in cost_usd", file=sys.stderr)
+
+
 def cost_usd(job):
     """API-equivalent cost of every subagent whose prompt names this job's folder.
 
@@ -489,7 +500,8 @@ def cost_usd(job):
             if tokens == 0:
                 continue
             if model not in prices:
-                die(f"no price for model {model} in factory/config.json prices_usd_per_mtok")
+                warn_unpriced(model)
+                continue
             p = prices[model]
             split = u.get("cache_creation") or {}
             write_1h = split.get("ephemeral_1h_input_tokens", 0)
@@ -584,6 +596,41 @@ def start_slice(job, row):
     save_initiative(init)
 
 
+def abandon_slice(job):
+    """A direction change replaced an unmerged slice: drop its row, close its PR
+    (the remote branch stays, so it can be reopened) and discard the worktree.
+    The job then ends `rejected` after the replan."""
+    if job["pr"] and pr_state(job) == "OPEN":
+        comment("pr", job["pr"], "### Factory: slice dropped\n\nA direction change replaced "
+                f"{job['slice_id']}; the replan decides what comes next. The branch is kept.")
+        gh("pr", "close", str(job["pr"]))
+    set_slice_state(job["initiative_id"], job["slice_id"], "dropped")
+    drop_worktree(job)
+    job["abandoned"] = True
+
+
+def final_stage(job):
+    """How a slice's job ends once its initiative is replanned."""
+    if job.get("abandoned"):
+        return "rejected"
+    return "done" if job["kind"] == "spike" else "merged"
+
+
+def stalled_initiative(job):
+    """True when `job` is an initiative's newest job, it has finished, the
+    initiative is still open and slices.md has a `next` that never got a job
+    (e.g. `next-slice` was refused after the replan)."""
+    if not job.get("initiative_id") or job["stage"] not in TERMINAL:
+        return False
+    path = initiative_dir(job["initiative_id"]) / "initiative.json"
+    if not path.exists():
+        return False
+    if json.loads(path.read_text()).get("status") in {"done", "rejected", "needs-human", "planning"}:
+        return False
+    slices = initiative_dir(job["initiative_id"]) / "slices.md"
+    return slices.exists() and any(r["state"] == "next" for r in parse_slices(slices.read_text()))
+
+
 def collect_direction(job):
     """After the merge: `[direction]` comments on the PR since it merged → direction-<k>.md."""
     items = [i for i in pr_feedback(job, since=job.get("feedback_since") or job["merged_at"]) if is_direction(i)]
@@ -595,12 +642,14 @@ def finish_slice_job(job, stage, old):
     """replan/checkpoint → a final stage for this slice's job."""
     if stage == "merged":
         require(job["kind"] == "slice", "a spike ends as `done`, not `merged`")
+        require(job.get("merged"), f"{job['id']}'s PR isn't merged; a dropped slice ends `rejected`")
     elif stage == "done":
         require(job["kind"] == "spike", "a slice ends as `merged`, not `done`")
     elif stage == "needs-human":
         require((job_dir(job["id"]) / "decision.md").exists(), "write decision.md first")
         job["replan_pending"] = True
-    # rejected: a direction change replaced this slice; its PR, if open, is left for a human
+    elif stage == "rejected":
+        require(job.get("abandoned"), "only a slice dropped by a direction change ends `rejected` here")
 
 
 def advance(job, stage):
@@ -673,7 +722,9 @@ def advance(job, stage):
 
     elif old == "rate":
         require(job["agents"], "route the slice first: factory/bin/route " + job["id"])
-        job["pr_ref"] = "Closes" if len(read_slices(job["initiative_id"])) == 1 else "Refs"
+        # Always Refs: a replan can add slices to a one-slice initiative, and
+        # `Closes` would have closed the issue under it. DONE closes the issue.
+        job["pr_ref"] = "Refs"
         next_round(job)
 
     elif old == "build" and stage == "replan":
@@ -685,17 +736,21 @@ def advance(job, stage):
         job["replan_since"] = now()
 
     elif old in {"replan", "checkpoint"}:
-        require(stage != "rejected" or old == "replan", "a checkpoint can't be rejected")
         finish_slice_job(job, stage, old)
 
     elif old == "needs-human" and stage in {"build", "replan"}:
         require_slot(job["id"])
         require(job["initiative_id"], "old jobs go needs-human → spec")
+        if stage == "build":
+            require(job["agents"], "this slice was never routed or built (it escalated from spec): "
+                    "rework goes to spec")
         label("issue", job["issue"], remove=LABELS["needs_human"])
         if stage == "build":
             job["round_limit"] = job["round"] + CONFIG["max_rounds"]
             next_round(job)
         else:
+            if not job.get("merged") and not job.get("replan_pending"):
+                abandon_slice(job)  # direction on a slice that never merged
             job["replan_since"] = now()
 
     elif stage == "merged" and old not in {"replan", "checkpoint"}:
@@ -712,6 +767,10 @@ def advance(job, stage):
         if job["pr"]:
             gh("pr", "close", str(job["pr"]))
             run(["git", "push", "origin", "--delete", job["branch"]], check=False)
+        if job["initiative_id"] and (initiative_dir(job["initiative_id"]) / "initiative.json").exists():
+            init = load_initiative(job["initiative_id"])
+            init["status"] = "rejected"
+            save_initiative(init)
 
     elif old == "intake":
         require(not (job["initiative_id"] and stage == "spec"), "new jobs go intake → initiative → spec")
@@ -819,8 +878,11 @@ def advance(job, stage):
         require(line == want, f"decision.md starts with {line!r}, not {want}")
 
     elif old == "needs-human" and stage == "spec":
-        require(not job["initiative_id"], "initiative jobs go needs-human → build or replan")
+        require(not job["initiative_id"] or job["round"] == 0,
+                "a built slice goes needs-human → build (rework) or replan (direction)")
         require_slot(job["id"])
+        if job["initiative_id"]:  # the spec failed specgate: a fresh try with the human's feedback
+            job["spec_failures"], job["spec_errors"] = 0, []
         feedback = sorted(d.glob("feedback-*.md"))
         require(feedback and feedback[-1].stat().st_mtime > (d / "decision.md").stat().st_mtime,
                 "use `job feedback` to send a job back")
@@ -847,7 +909,7 @@ def advance(job, stage):
     if stage == "needs-human":
         job["escalated_at"] = now()
         body = f"### Factory: needs a human\n\n{(d / 'decision.md').read_text().split(chr(10), 1)[1].strip()}"
-        if job["pr"]:
+        if job["pr"] and not job.get("merged"):  # a merged slice's replan asks on the issue
             if gh_json("pr", "view", str(job["pr"]), "--json", "isDraft")["isDraft"]:
                 gh("pr", "ready", str(job["pr"]))
             comment("pr", job["pr"], body)
@@ -965,6 +1027,12 @@ def cmd_queue():
                 replied_rows.append(("resume", n, j["id"], j["stage"], "author replied"))
             else:
                 other_rows.append(("wait", n, j["id"], j["stage"], "waiting for the author"))
+        elif j["stage"] == "checkpoint" and auto_checkpoint(j):
+            replied_rows.append(("resume", n, j["id"], j["stage"],
+                                 f"auto: `job checkpoint-ok {j['initiative_id']}` starts the next slice"))
+        elif stalled_initiative(j):
+            replied_rows.append(("resume", n, j["id"], "next-slice",
+                                 f"initiative has a `next` slice and no job: `job next-slice {j['initiative_id']}`"))
         elif j["stage"] == "checkpoint":
             other_rows.append(("wait", n, j["id"], j["stage"], f"replan done; `job checkpoint-ok {j['initiative_id']}` to start the next slice"))
         elif j["stage"] == "needs-human" and j.get("replan_pending"):
@@ -994,6 +1062,11 @@ def cmd_queue():
             rows.append(("hold",) + row[1:4] + (f"concurrency {CONCURRENCY} reached",))
     for row in rows + other_rows:
         print("\t".join(str(c) for c in row))
+
+
+def auto_checkpoint(job):
+    path = initiative_dir(job["initiative_id"]) / "initiative.json"
+    return path.exists() and json.loads(path.read_text()).get("checkpoint") == "auto"
 
 
 def cmd_spec_check(job):
@@ -1072,7 +1145,7 @@ def cmd_replan(job):
     errors = specgate("slices", idir / "slices.md", *(["--done"] if status == "DONE" else []))
     if errors:
         die("slices.md fails specgate: " + "; ".join(errors))
-    final = "done" if job["kind"] == "spike" else "merged"
+    final = final_stage(job)
     init = load_initiative(job["initiative_id"])
     if status == "NEEDS-HUMAN":
         why = section(idir / "replan.md", "Para el humano") or "(no `## Para el humano` section)"
@@ -1088,14 +1161,29 @@ def cmd_replan(job):
         if first_issue_open(job):
             gh("issue", "close", str(job["issue"]), "--comment", f"{MARKER}\nFactory: initiative {init['id']} is done.")
         print(f"{job['id']}: initiative {init['id']} DONE")
-    elif init["checkpoint"] == "auto":
+    elif init["checkpoint"] == "auto" and has_slot(job["id"]):
         save(advance(sync(job), final))
         print(f"{job['id']}: replan CONTINUE (auto) → next slice job {cmd_next_slice(init['id'])}")
+    elif init["checkpoint"] == "auto":
+        # No free slot for the next slice: park at the checkpoint; `job queue`
+        # lists it as `resume` (auto) once a slot frees, and checkpoint-ok starts it.
+        init["status"] = "checkpoint"
+        save_initiative(init)
+        save(advance(sync(job), "checkpoint"))
+        print(f"{job['id']}: replan CONTINUE (auto), no free slot → checkpoint until one frees")
     else:
         init["status"] = "checkpoint"
         save_initiative(init)
         save(advance(sync(job), "checkpoint"))
         print(f"{job['id']}: replan CONTINUE → checkpoint: `job checkpoint-ok {init['id']}` when you approve the next slice")
+
+
+def has_slot(job_id):
+    try:
+        require_slot(job_id)
+        return True
+    except Refused:
+        return False
 
 
 def first_issue_open(job):
@@ -1108,8 +1196,13 @@ def cmd_checkpoint_ok(arg):
         matches = [j for j in all_jobs() if j["initiative_id"] == arg and j["stage"] == "checkpoint"]
         require(matches, f"nothing waiting at a checkpoint for {arg}")
         job = matches[0]
-    final = "done" if job["kind"] == "spike" else "merged"
+    final = final_stage(job)
     init = load_initiative(job["initiative_id"])
+    # Check everything next-slice needs before this job ends, so a refusal
+    # leaves it waiting at the checkpoint instead of ending with no next job.
+    errors = specgate("slices", initiative_dir(init["id"]) / "slices.md")
+    require(not errors, "slices.md fails specgate: " + "; ".join(errors))
+    require_slot(job["id"])
     init["status"] = "active"
     save_initiative(init)
     save(advance(sync(job), final))
@@ -1202,7 +1295,8 @@ def cmd_feedback_initiative(job, text, direction):
         made.append(write_feedback(job, "feedback", rework_text, rework_items))
     job["feedback_since"] = now()
     job.pop("replan_pending", None)
-    target = "build" if (rework_text.strip() or rework_items) else "replan"
+    rework = rework_text.strip() or rework_items
+    target = ("spec" if job["round"] == 0 else "build") if rework else "replan"
     save(advance(sync(job), target))
     print(f"{job['id']}: {', '.join(made)} → {target}")
 

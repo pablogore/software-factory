@@ -35,7 +35,7 @@ slice job          → the `next` slice: worktree factory/<job-id> from origin/m
 spec-writer (opus) → MODE=slice: spec.md, at most 40 lines. READY | SPLIT | NEEDS-INFO
 specgate (script)  → rejects a malformed spec before any build (2 retries, then a human)
 intake + route     → rate this slice from its spec.md; reviewers + models via config.json
-builder            → commits; first round pushes + opens draft PR "Closes|Refs #<n>"
+builder            → commits; first round pushes + opens draft PR "Refs #<n>"
 gate (script)      → checks.sh; FAIL → builder gets the log, no reviewers spawned
 reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → reviewers (max rounds)
 approver (opus)    → APPROVE: sync origin/main, gate, gh pr merge
