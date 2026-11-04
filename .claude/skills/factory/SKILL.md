@@ -98,6 +98,24 @@ approver: their frontmatter sets it. Each agent replies with one line;
 you are notified when it finishes, and you advance that job then. While agents
 run, don't poll and don't wait: end your turn with a one-line status.
 
+End every agent prompt with: `If writing your file is refused, stop and say
+"WRITE REFUSED: <the error>". Never report a file you didn't write.` An agent's
+reply is not proof: `factory/bin/job advance` checks the file on disk. If an
+agent says WRITE REFUSED, don't respawn it: stop and do the **write check**
+below.
+
+**Write check.** Before the first agent of a session, write
+`factory/jobs/.write-check` with the Write tool (the same tool the agents use;
+a shell command can pass where the Write tool is refused), then delete it with
+`rm`. If the Write tool is refused, the session can't run the factory: start
+nothing and tell the user, in two lines, that Claude Code isolates this session
+(usually a background session) away from the main checkout, where
+`factory/jobs/` lives, and that the fix is `"worktree": {"bgIsolation": "none"}`
+in `.claude/settings.json` (install.sh sets it; they add it themselves if it's
+missing, since a session can't change its own permissions), or running
+`/factory` from a normal `claude` session in a terminal. Never move the factory
+into a worktree and never write an agent's file yourself to get around it.
+
 Every prompt starts with the job's header, built from `job.json`:
 
 ```
@@ -253,6 +271,7 @@ then moves the job to `merged`; stop any agents still running for it.
 
 ## /factory run
 
+0. Do the **write check** (see **Spawning agents**) once per session.
 1. Run `factory/bin/job plan-check`. If it prints issue numbers, spawn
    `tech-lead` with `Plan the queue. Unplanned issues: <numbers>.` and wait
    for it: this one you wait for, since the queue follows its plan.
@@ -295,7 +314,7 @@ a job: run `factory/bin/job next-slice <initiative>` and go to **spec**.
 
 ## /factory run <n>
 
-Run one issue with the same steps. If `factory/bin/job queue` shows a job for
+Run one issue with the same steps, write check first. If `factory/bin/job queue` shows a job for
 it, resume that job; otherwise `factory/bin/job create <n>`. Finish with the
 summary line for that job.
 
