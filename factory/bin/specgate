@@ -2,21 +2,27 @@
 """Deterministic checks on the spec-writer's files, before anything is built.
 
 Usage:
-  specgate spec <spec.md>                 a slice spec the builder can start from
+  specgate spec <spec.md> [--long-ok]     a slice spec the builder can start from
   specgate slices <slices.md> [--done]    the slice table; --done allows no `next` (replan DONE)
 
 Prints `SPECGATE: PASS`, or `SPECGATE: FAIL` and one error per line. Exit 0 on
 PASS, 1 on FAIL. The orchestrator hands the errors back to the spec-writer.
+
+A spec over the normal limits may carry `## Excepción de largo` (why it can't be
+shorter or split). Within the exception limits it prints `SPECGATE: EXCEPTION`
+and the reason (`> ...`), exit 3: a human decides. `--long-ok` (a human already
+said yes) turns that into PASS.
 """
 
 import re
 import sys
 from pathlib import Path
 
-MAX_LINES = 30
-MAX_WORDS = 250            # whole spec, without `## Propuesta de split` / `## Preguntas`
-MIN_CRITERIA, MAX_CRITERIA = 1, 4
-MAX_CRITERION_WORDS = 30   # one idea per criterion, not a paragraph
+NORMAL = {"lines": 30, "words": 250, "criteria": 4, "criterion_words": 30}
+EXCEPTION = {"lines": 45, "words": 400, "criteria": 5, "criterion_words": 45}  # only with a human's OK
+EXCEPTION_HEADING = "Excepción de largo"
+MAX_REASON_WORDS = 40
+MIN_CRITERIA = 1
 MAX_VALOR_WORDS = 35
 MAX_LIST_ITEMS = 3         # Fuera de alcance, Supuestos
 MAX_DEMO_STEPS = 4
@@ -49,7 +55,29 @@ def items(body, numbered):
     return out
 
 
-def check_spec(text):
+def check_spec(text, long_ok=False):
+    """(errors, exception reason or None). A reason means: over the normal limits,
+    within the exception ones, and no human OK yet."""
+    errors = check_limits(text, NORMAL)
+    reason = section(text, EXCEPTION_HEADING)
+    if reason is None:
+        return errors, None
+    reason = reason.strip()
+    if not reason:
+        return errors + [f"section `## {EXCEPTION_HEADING}` is empty"], None
+    if words(reason) > MAX_REASON_WORDS:
+        return errors + [f"`## {EXCEPTION_HEADING}` has {words(reason)} words; the maximum is {MAX_REASON_WORDS}"], None
+    if not errors:
+        return [], None  # fits anyway: nothing to ask
+    if not text.startswith("STATUS: READY"):
+        return errors + [f"only a `STATUS: READY` spec can ask for `## {EXCEPTION_HEADING}`"], None
+    errors = check_limits(text, EXCEPTION)
+    if errors:
+        return [e + " (with the exception)" for e in errors], None
+    return [], (None if long_ok else reason)
+
+
+def check_limits(text, lim):
     errors = []
     first = text.split("\n", 1)[0].strip()
     diagrams = MERMAID.findall(text)
@@ -63,21 +91,21 @@ def check_spec(text):
     lines = text.rstrip("\n").split("\n")
     if first not in {"STATUS: READY", "STATUS: SPLIT"}:
         errors.append(f"first line must be `STATUS: READY` or `STATUS: SPLIT`, not {first!r}")
-    if len(lines) > MAX_LINES:
-        errors.append(f"{len(lines)} lines; the maximum is {MAX_LINES}")
-    body = re.sub(r"^## (Propuesta de split|Preguntas)[ \t]*\n.*?(?=^## |\Z)", "", text, flags=re.M | re.S)
-    if words(body) > MAX_WORDS:
-        errors.append(f"{words(body)} words; the maximum is {MAX_WORDS}. Cut detail or SPLIT the slice")
+    if len(lines) > lim["lines"]:
+        errors.append(f"{len(lines)} lines; the maximum is {lim['lines']}")
+    body = re.sub(rf"^## (Propuesta de split|Preguntas|{EXCEPTION_HEADING})[ \t]*\n.*?(?=^## |\Z)", "", text, flags=re.M | re.S)
+    if words(body) > lim["words"]:
+        errors.append(f"{words(body)} words; the maximum is {lim['words']}. Cut detail or SPLIT the slice")
     criteria = section(text, "Criterios de aceptación")
     if criteria is None:
         errors.append("missing section `## Criterios de aceptación`")
     else:
         crit = items(criteria, numbered=True)
-        if not MIN_CRITERIA <= len(crit) <= MAX_CRITERIA:
-            errors.append(f"{len(crit)} numbered criteria; need {MIN_CRITERIA} to {MAX_CRITERIA}")
+        if not MIN_CRITERIA <= len(crit) <= lim["criteria"]:
+            errors.append(f"{len(crit)} numbered criteria; need {MIN_CRITERIA} to {lim['criteria']}")
         for n, c in enumerate(crit, 1):
-            if words(c) > MAX_CRITERION_WORDS:
-                errors.append(f"criterion {n} has {words(c)} words; the maximum is {MAX_CRITERION_WORDS} "
+            if words(c) > lim["criterion_words"]:
+                errors.append(f"criterion {n} has {words(c)} words; the maximum is {lim['criterion_words']} "
                               "(one idea per criterion, plain words)")
     for name in ("Valor", "Demo"):
         sec = section(text, name)
@@ -127,16 +155,23 @@ def check_slices(text, allow_no_next=False):
 
 
 def main(argv):
-    if len(argv) not in (2, 3) or argv[0] not in {"spec", "slices"}:
+    if len(argv) not in (2, 3) or argv[0] not in {"spec", "slices"} or argv[2:] not in ([], ["--done"], ["--long-ok"]):
         print(__doc__.strip(), file=sys.stderr)
         return 2
     path = Path(argv[1])
+    reason = None
     if not path.exists():
         errors = [f"{path} doesn't exist"]
     elif argv[0] == "spec":
-        errors = check_spec(path.read_text())
+        errors, reason = check_spec(path.read_text(), long_ok="--long-ok" in argv[2:])
     else:
         errors = check_slices(path.read_text(), allow_no_next="--done" in argv[2:])
+    if reason:
+        print("SPECGATE: EXCEPTION")
+        for e in check_limits(path.read_text(), NORMAL):
+            print(f"- {e}")
+        print("> " + " ".join(reason.split()))
+        return 3
     print("SPECGATE: " + ("FAIL" if errors else "PASS"))
     for e in errors:
         print(f"- {e}")

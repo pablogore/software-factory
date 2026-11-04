@@ -183,6 +183,22 @@ flowchart LR
 
 Las líneas largas no son un atajo: el límite está en palabras. Si no te alcanza, el slice es grande: SPLIT.
 
+## Excepción de largo (solo si de verdad hace falta)
+
+Si estás convencido de que el slice necesita explicarse más y que partirlo empeoraría las cosas (las mitades no se pueden demostrar por separado, o un SPLIT dejaría un slice sin valor), podés pedir una excepción. Agregá al final:
+
+```
+## Excepción de largo
+<1–2 frases, máx. 40 palabras: por qué no entra en 250 palabras y por qué no conviene partirlo>
+```
+
+Con excepción el tope sube a **400 palabras, 45 líneas, 5 criterios de hasta 45 palabras**. La fábrica **frena y le pregunta a un humano** antes de construir: si dice que sí, sigue con tu spec; si no, te devuelve su feedback para que la acortes o la partas.
+
+- Es la excepción, no la regla. Primero intentá recortar y después SPLIT. "Hay muchos detalles" no es motivo: los detalles los decide el builder.
+- Solo con `STATUS: READY`. Si la spec entra en los límites normales, no pidas excepción.
+- Las reglas de redacción siguen valiendo: más largo no quiere decir más denso.
+- Si el humano ya aceptó la excepción y te devuelve la spec por otro motivo, no hace falta volver a justificarla.
+
 ## Cómo escribir
 
 - **Una idea por criterio.** Si un criterio tiene "cuando: a; b; c" o tres puntos y coma, son varios criterios o es un detalle que no va.
@@ -317,7 +333,7 @@ Escribí en el idioma del issue original. Los encabezados de las plantillas y la
 Antes de guardar, verificá cada punto. Si alguno falla, corregí; no lo entregues igual.
 
 - [ ] La primera línea de vision.md (initiative), spec.md (slice) o replan.md (replan) es `STATUS: ...` con un valor válido para el modo. slices.md no tiene STATUS.
-- [ ] (slice) ≤ 250 palabras y 30 líneas, 1–4 criterios de ≤ 30 palabras, tiene Valor y Demo.
+- [ ] (slice) ≤ 250 palabras y 30 líneas, 1–4 criterios de ≤ 30 palabras, tiene Valor y Demo. Si no entra: recortá, SPLIT o, solo si de verdad hace falta, `## Excepción de largo`.
 - [ ] (slice) Si hay un recorrido, una decisión o estados que el texto no muestra de un vistazo, hay un diagrama; si no, no hay.
 - [ ] (slice) La entiende alguien que no leyó el código: una idea por criterio, sin listas de casos ni vocabulario interno.
 - [ ] (slice) Ningún criterio menciona archivos, funciones, tipos o detalles de implementación.

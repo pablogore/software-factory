@@ -160,6 +160,11 @@ Then run `factory/bin/job spec-check <id>`:
   On SPLIT it adds the "b" slices of `## Propuesta de split` to `slices.md` as
   `idea`; this slice keeps its row. Go to **rate**.
 - `SPECGATE: NEEDS-INFO`: `factory/bin/job advance <id> needs-info`.
+- `SPECGATE: EXCEPTION → needs-human`: the spec is longer than normal and the
+  spec-writer says why (`## Excepción de largo`). The script already moved the
+  job to `needs-human` and asked on the issue; no retry was spent. Tell the user
+  in one line: the reason and how much it goes over. Don't resume the
+  spec-writer: the human decides.
 - `SPECGATE: FAIL`: it prints the errors. Resume the spec-writer with them
   (`specgate failed: <errors>. Fix spec.md.`) and run `spec-check` again. The third
   failure moves the job to `needs-human` by itself; no build was spent.
@@ -326,6 +331,12 @@ new feature, ask.
   the replan. PR comments are split by the same rule: the ones
   starting with `[direction]` are direction, the rest rework. Never classify
   anything yourself.
+- **Answering a spec length exception** (`job.json` has `spec_exception`): if
+  the user accepts the long spec ("ok", "dale", "aprobar", "seguí así"), run
+  `factory/bin/job spec-ok <n>`, then `factory/bin/job spec-check <n>` and go on
+  from **spec** (it passes, then **rate**). Anything else (cut this, split it,
+  drop a criterion) is feedback: `factory/bin/job feedback <n>` with their words,
+  and the spec-writer rewrites it. When unsure whether they accepted, ask.
 - **Rejecting or benching a `needs-info` or `needs-human` job**: pass their
   reason verbatim on stdin:
 
