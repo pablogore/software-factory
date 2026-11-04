@@ -1,4 +1,4 @@
-# Software Factory for Claude Code (v2)
+# Software Factory for Claude Code (v3.1: initiatives)
 
 A software factory that works through your GitHub issues. Label an issue
 `factory`, run `/factory run`, and agents decide whether it's worth building,
@@ -13,7 +13,7 @@ Open Claude Code in your project and paste:
 ```text
 Install this software factory in this project from the reference repository:
 
-https://github.com/zazencodes/zazencodes-season-3/tree/main/src/software-factory-claude-code-v2
+https://github.com/pablogore/software-factory
 ```
 
 Your agent reads [`INSTALL.md`](INSTALL.md), copies the skill, agents, scripts
@@ -39,7 +39,7 @@ spec-writer MODE=slice → spec.md (≤ 40 lines)  ─ specgate (script) rejects
         ▼
 intake rates this slice → route (script) picks reviewers and models from config.json
         ▼
-builder (opus) → commits, pushes, opens a draft PR "Closes #n" ("Refs #n" if more slices follow)
+builder (opus) → commits, pushes, opens a draft PR "Refs #n" (the issue closes when the initiative is DONE)
                  (a spike writes findings.md instead: no PR, no reviewers, no merge)
         ▼            ▲
 gate (script) ─FAIL──┤  factory/checks.sh; no reviewer runs on a failing build
