@@ -25,8 +25,10 @@ REPO = Path(__file__).resolve().parents[2]
 
 OWN_FILES = {
     "intake": ["factory/jobs/*/intake.md"],
-    "spec-writer": ["factory/jobs/*/spec.md"],
-    "builder": ["factory/jobs/*/build.md", ".worktrees/*"],
+    "spec-writer": ["factory/jobs/*/spec.md",
+                    "factory/initiatives/*/vision.md", "factory/initiatives/*/context.md",
+                    "factory/initiatives/*/slices.md", "factory/initiatives/*/replan.md"],
+    "builder": ["factory/jobs/*/build.md", "factory/jobs/*/findings.md", ".worktrees/*"],
     "approver": ["factory/jobs/*/decision.md"],
     "tech-lead": ["factory/jobs/plan.md", "factory/jobs/*/triage.md"],
     "product-owner": ["factory/jobs/po/*.md"],

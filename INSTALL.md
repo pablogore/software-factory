@@ -5,7 +5,7 @@ what's generic, adapt what's repo-specific, verify it, and report. Work in the
 project's root. Don't clone this repository.
 
 The source is the folder the user pointed you at. On GitHub, read files from
-`https://raw.githubusercontent.com/zazencodes/zazencodes-season-3/main/src/software-factory-claude-code-v2/<path>`.
+`https://raw.githubusercontent.com/pablogore/software-factory/main/<path>`.
 
 ## 0. Check the project
 
@@ -15,7 +15,7 @@ Stop and tell the user if any of these fail:
   who can push to it and manage its labels.
 - Its default branch (`gh repo view --json defaultBranchRef`) exists on
   `origin`.
-- `claude --version` is 2.1.257 or later (the intake agent runs on Fable).
+- `claude --version` is 2.1.257 or later (the factory's agents run on Opus, Sonnet and Haiku).
 - `python3 --version` is 3.10 or later. The scripts use only the standard
   library.
 - None of the files in step 1 already exist. If one does, show the user the
@@ -44,7 +44,7 @@ factory/dashboard.html
 ```
 
 ```bash
-SRC=https://raw.githubusercontent.com/zazencodes/zazencodes-season-3/main/src/software-factory-claude-code-v2
+SRC=https://raw.githubusercontent.com/pablogore/software-factory/main
 for f in <the paths above>; do
   mkdir -p "$(dirname "$f")" && curl -fsSL "$SRC/$f" -o "$f"
 done
@@ -106,8 +106,9 @@ Then add a short section:
 ## Software factory
 
 `/factory run` builds every open GitHub issue labeled `factory` through
-intake → spec → build → gate → review → approve, one PR per issue. State is in
-`factory/jobs/` (gitignored); `factory/bin/job` is its only writer. Checks:
+intake → initiative (slices) → spec → build → gate → review → approve → replan,
+one PR per slice. State is in `factory/jobs/` and `factory/initiatives/`
+(gitignored); `factory/bin/job` is its only writer. Checks:
 `factory/checks.sh`. Dashboard: `cd factory && python3 -m http.server`, then
 open http://localhost:8000/dashboard.html.
 
@@ -116,14 +117,15 @@ Each job works in its own git worktree, a full checkout of the repo at
 read `.gitignore` sees those copies too; exclude `.worktrees/` in its config.
 ```
 
-**`.gitignore`.** Append these two lines:
+**`.gitignore`.** Append these three lines:
 
 ```gitignore
 /factory/jobs/
+/factory/initiatives/
 /.worktrees/
 ```
 
-`factory/jobs/` is runtime state (job metadata, specs, reviews, check logs)
+`factory/jobs/` and `factory/initiatives/` are runtime state (job metadata, specs, reviews, check logs, visions and slices)
 local to the machine running the factory. Each job's worktree is a full
 checkout in `.worktrees/<job-id>`. Neither belongs in the repo. Everything you
 copied in step 1 does: the skill in `.claude/skills/factory/`, the agents in
@@ -148,7 +150,7 @@ gh label create factory:needs-human --color D93F0B --description "The factory ne
    `description`, `tools`, `model`, and `hooks` on the builder. Claude Code
    ignores unknown keys without a warning, so a typo silently changes behaviour.
 4. `python3 -m json.tool factory/config.json` succeeds.
-5. `git check-ignore factory/jobs/x .worktrees/x` prints both paths, and
+5. `git check-ignore factory/jobs/x factory/initiatives/x .worktrees/x` prints all three paths, and
    `git status --porcelain --untracked-files=all` lists every file from step 1
    (the skill, the agents and `factory/`) as committable.
 
@@ -166,7 +168,8 @@ Then tell the user, in a few lines:
 - Every job ends as a PR. The approver merges what it approves; the rest wait
   labeled `factory:needs-human`. Approve one by merging it on GitHub, or tell
   the factory what to change with `/factory <anything>`.
-- Intake runs on Fable, once per issue. Depending on their plan, Fable can
-  bill to usage credits rather than the plan's included usage.
+- After each merged slice the factory replans and waits for their OK before the
+  next one (`checkpoint: every-slice`); `factory/bin/job set-checkpoint
+  <initiative> auto` removes the wait.
 - To start carefully, set `concurrency` to 1 in `factory/config.json` and read
   every PR until they trust it.

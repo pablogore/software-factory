@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Deterministic checks on the spec-writer's files, before anything is built.
+
+Usage:
+  specgate spec <spec.md>                 a slice spec the builder can start from
+  specgate slices <slices.md> [--done]    the slice table; --done allows no `next` (replan DONE)
+
+Prints `SPECGATE: PASS`, or `SPECGATE: FAIL` and one error per line. Exit 0 on
+PASS, 1 on FAIL. The orchestrator hands the errors back to the spec-writer.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+MAX_LINES = 40
+STATES = {"next", "idea", "in-progress", "merged", "done", "dropped"}
+KINDS = {"slice", "spike"}
+ROW = re.compile(r"^\|\s*([A-Za-z0-9_.-]+)\s*\|\s*([^|]*?)\s*\|(.*)\|\s*([^|]*?)\s*\|\s*$")
+
+
+def section(text, heading):
+    m = re.search(rf"^## {re.escape(heading)}[ \t]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return m.group(1) if m else None
+
+
+def check_spec(text):
+    errors = []
+    lines = text.rstrip("\n").split("\n")
+    first = lines[0].strip()
+    if first not in {"STATUS: READY", "STATUS: SPLIT"}:
+        errors.append(f"first line must be `STATUS: READY` or `STATUS: SPLIT`, not {first!r}")
+    if len(lines) > MAX_LINES:
+        errors.append(f"{len(lines)} lines; the maximum is {MAX_LINES}")
+    criteria = section(text, "Criterios de aceptación")
+    if criteria is None:
+        errors.append("missing section `## Criterios de aceptación`")
+    else:
+        numbered = re.findall(r"^\s*(\d+)\.\s+\S", criteria, re.M)
+        if not 3 <= len(numbered) <= 5:
+            errors.append(f"{len(numbered)} numbered criteria; need 3 to 5")
+    for name in ("Valor", "Demo"):
+        body = section(text, name)
+        if body is None:
+            errors.append(f"missing section `## {name}`")
+        elif not body.strip():
+            errors.append(f"section `## {name}` is empty")
+    return errors
+
+
+def check_slices(text, allow_no_next=False):
+    errors = []
+    if text.lstrip().startswith("STATUS:"):
+        errors.append("slices.md must not have a STATUS line (replan.md carries it)")
+    rows = []
+    for line in text.splitlines():
+        m = ROW.match(line)
+        if m and m[1] != "ID" and not set(m[1]) <= set("-"):
+            rows.append((m[1], m[2], m[4]))
+    if not rows:
+        errors.append("no slice rows found")
+    ids = [r[0] for r in rows]
+    for dup in sorted({i for i in ids if ids.count(i) > 1}):
+        errors.append(f"slice {dup} appears more than once")
+    for i, kind, state in rows:
+        if kind not in KINDS:
+            errors.append(f"{i}: type {kind!r} isn't one of {', '.join(sorted(KINDS))}")
+        if state not in STATES:
+            errors.append(f"{i}: state {state!r} isn't one of {', '.join(sorted(STATES))}")
+    nexts = [r[0] for r in rows if r[2] == "next"]
+    if allow_no_next:
+        if nexts:
+            errors.append(f"DONE but slices still `next`: {', '.join(nexts)}")
+    elif len(nexts) != 1:
+        errors.append(f"exactly one `next` is required, found {len(nexts)}")
+    return errors
+
+
+def main(argv):
+    if len(argv) not in (2, 3) or argv[0] not in {"spec", "slices"}:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    path = Path(argv[1])
+    if not path.exists():
+        errors = [f"{path} doesn't exist"]
+    elif argv[0] == "spec":
+        errors = check_spec(path.read_text())
+    else:
+        errors = check_slices(path.read_text(), allow_no_next="--done" in argv[2:])
+    print("SPECGATE: " + ("FAIL" if errors else "PASS"))
+    for e in errors:
+        print(f"- {e}")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

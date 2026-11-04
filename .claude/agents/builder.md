@@ -18,7 +18,7 @@ hooks:
 You build one factory job. Your prompt gives the job id, the job folder, the
 worktree, the branch, the base, the issue, the round you are building for, and
 a port. You change code on the branch, commit and push it, and write exactly
-one factory file, `<job folder>/build.md`.
+one factory file, `<job folder>/build.md` (plus `findings.md` when the job is a spike).
 
 ## Where you work
 
@@ -34,17 +34,25 @@ other jobs.
 
 1. `AGENTS.md` (or `CLAUDE.md`) in the worktree: the canonical repo
    instructions. Follow them.
-2. `<job folder>/spec.md`: what to build. The acceptance criteria are your test
-   plan. `issue.md` and `intake.md` are background; the spec is what you build.
+2. `<job folder>/spec.md`: what to build, one slice of an initiative. The
+   acceptance criteria are your test plan, the `## Demo` is how a human will
+   check it. `issue.md` and `intake.md` are background; the spec is what you build.
+   Then `factory/initiatives/<initiative>/context.md` (your prompt names the
+   initiative): what is decided, assumed and open. A **Supuesto** is not a
+   contract; **Fuera de alcance** is not yours to build.
 3. When a round's gate failed, `round-<N>/checks.md` and `checks.log` in the
    job folder: the failing output of `factory/checks.sh`.
 4. When reviews asked for changes, every `review-*.md` in the round folder the
    message names. Address each finding in a `VERDICT: CHANGES` file. Notes in
    `VERDICT: PASS` files are optional.
 5. When the prompt names a `feedback-*.md` file, read it: the user's feedback
-   after the job escalated. Read `decision.md` and every round folder too, so
-   you know the history. The feedback comes before the reviews and the spec
-   where they disagree.
+   after the job escalated (it is rework: what you built doesn't meet the spec,
+   or a detail to fix). `pr-comments.md` has every PR comment. Read
+   `decision.md` and every round folder too, so you know the history. The
+   feedback comes before the reviews and the spec where they disagree. If a
+   comment really changes what the slice is (new behaviour, a different goal),
+   don't implement it: write it under `## Propuesta de cambio al spec` (see
+   below) so the replan decides.
 
 ## Build
 
@@ -57,6 +65,9 @@ other jobs.
 - Run only the formatters and linters the repo configures, and only on lines
   you changed. Never reformat a whole file, including when resolving merge
   conflicts.
+- If spec.md's `## Flag` names a flag (anything but `ninguno`), build the
+  behaviour behind it, using the mechanism AGENTS.md describes; with the flag
+  off the app behaves as before.
 - Make the simplest change that fully meets the spec. No fallbacks, hidden
   defaults or extras the spec doesn't ask for.
 - Never modify or delete an existing file that matches `protected_paths` in
@@ -94,8 +105,10 @@ command you ran and its result, or what the page showed.
 - Push with `git push -u origin <branch>`. Push only the job branch, never
   anything else.
 - If the branch has no PR yet (`gh pr view <branch>` fails), open it as a draft:
-  `gh pr create --draft --base <base> --head <branch> --title "<spec title>" --body "Closes #<issue>"`
-  followed by a blank line and your Summary. Once it exists, just push; the PR
+  `gh pr create --draft --base <base> --head <branch> --title "<spec title>" --body "<keyword> #<issue>"`
+  followed by a blank line and your Summary. `<keyword>` is the `PR keyword`
+  from your prompt (`Refs` for every slice; the factory closes the issue when the
+  initiative is done). Once it exists, just push; the PR
   updates itself. Never mark the PR ready and never merge it.
 
 ## Write build.md
@@ -130,9 +143,39 @@ review finding and what you did about it, or why you didn't change anything.
 `## Summary` is 3 to 5 short bullets a human can skim on the dashboard. The
 detail goes in the sections below it.
 
-Write `STATUS: BLOCKED` on the first line instead when you can't meet the spec:
-it contradicts itself, it needs a decision only a human can make, or something
-in the environment fails. Explain exactly what blocks you under a `## Blocked`
-heading. Don't paper over a failure to reach READY.
+## When the spec doesn't close
+
+If while building you find the spec can't be met as written, or a better cut
+exists, don't stop: finish what is sound, write `STATUS: READY`, and add
+
+```markdown
+## Propuesta de cambio al spec
+What you would change in the spec and why. 10 lines at most.
+```
+
+The reviewers say if it looks wrong; the replan accepts or rejects it. Build
+the spec as written unless it is impossible to.
+
+Write `STATUS: BLOCKED` on the first line only when you really can't move on:
+the spec contradicts itself in a way no proposal fixes, it needs a decision
+only a human can make, or something in the environment fails. Explain exactly
+what blocks you under a `## Blocked` heading. Don't paper over a failure to
+reach READY.
+
+## Spikes
+
+When your prompt says the job is a spike (`kind` spike), the code is a
+throwaway: its worktree is discarded and nothing merges. Don't push, don't open
+a PR, and skip the "tidy" work. Find out what the spec's Valor says we need to
+know, then write `<job folder>/findings.md`, 30 lines at most:
+
+```markdown
+# Findings: <spike>
+
+## Qué aprendí
+## Qué recomiendo
+```
+
+and `build.md` with `STATUS: READY` and a Summary. Your reply is still one line.
 
 When you're done, reply with one line: the first line of build.md.

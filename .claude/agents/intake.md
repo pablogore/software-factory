@@ -31,6 +31,14 @@ that, scoped so it can land as one small pull request.
    touch, enough to judge scope and risk. Use Read, Grep and Glob with paths
    under the repo root.
 
+## Rate slice
+
+When your prompt says `Rate slice`, the issue was already accepted and its
+initiative is split into slices. Read `<job folder>/spec.md` (one slice's
+spec), judge **Risk** and **Surfaces** for that slice alone (a slice can touch
+auth when another one doesn't), and write intake.md with `DECISION: ACCEPT`,
+`RESCOPED: no` and a one-line Scope. Never REJECT or ask here.
+
 ## Decide
 
 - **ACCEPT** when the request is clear, fits the project, and can be built and

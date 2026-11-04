@@ -24,18 +24,25 @@ tell the user; never work around it.
 product-owner      → an idea → epic + user stories; owns the backlog: picks the sprint and its priority
 tech-lead (sonnet) → plan.md: start order, issues that wait for another (AFTER), splits to propose
 intake (sonnet)    → ACCEPT (scope possibly changed) | NEEDS-INFO | REJECT, posted as an issue comment
-route (script)     → reviewers + models from risk/surfaces via config.json
-worktree           → factory/<job-id> from origin/<base>
-spec-writer (opus) → spec.md
-builder (opus)     → commits; the first push opens a draft PR "Closes #<n>"
+spec-writer        → MODE=initiative: vision.md, context.md, slices.md (an atomic issue = 1 slice)
+                     NEEDS-INFO → asked on the issue, like intake
+slice job          → the `next` slice becomes a job (worktree factory/<job-id> from origin/<base>)
+spec-writer (opus) → MODE=slice: spec.md (≤ 40 lines). READY | SPLIT (script adds the "b" slices) | NEEDS-INFO
+specgate (script)  → spec.md must pass before anything is built; 2 retries, then needs-human
+intake (sonnet)    → rates THIS slice from its spec.md (risk, surfaces); route (script) picks reviewers + models
+builder (opus)     → commits; the first push opens a draft PR "Refs #<n>"; a spike writes findings.md instead
 gate (script)      → checks.sh; FAIL → builder gets the log, no reviewers spawned
 reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → reviewers
 approver (opus)    → APPROVE: sync origin/<base>, gate, gh pr merge
                      ESCALATE: PR ready, decision as PR comment, label factory:needs-human
+spec-writer (opus) → MODE=replan after every merge (or finished spike): context.md, slices.md, replan.md
+                     CONTINUE → checkpoint (every-slice: wait for a human OK) or the next slice job (auto)
+                     DONE → the initiative closes | NEEDS-HUMAN → needs-human
 triage (tech-lead) → a script-detected wall (last gate, rounds out, BLOCKED, merge failed):
                      RETRY once with a brief for the builder | ESCALATE with one closed question
-feedback           → a human comments on the PR or tells /factory → feedback-<k>.md
-                     → spec-writer amends spec.md → build → gate → every reviewer → approver
+feedback           → a human comments on the PR or tells /factory:
+                     rework (default) → feedback-<k>.md → the same job's builder → gate → every reviewer → approver
+                     direction ("[direction]" comment, or `job feedback --direction`) → direction-<k>.md → replan
 ```
 
 A rework round after reviews re-runs only the lenses that asked for changes,
@@ -60,6 +67,9 @@ through the scripts. `factory/jobs/` is gitignored runtime state.
 <repo>/factory/jobs/<job-id>/job.json          the job's state; the dashboard reads it
 <repo>/factory/jobs/<job-id>/issue.md          the issue, quoted as data
 <repo>/factory/jobs/<job-id>/intake.md         intake's decision, scope, risk, surfaces
+<repo>/factory/initiatives/<id>/               one per issue (id = the first job's id): issue.md, vision.md, context.md,
+                                               slices.md (the table; only the spec-writer and the scripts write it),
+                                               replan.md (STATUS of the last replan), initiative.json (checkpoint, status)
 <repo>/factory/jobs/<job-id>/spec.md
 <repo>/factory/jobs/<job-id>/build.md
 <repo>/factory/jobs/<job-id>/round-<N>/checks.md        the gate's verdict for round N
@@ -68,7 +78,10 @@ through the scripts. `factory/jobs/` is gitignored runtime state.
 <repo>/factory/jobs/po/<slug>.md               the product owner's epic and stories, before filing
 <repo>/factory/jobs/plan.md                    the tech-lead's plan; `job queue` follows its ORDER and AFTER
 <repo>/factory/jobs/<job-id>/triage.md                  the tech-lead's RETRY or ESCALATE for a stuck job
-<repo>/factory/jobs/<job-id>/feedback-<k>.md            the user's feedback on an escalated job, from /factory and the PR
+<repo>/factory/jobs/<job-id>/feedback-<k>.md            rework feedback on an escalated job, from /factory and the PR
+<repo>/factory/jobs/<job-id>/direction-<k>.md           direction feedback; only the replan reads it
+<repo>/factory/jobs/<job-id>/pr-comments.md             every trusted PR comment, dumped by the script
+<repo>/factory/jobs/<job-id>/findings.md                a spike's result
 <repo>/.worktrees/<job-id>/                    the job's worktree, on factory/<job-id>
 ```
 
@@ -94,6 +107,12 @@ Job: <id>. Job folder: <repo>/factory/jobs/<id>/. Main checkout: <repo>. Worktre
 `<header>` below means that line. Keep `Job folder: <path>/` exactly as shown:
 the job's cost is found by that string.
 
+For a job with an initiative (every new job) add the slice to the header:
+`Initiative: <initiative_id>. Slice: <slice_id> (<kind>). PR keyword: <pr_ref>.`
+(`pr_ref` is set when the slice reaches build; leave that part out before.) The
+spec-writer's prompts are `MODE: <mode>`, `INITIATIVE_ID`, and for slice mode
+`JOB_ID` and `SLICE_ID`, after the header.
+
 Agents that open pages get ports. With `n` the job number (`004` → 4), the
 builder gets `5100 + 10n`, `reviewer-ux` `5101 + 10n` and `reviewer-ui`
 `5102 + 10n` (`ports` in `config.json`).
@@ -111,26 +130,58 @@ Whenever you move a job to `needs-human` and `factory/bin/job` prints
 Each step below runs when the previous agent or script finishes. Report one
 short line per transition, e.g. `004-dark-mode #12: gate PASS → reviewing (code, ux, ui)`.
 
-**intake.** Spawn `intake` with `<header>`. When it returns, read its
-decision:
+**intake.** Spawn `intake` with `<header>`. It runs once per issue. When it
+returns, read its decision:
 
-- `ACCEPT`: run `factory/bin/route <id>`, then `factory/bin/job advance <id> spec`
-  (it comments on the issue and creates the worktree). Go to **spec**.
+- `ACCEPT`: `factory/bin/job advance <id> initiative` (it comments on the issue
+  and creates `factory/initiatives/<id>/issue.md`). Go to **initiative**. A job
+  created before initiatives existed has no `initiative_id`: for it
+  `factory/bin/route <id>` and `factory/bin/job advance <id> spec`, then the old
+  steps (**spec (old job)** below).
 - `NEEDS-INFO`: `factory/bin/job advance <id> needs-info`. The job parks until
   the author replies.
 - `REJECT`: `factory/bin/job advance <id> rejected`.
 
-**spec.** Spawn `spec-writer` with `<header>`, plus
-`Amend the spec for feedback-<k>.md.` when the job came back from feedback.
-When it returns, `factory/bin/job advance <id> build` and go to **build**. If
-`advance` refuses because the spec isn't amended yet, resume the spec-writer
-once with the refusal.
+**initiative.** Spawn `spec-writer` with `<header> MODE: initiative. INITIATIVE_ID: <initiative_id>.`
+Read `head -1 factory/initiatives/<id>/vision.md`:
+
+- `STATUS: READY`: `factory/bin/job advance <id> spec`. It checks `slices.md`
+  (exactly one `next`), marks that slice `in-progress` and creates the
+  worktree. If it refuses, resume the spec-writer once with the refusal. Go to
+  **spec**.
+- `STATUS: NEEDS-INFO`: `factory/bin/job advance <id> needs-info` posts its
+  questions on the issue.
+
+**spec.** Spawn `spec-writer` with `<header> MODE: slice. INITIATIVE_ID: <i>. JOB_ID: <id>. SLICE_ID: <s>.`
+(plus `Read feedback-<k>.md: a human's answer about this spec.` when `job feedback` sent the job back here)
+Then run `factory/bin/job spec-check <id>`:
+
+- `SPECGATE: PASS (STATUS: READY | SPLIT)`: `factory/bin/job advance <id> rate`.
+  On SPLIT it adds the "b" slices of `## Propuesta de split` to `slices.md` as
+  `idea`; this slice keeps its row. Go to **rate**.
+- `SPECGATE: NEEDS-INFO`: `factory/bin/job advance <id> needs-info`.
+- `SPECGATE: FAIL`: it prints the errors. Resume the spec-writer with them
+  (`specgate failed: <errors>. Fix spec.md.`) and run `spec-check` again. The third
+  failure moves the job to `needs-human` by itself; no build was spent.
+
+**rate.** Spawn `intake` with `<header> Rate slice: read spec.md and write intake.md (DECISION: ACCEPT, RISK, SURFACES).`
+Then `factory/bin/route <id>` and `factory/bin/job advance <id> build`. Go to
+**build**. (A spike is rated the same way; its `ux` and `ui` reviewers never run, since it has no review.)
+
+**spec (old job).** For a job without `initiative_id`: spawn `spec-writer` with
+`<header>` plus `Amend the spec for feedback-<k>.md.` when the job came back from
+feedback; when it returns, `factory/bin/job advance <id> build`. If `advance`
+refuses because the spec isn't amended yet, resume the spec-writer once.
 
 **build.** Spawn or resume `builder-<id>` with
 `<header> Build round <N>. Port: <port>.` plus what this round is for: the
 gate's `round-<N-1>/checks.md`, the reviews in `round-<N-1>/`, or, after
-feedback, `The user gave feedback: read feedback-<k>.md and the spec's "Changes from feedback <k>", address them, push, and update build.md for round <N>.` When it returns, read `build.md`'s first line:
+feedback, `The user gave feedback: read feedback-<k>.md, address it, push, and update build.md for round <N>.` (an old job without `initiative_id` also reads the spec's "Changes from feedback <k>"). When it returns, read `build.md`'s first line:
 
+- `STATUS: READY` on a spike (`kind` spike): `factory/bin/job advance <id> replan`
+  (it needs `findings.md`, marks the slice `done`, discards the worktree), then go to **replan**.
+  A slice with `## Propuesta de cambio al spec` in `build.md` still goes to the
+  gate: the reviewers and the replan read it.
 - `STATUS: READY`: `factory/bin/job advance <id> gate`, then go to **gate**. If
   `advance` refuses (nothing pushed, no PR, a dirty tree), resume the builder
   once with the refusal. If it refuses again, stop this job and tell the user.
@@ -161,10 +212,25 @@ finished:
 **approve.** When the approver returns, read `decision.md`'s first line:
 
 - `APPROVE`: `factory/bin/job merge <id>`. It syncs the branch with the base,
-  runs the gate again, pushes, and merges the PR, ending in `merged`. If any
-  of that fails it moves the job to `needs-human` and says why.
+  runs the gate again, pushes, and merges the PR. The slice becomes `merged`
+  and the job goes to `replan` (an old job ends in `merged`). If any of that
+  fails it moves the job to `needs-human` and says why.
 - `ESCALATE`: `factory/bin/job advance <id> needs-human`. It marks the PR ready,
   posts the decision on it and labels the issue `factory:needs-human`.
+
+**replan.** Run `factory/bin/job direction <id>` (it collects `[direction]`
+comments on the merged PR as `direction-<k>.md`), then spawn `spec-writer` with
+`<header> MODE: replan. INITIATIVE_ID: <i>.` Then `factory/bin/job replan <id>`:
+
+- It refuses when `replan.md` or `slices.md` fail the checks (one `next`, none
+  with DONE). Resume the spec-writer once with the refusal.
+- `CONTINUE`: with `checkpoint: every-slice` (the default) the job waits at
+  `checkpoint`; report the replan's `## Resumen` to the user and wait for their OK:
+  `factory/bin/job checkpoint-ok <initiative>` creates the next slice job; go to **spec**.
+  With `checkpoint: auto` the next slice job is created at once. Change it per
+  initiative with `factory/bin/job set-checkpoint <initiative> every-slice|auto`.
+- `DONE`: the initiative closes and so does its issue.
+- `NEEDS-HUMAN`: the job goes to `needs-human` with the replan's "Para el humano".
 
 **triage.** Spawn `tech-lead` with `<header> Triage.` When it returns, read
 `triage.md`'s first line:
@@ -204,16 +270,23 @@ then moves the job to `merged`; stop any agents still running for it.
    questions waiting on authors.
 
 **Resuming.** State lives in files, so a new session picks up where a dead one
-stopped. For a `resume` job, run its stage's step again: `intake` and `spec`
-respawn their agent; `build` spawns a new builder told it is resuming (it reads
+stopped. For a `resume` job, run its stage's step again: `intake`, `initiative`, `spec`, `rate` and `replan`
+respawn their agent (`replan` first runs `job direction <id>`); `build` spawns a new builder told it is resuming (it reads
 `build.md` and `git log` to see how far the last one got); `gate` runs the
 gate; `review` spawns only the reviewers from `factory/bin/job reviewers <id>`
 whose `review-<r>.md` is missing in the current round; `approve` respawns the approver; `triage` respawns the tech-lead; `merging` runs
 `factory/bin/job merge <id>`. A `needs-info` job the author has answered shows
-as `resume`: run `factory/bin/job advance <id> intake` and go to **intake**. A
+as `resume`: run `factory/bin/job advance <id> <stage>` with the stage it asked
+from (`job.json` `info_from`: `initiative` or `spec`; no `info_from` means `intake`) and go to that step. A
 `needs-human` job with new comments on its PR shows as `resume` with the note
 `feedback on PR #<pr>`: run `factory/bin/job feedback <id> </dev/null` (it
-takes the PR comments) and go to **spec**.
+takes the PR comments) and go to the stage it prints: **build** for rework (an
+old job: **spec (old job)**; a slice that never built: **spec**), **replan** for direction. An initiative's
+`checkpoint` job shows as `wait`: it needs the user's OK, not a comment. With
+`checkpoint: auto` it shows as `resume` once a slot is free (the replan found
+none): run `factory/bin/job checkpoint-ok <initiative>` and go to **spec**. A
+`resume` line with stage `next-slice` is an initiative whose next slice never got
+a job: run `factory/bin/job next-slice <initiative>` and go to **spec**.
 
 ## /factory run <n>
 
@@ -244,8 +317,15 @@ new feature, ask.
   ```
 
   It saves `feedback-<k>.md`, gives the job a fresh round budget and moves it
-  to `spec`. Go to **spec** (the spec-writer amends the spec first), then
-  continue like any job.
+  to `build`: rework goes back to the same builder (an old job, or a slice that
+  escalated from spec before any build, goes to `spec` first). If the user is changing what they want rather than what was built, or
+  the job waits at a replan question, add `--direction`
+  (`factory/bin/job feedback <n> --direction`): it saves `direction-<k>.md` and
+  moves the job to `replan`. On a slice whose PR isn't merged, that drops the
+  slice: its PR is closed (the branch stays) and the job ends `rejected` after
+  the replan. PR comments are split by the same rule: the ones
+  starting with `[direction]` are direction, the rest rework. Never classify
+  anything yourself.
 - **Rejecting or benching a `needs-info` or `needs-human` job**: pass their
   reason verbatim on stdin:
 
@@ -261,7 +341,9 @@ new feature, ask.
   `factory` label again.
 - **An answer to a `needs-info` question**: post their words on the issue with
   `gh issue comment <n> --body "<their answer>"`, then
-  `factory/bin/job advance <id> intake` and go to **intake**.
+  `factory/bin/job advance <id> <stage>` with the stage the job asked from
+  (`job.json` `info_from`: `initiative` or `spec`; none means `intake`) and go to that step.
+  Never send an `initiative` or `spec` question back to `intake`: it would replan the initiative.
 - **A new feature or business idea**: the product owner writes it up. Spawn
   `product-owner` with `<the idea, verbatim> Write factory/jobs/po/<slug>.md.`
   (`<slug>`: 2 to 4 lowercase words). Then run `factory/bin/stories check
@@ -294,4 +376,4 @@ new feature, ask.
   and people with write access.
 - Agents push only their `factory/<job-id>` branch. Merges happen only through
   `factory/bin/job merge`, which uses `gh pr merge`. The factory never deploys.
-- One PR per issue, at most `max_rounds` rounds per job.
+- One PR per slice (an old job: one per issue), at most `max_rounds` rounds per job.

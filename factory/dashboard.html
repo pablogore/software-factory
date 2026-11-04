@@ -49,9 +49,25 @@
     border-radius: 8px; color: var(--human); font-family: var(--mono); font-size: 12px;
   }
 
+  /* Initiatives */
+  .inits { padding: 12px 32px 0; display: grid; gap: 12px; }
+  .init { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .init h3 { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
+  .init .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .init .log { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  .slices { margin-top: 8px; display: grid; gap: 4px; }
+  .slice { display: flex; gap: 10px; align-items: baseline; font-size: 12.5px; padding: 3px 6px; border-radius: 6px; }
+  .slice[data-job] { cursor: pointer; } .slice[data-job]:hover { background: var(--card-hover); }
+  .slice .sid { font-family: var(--mono); width: 34px; color: var(--muted); }
+  .slice .st { font-family: var(--mono); font-size: 10.5px; width: 78px; color: var(--faint); }
+  .slice .st.next { color: var(--active); } .slice .st.in-progress { color: var(--changes); }
+  .slice .st.merged, .slice .st.done { color: var(--merged); }
+  .slice .val { flex: 1; min-width: 0; } .slice .job { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .slice .kind { font-family: var(--mono); font-size: 10px; color: var(--faint); }
+
   /* Board */
   .board {
-    display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 12px;
+    display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 12px;
     padding: 20px 32px 40px; align-items: start;
   }
   .col { min-width: 0; }
@@ -258,6 +274,7 @@
   <div class="status" id="status">connecting…</div>
 </header>
 <div id="banner"></div>
+<section class="inits" id="inits"></section>
 <main class="board" id="board"></main>
 <footer>
   <span>/factory run</span>
@@ -285,17 +302,18 @@
 <script>
 const POLL_MS = 20000
 const COLUMNS = [
-  { label: 'Intake', who: 'intake · sonnet', stages: ['intake', 'needs-info'] },
-  { label: 'Spec', who: 'spec-writer · opus', stages: ['spec'] },
+  { label: 'Intake', who: 'intake · initiative', stages: ['intake', 'needs-info', 'initiative'] },
+  { label: 'Spec', who: 'spec-writer · rate', stages: ['spec', 'rate'] },
   { label: 'Build', who: 'builder · gate', stages: ['build', 'gate'] },
   { label: 'Review', who: 'routed reviewers', stages: ['review'] },
   { label: 'Approve', who: 'approver · merge', stages: ['approve', 'merging'] },
+  { label: 'Replan', who: 'spec-writer · checkpoint', stages: ['replan', 'checkpoint'] },
   { label: 'Triage', who: 'tech-lead', stages: ['triage'] },
   { label: 'Needs human', who: 'you', stages: ['needs-human'], cls: 'human' },
-  { label: 'Done', who: 'merged · rejected', stages: ['merged', 'rejected'], cls: 'merged-col' },
+  { label: 'Done', who: 'merged · done · rejected', stages: ['merged', 'rejected', 'done'], cls: 'merged-col' },
 ]
 const STAGES = new Set(COLUMNS.flatMap((c) => c.stages))
-const LIVE = new Set(['intake', 'spec', 'build', 'gate', 'review', 'approve', 'merging', 'triage'])
+const LIVE = new Set(['intake', 'initiative', 'spec', 'rate', 'build', 'gate', 'review', 'approve', 'merging', 'replan', 'triage'])
 const SHORT = { code: 'code', ux: 'ux', ui: 'ui', security: 'sec' }
 
 const $ = (id) => document.getElementById(id)
@@ -424,8 +442,10 @@ async function render() {
       ${cards.get(c).reverse().join('') || '<div class="empty">—</div>'}
     </section>`).join('')
   const banner = problems.map((p) => `<div class="banner">${esc(p)}</div>`).join('')
-  if (html + banner !== lastRender) {
-    lastRender = html + banner
+  const inits = initiativesHtml()
+  if (html + banner + inits !== lastRender) {
+    lastRender = html + banner + inits
+    $('inits').innerHTML = inits
     $('board').innerHTML = html
     $('banner').innerHTML = banner
   }
@@ -438,6 +458,7 @@ async function poll() {
   const status = $('status')
   try {
     jobs = await loadJobs()
+    initiatives = await loadInitiatives()
     await render()
     if (openJobId) await refreshDrawer()
     status.className = 'status'
@@ -446,6 +467,62 @@ async function poll() {
     status.className = 'status error'
     status.innerHTML = `<span class="dot"></span>${esc(err.message)}`
   }
+}
+
+// ---- Initiatives: slices per initiative, each with its job, and the last Changelog line ----
+
+let initiatives = []
+
+async function loadInitiatives() {
+  let listing
+  try { listing = await fetchText('initiatives/') } catch { return [] }
+  const doc = new DOMParser().parseFromString(listing, 'text/html')
+  const ids = [...doc.querySelectorAll('a')]
+    .map((a) => decodeURIComponent(a.getAttribute('href')))
+    .filter((h) => h.endsWith('/') && !h.startsWith('.') && !h.startsWith('/'))
+    .map((h) => h.slice(0, -1))
+    .sort()
+  const out = []
+  for (const id of ids) {
+    try {
+      const info = JSON.parse(await fetchText(`initiatives/${id}/initiative.json`))
+      const slices = parseSlices(await fetchText(`initiatives/${id}/slices.md`).catch(() => ''))
+      const context = await fetchText(`initiatives/${id}/context.md`).catch(() => '')
+      out.push({ info, slices, changelog: lastChangelog(context) })
+    } catch { /* an initiative that isn't fully written yet */ }
+  }
+  return out
+}
+
+function parseSlices(text) {
+  return text.split('\n').map((l) => l.match(/^\|\s*([A-Za-z0-9_.-]+)\s*\|\s*([^|]*?)\s*\|(.*)\|\s*([^|]*?)\s*\|\s*$/))
+    .filter((m) => m && m[1] !== 'ID' && !/^-+$/.test(m[1]))
+    .map((m) => ({ id: m[1], kind: m[2], value: m[3].trim(), state: m[4] }))
+}
+
+// The newest entry of context.md's "## Changelog".
+function lastChangelog(text) {
+  const m = text.match(/^## Changelog\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)
+  const items = (m ? m[1] : '').split('\n').filter((l) => /^\s*-\s+/.test(l))
+  return items.length ? items[items.length - 1].replace(/^\s*-\s+/, '') : ''
+}
+
+function initiativesHtml() {
+  return initiatives.map(({ info, slices, changelog }) => {
+    const rows = slices.map((sl) => {
+      const job = jobs.filter((j) => j.initiative_id === info.id && j.slice_id === sl.id).pop()
+      const open = job ? ` data-job="${esc(job.id)}" tabindex="0" role="button"` : ''
+      const state = sl.kind === 'spike' && sl.state === 'done' ? 'done (spike)' : sl.state
+      return `<div class="slice"${open}><span class="sid">${esc(sl.id)}</span>
+        <span class="st ${esc(sl.state)}">${esc(state)}</span>
+        <span class="val">${esc(sl.value)} <span class="kind">${sl.kind === 'spike' ? 'spike' : ''}</span></span>
+        <span class="job">${job ? esc(job.id) + ' · ' + esc(job.stage) : ''}</span></div>`
+    }).join('')
+    return `<article class="init"><h3>${esc(info.title || info.id)}</h3>
+      <div class="sub">${esc(info.id)} · #${esc(info.issue)} · ${esc(info.status)} · checkpoint ${esc(info.checkpoint)}</div>
+      <div class="slices">${rows || '<div class="sub">no slices yet</div>'}</div>
+      ${changelog ? `<div class="log">Changelog: ${esc(changelog)}</div>` : ''}</article>`
+  }).join('')
 }
 
 // factory/bin/job writes each jobs/<id>/job.json.
@@ -475,7 +552,7 @@ async function listFiles(dir) {
   return out
 }
 
-const ORDER = ['issue.md', 'intake.md', 'spec.md', 'build.md', 'decision.md', 'rejection.md']
+const ORDER = ['issue.md', 'intake.md', 'spec.md', 'build.md', 'findings.md', 'decision.md', 'rejection.md']
 const ROUND_ORDER = ['checks', 'review-code', 'review-security', 'review-ux', 'review-ui', 'merge-checks']
 
 function fileRank(path) {

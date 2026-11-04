@@ -77,9 +77,10 @@ fi
 step "1. Copying the factory"
 FILES=(.claude/skills/factory/SKILL.md)
 for f in "$SRC"/.claude/agents/*.md; do FILES+=(".claude/agents/$(basename "$f")"); done
-for f in "$SRC"/factory/bin/*; do FILES+=("factory/bin/$(basename "$f")"); done
+for f in "$SRC"/factory/bin/*; do [ -f "$f" ] && FILES+=("factory/bin/$(basename "$f")"); done
 FILES+=(factory/dashboard.html)
 for f in "$SRC"/factory/tests/*.py; do FILES+=("factory/tests/$(basename "$f")"); done
+for f in "$SRC"/factory/tests/fixtures/*.md; do FILES+=("factory/tests/fixtures/$(basename "$f")"); done
 
 CLASH=()
 for f in "${FILES[@]}"; do
@@ -101,7 +102,7 @@ for f in "${FILES[@]}"; do
   run mkdir -p "$TARGET/$(dirname "$f")"
   run cp "$SRC/$f" "$TARGET/$f"
 done
-run chmod +x "$TARGET"/factory/bin/*
+for f in "${FILES[@]}"; do case "$f" in factory/bin/*) run chmod +x "$TARGET/$f" ;; esac; done
 ok "${#FILES[@]} files: skill, $(ls "$SRC"/.claude/agents/*.md | wc -l | tr -d ' ') agents, scripts, dashboard, tests"
 
 # config.json: keep the project's; add keys it's missing; set the base branch.
@@ -152,13 +153,13 @@ fi
 
 # ---- 2. .gitignore and AGENTS.md -------------------------------------------
 step "2. .gitignore and AGENTS.md"
-for line in "/factory/jobs/" "/.worktrees/" "/.factory-backup-*/"; do
+for line in "/factory/jobs/" "/factory/initiatives/" "/.worktrees/" "/.factory-backup-*/"; do
   if ! grep -qxF "$line" "$TARGET/.gitignore" 2>/dev/null; then
     if [ "$DRY" = 1 ]; then echo "    would: add $line to .gitignore"
     else printf '%s\n' "$line" >> "$TARGET/.gitignore"; fi
   fi
 done
-ok ".gitignore ignores /factory/jobs/ and /.worktrees/"
+ok ".gitignore ignores /factory/jobs/, /factory/initiatives/ and /.worktrees/"
 
 SECTION='## Software factory
 
