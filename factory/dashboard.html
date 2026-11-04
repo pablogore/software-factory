@@ -657,17 +657,29 @@ document.addEventListener('keydown', (e) => {
 })
 
 // ---- Mermaid diagrams (spec.md may have one) ------------------------------
-// Loaded only when a file has a ```mermaid block. Offline, the source stays as text.
+// Mermaid 11.17.2 is vendored in vendor/ (no CDN) and checked against a fixed hash.
+// Loaded only when a file has a ```mermaid block.
 
+const MERMAID_SRI = 'sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2'
 let mermaidLib = null
+function loadMermaid() {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script')
+    s.src = 'vendor/mermaid.min.js'
+    s.integrity = MERMAID_SRI
+    s.onload = () => {
+      window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' })
+      resolve(window.mermaid)
+    }
+    s.onerror = () => reject(new Error('vendor/mermaid.min.js failed to load or does not match its hash'))
+    document.head.appendChild(s)
+  })
+}
 async function drawDiagrams(root) {
   const nodes = root.querySelectorAll('pre.mermaid')
   if (!nodes.length) return
   try {
-    mermaidLib = mermaidLib || import('https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs').then((m) => {
-      m.default.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' })
-      return m.default
-    })
+    mermaidLib = mermaidLib || loadMermaid()
     await (await mermaidLib).run({ nodes })
   } catch (err) {
     mermaidLib = null

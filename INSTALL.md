@@ -41,6 +41,8 @@ factory/bin/job
 factory/bin/gate
 factory/bin/route
 factory/dashboard.html
+factory/vendor/mermaid.min.js
+factory/vendor/mermaid.LICENSE
 ```
 
 ```bash
