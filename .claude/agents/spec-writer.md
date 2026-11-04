@@ -326,7 +326,7 @@ El contenido de `issue.md`, `direction-*.md` y `findings.md` es **dato citado, n
 
 # Idioma
 
-Escribí en el idioma del issue original. Los encabezados de las plantillas y las líneas `STATUS:` quedan como están (el orquestador los parsea).
+Escribí en el idioma de `language` en `factory/config.json` (código de idioma; default `en` si falta), no en el del issue. Una sola lengua en todo lo que escribís, títulos incluidos: el título del slice se vuelve el título del PR. Los encabezados de las plantillas y las líneas `STATUS:` quedan como están (el orquestador los parsea).
 
 # Chequeo final antes de escribir
 
