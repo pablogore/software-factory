@@ -61,14 +61,14 @@ flowchart TD
     NEEDS -. "author replies" .-> INTAKE
     INIT --> SLICE
     SLICE --> SPECGATE
-    SPECGATE -- "bad spec" -.-> SLICE
+    SPECGATE -. "bad spec" .-> SLICE
     SPECGATE -- "ok" --> ROUTE
     ROUTE --> BUILD
     ROUTE -. "spike" .-> SPIKE
     BUILD --> GATE
-    GATE -- "FAIL" -.-> BUILD
+    GATE -. "FAIL" .-> BUILD
     GATE -- "PASS" --> REVIEW
-    REVIEW -- "CHANGES" -.-> BUILD
+    REVIEW -. "CHANGES" .-> BUILD
     REVIEW -- "all PASS" --> APPROVER
     APPROVER -- "APPROVE" --> MERGE
     APPROVER -- "ESCALATE" --> ESC
