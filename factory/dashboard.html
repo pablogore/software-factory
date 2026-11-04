@@ -418,7 +418,7 @@ function card(job, rounds) {
       </div>
       <p class="feature">${esc(job.title)}</p>
       <div class="links">${links(job)}</div>
-      ${rounds.length ? `<div class="rounds">${rounds.join('')}</div>` : ''}
+      ${rounds.length && !done ? `<div class="rounds">${rounds.join('')}</div>` : ''}
       <div class="meta">${meta}</div>
       ${human ? `<div class="hint">${job.pr ? `merge PR #${job.pr} to approve<br>` : ''}or give feedback: /factory &lt;anything&gt;</div>` : ''}
     </article>`
