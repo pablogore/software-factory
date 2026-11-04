@@ -152,13 +152,13 @@ fi
 
 # ---- 2. .gitignore and AGENTS.md -------------------------------------------
 step "2. .gitignore and AGENTS.md"
-for line in "/factory/jobs/" "/.worktrees/" "/.factory-backup-*/"; do
+for line in "/factory/jobs/" "/factory/initiatives/" "/.worktrees/" "/.factory-backup-*/"; do
   if ! grep -qxF "$line" "$TARGET/.gitignore" 2>/dev/null; then
     if [ "$DRY" = 1 ]; then echo "    would: add $line to .gitignore"
     else printf '%s\n' "$line" >> "$TARGET/.gitignore"; fi
   fi
 done
-ok ".gitignore ignores /factory/jobs/ and /.worktrees/"
+ok ".gitignore ignores /factory/jobs/, /factory/initiatives/ and /.worktrees/"
 
 SECTION='## Software factory
 
