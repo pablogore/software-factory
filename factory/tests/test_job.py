@@ -217,6 +217,8 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(self.run_guard("reviewer-ux", "Edit", file_path=str(self.REPO / ".worktrees/007-x/src/a.js")), 2)
         self.assertEqual(self.run_guard("builder", "Edit", file_path=str(self.REPO / ".worktrees/007-x/src/a.js")), 0)
         self.assertEqual(self.run_guard("builder", "Write", file_path=str(self.REPO / "factory/config.json")), 2)
+        self.assertEqual(self.run_guard("builder", "Write", file_path=str(j / "findings.md")), 0)
+        self.assertEqual(self.run_guard("reviewer-code", "Write", file_path=str(j / "findings.md")), 2)
         self.assertEqual(self.run_guard("approver", "Write", file_path="/etc/passwd"), 2)
 
     def test_bash(self):

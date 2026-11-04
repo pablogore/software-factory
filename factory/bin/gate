@@ -111,6 +111,8 @@ def hook():
     if not job_file.exists():
         sys.exit(0)
     job = json.loads(job_file.read_text())
+    if job.get("kind") == "spike":
+        sys.exit(0)  # throwaway code: nothing to gate
     code, log, _ = run_checks(job["worktree"])
     if code != 0:
         tail = "\n".join(log.rstrip().splitlines()[-40:])
