@@ -560,6 +560,12 @@ def sync(job):
             "surfaces": [s.strip() for s in h.get("SURFACES", "").split(",")
                          if s.strip() and s.strip() != "none"],
         }
+    spec = d / "spec.md"
+    if spec.exists():
+        # The spec is written in the configured `language`; the issue title is whatever the author typed.
+        m = re.match(r"#\s+(.+)", first_line(spec) or "")
+        if m:
+            job["title"] = m.group(1).strip()
     if job["round"]:
         rd = round_dir(job)
         gate = header(rd / "checks.md").get("GATE") if (rd / "checks.md").exists() else None
