@@ -1,4 +1,7 @@
 {
+  "worktree": {
+    "bgIsolation": "none"
+  },
   "permissions": {
     "deny": [
       "Bash(git push --force:*)",

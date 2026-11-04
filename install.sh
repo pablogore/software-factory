@@ -150,9 +150,10 @@ else
   ok "factory/checks.sh created from the template"
 fi
 
-# settings.json: merge the deny list into the project's.
+# settings.json: merge the deny list into the project's, and let background
+# sessions write to the main checkout (factory/jobs/ lives there, outside git).
 if [ "$DRY" = 1 ]; then
-  echo "    would: merge permissions.deny into .claude/settings.json"
+  echo "    would: merge permissions.deny and worktree.bgIsolation=none into .claude/settings.json"
 else
   python3 - "$SRC/.claude/settings.json" "$TARGET/.claude/settings.json" <<'PY'
 import json, sys
@@ -162,8 +163,13 @@ have = json.loads(dst.read_text()) if dst.exists() else {}
 deny = have.setdefault("permissions", {}).setdefault("deny", [])
 added = [d for d in want["permissions"]["deny"] if d not in deny]
 deny += added
+iso = have.setdefault("worktree", {}).get("bgIsolation")
+have["worktree"]["bgIsolation"] = want["worktree"]["bgIsolation"]
 dst.write_text(json.dumps(have, indent=2) + "\n")
 print(f"  \033[32m✓\033[0m .claude/settings.json: {len(added)} deny rules added")
+if iso != want["worktree"]["bgIsolation"]:
+    print(f"  \033[32m✓\033[0m .claude/settings.json: worktree.bgIsolation {iso!r} → 'none' "
+          "(background sessions write factory/jobs/ in the main checkout)")
 PY
 fi
 
