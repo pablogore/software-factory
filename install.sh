@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Install the software factory (v3) into a project.
 #
-#   ./install.sh <project-path> [--base <branch>] [--force] [--no-labels] [--no-tests] [--dry-run]
+#   ./install.sh <project-path> [--base <branch>] [--force] [--no-labels] [--no-tests] [--no-checks] [--dry-run]
 #
 #   --base <branch>  branch the factory builds from and merges into (default: origin's default branch;
 #                    use `develop` for Git Flow)
 #   --force          overwrite factory files that already exist (the old ones go to .factory-backup-<time>/)
 #   --no-labels      don't create the GitHub labels
 #   --no-tests       don't run the factory's own tests after installing
+#   --no-checks      don't run the project's factory/checks.sh while verifying
 #   --dry-run        show what would change, change nothing
 #
 # Never overwrites the project's factory/config.json or factory/checks.sh (it adds missing config keys),
@@ -15,15 +16,17 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="" BASE="" FORCE=0 LABELS=1 TESTS=1 DRY=0
+TARGET="" BASE="" FORCE=0 LABELS=1 TESTS=1 CHECKS=1 DRY=0
+VERIFY_TIMEOUT="${FACTORY_VERIFY_TIMEOUT:-300}"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --base) BASE="${2:?--base needs a branch}"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --no-labels) LABELS=0; shift ;;
     --no-tests) TESTS=0; shift ;;
+    --no-checks) CHECKS=0; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) usage 0 ;;
     -*) echo "unknown option: $1" >&2; usage 1 ;;
@@ -38,6 +41,19 @@ fail() { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 run()  { if [ "$DRY" = 1 ]; then echo "    would: $*"; else "$@"; fi; }
 WARNINGS=0
+# Run a command for at most $VERIFY_TIMEOUT seconds (exit 124 on timeout); macOS has no timeout(1).
+with_timeout() {
+  python3 - "$VERIFY_TIMEOUT" "$@" <<'PY'
+import os, signal, subprocess, sys
+t, cmd = int(sys.argv[1]), sys.argv[2:]
+p = subprocess.Popen(cmd, start_new_session=True)
+try:
+    sys.exit(p.wait(timeout=t))
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    sys.exit(124)
+PY
+}
 
 # ---- 0. Check ---------------------------------------------------------------
 step "0. Checking the project"
@@ -229,12 +245,20 @@ if [ "$DRY" = 1 ]; then ok "skipped (--dry-run)"; else
   "$TARGET/factory/bin/job" --help >/dev/null && ok "factory/bin/job runs"
   [ "$(git -C "$TARGET" check-ignore factory/jobs/x .worktrees/x | wc -l | tr -d ' ')" = 2 ] \
     && ok "factory/jobs/ and .worktrees/ are ignored" || warn "check .gitignore: factory/jobs/ or .worktrees/ isn't ignored"
-  if (cd "$TARGET" && bash factory/checks.sh >/dev/null 2>&1); then ok "factory/checks.sh passes on this branch"
-  else warn "factory/checks.sh fails here: put your test/lint/build commands in it (the factory can't pass a job until it's green)"; fi
+  LOGDIR="$(mktemp -d)"
+  if [ "$CHECKS" = 0 ]; then ok "factory/checks.sh skipped (--no-checks)"
+  else
+    echo "    running factory/checks.sh (up to ${VERIFY_TIMEOUT}s; --no-checks skips it)..."
+    rc=0; (cd "$TARGET" && with_timeout bash factory/checks.sh) >"$LOGDIR/checks.log" 2>&1 </dev/null || rc=$?
+    if [ "$rc" = 0 ]; then ok "factory/checks.sh passes on this branch"
+    elif [ "$rc" = 124 ]; then warn "factory/checks.sh didn't finish in ${VERIFY_TIMEOUT}s (watch mode or a prompt?): it must exit by itself. See $LOGDIR/checks.log"
+    else warn "factory/checks.sh fails here: put your test/lint/build commands in it (the factory can't pass a job until it's green). See $LOGDIR/checks.log"; fi
+  fi
   if [ "$TESTS" = 1 ]; then
-    if (cd "$TARGET" && python3 -m unittest discover factory/tests >/tmp/factory-tests.log 2>&1); then
-      ok "factory tests pass ($(grep -o 'Ran [0-9]* tests' /tmp/factory-tests.log))"
-    else warn "factory tests failed: see /tmp/factory-tests.log"; fi
+    echo "    running the factory's tests (about 40s)..."
+    rc=0; (cd "$TARGET" && with_timeout python3 -m unittest discover factory/tests) >"$LOGDIR/tests.log" 2>&1 </dev/null || rc=$?
+    if [ "$rc" = 0 ]; then ok "factory tests pass ($(grep -o 'Ran [0-9]* tests' "$LOGDIR/tests.log"))"
+    else warn "factory tests failed or timed out: see $LOGDIR/tests.log"; fi
   fi
 fi
 
