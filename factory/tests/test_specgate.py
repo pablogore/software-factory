@@ -72,6 +72,18 @@ class SpecGateTest(unittest.TestCase):
         self.check(VALID.replace("## Demo", "## Otra"), False, "missing section `## Demo`")
         self.check(VALID.replace("Quien compra ve sus pedidos en una sola pantalla.\n", ""), False, "`## Valor` is empty")
 
+    DIAGRAM = "## Diagrama\n```mermaid\nflowchart LR\n{}```\n\n"
+
+    def test_diagram_does_not_count_but_has_its_own_limit(self):
+        ok = self.DIAGRAM.format("".join(f"  A{i}[Paso con varias palabras {i}] --> A{i+1}\n" for i in range(14)))
+        text = VALID.replace("## Criterios", ok + "## Criterios")
+        self.assertGreater(len(text.splitlines()), 30)
+        self.check(text, True, "SPECGATE: PASS")
+        big = self.DIAGRAM.format("".join(f"  A{i} --> A{i+1}\n" for i in range(15)))
+        self.check(VALID.replace("## Criterios", big + "## Criterios"), False, "diagram has 16 lines")
+        one = self.DIAGRAM.format("  A --> B\n")
+        self.check(VALID.replace("## Criterios", one + one + "## Criterios"), False, "2 mermaid diagrams")
+
     SLICES = "| ID | Tipo | Valor | Estado |\n|----|------|-------|--------|\n| S1 | slice | a | {} |\n| S2 | spike | b | {} |\n"
 
     def test_slices_exactly_one_next(self):

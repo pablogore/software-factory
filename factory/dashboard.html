@@ -217,6 +217,7 @@
     padding: 12px 14px; overflow-x: auto;
   }
   .md pre code { background: none; padding: 0; }
+  .md pre.mermaid[data-processed] { background: none; border: 0; text-align: center; }
   .md blockquote { border-left: 2px solid var(--line); padding-left: 12px; color: var(--muted); }
   .md a { color: var(--active); }
   .md table { border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
@@ -615,6 +616,7 @@ async function refreshDrawer() {
   if (text !== openText) {
     openText = text
     $('d-doc').innerHTML = text === null ? '<p class="note">Intake hasn’t written anything yet.</p>' : markdown(text)
+    drawDiagrams($('d-doc'))
   }
 }
 
@@ -653,6 +655,25 @@ document.addEventListener('keydown', (e) => {
   const cardEl = e.target.closest?.('[data-job]')
   if (cardEl && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDrawer(cardEl.dataset.job) }
 })
+
+// ---- Mermaid diagrams (spec.md may have one) ------------------------------
+// Loaded only when a file has a ```mermaid block. Offline, the source stays as text.
+
+let mermaidLib = null
+async function drawDiagrams(root) {
+  const nodes = root.querySelectorAll('pre.mermaid')
+  if (!nodes.length) return
+  try {
+    mermaidLib = mermaidLib || import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs').then((m) => {
+      m.default.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' })
+      return m.default
+    })
+    await (await mermaidLib).run({ nodes })
+  } catch (err) {
+    mermaidLib = null
+    console.warn('mermaid:', err)
+  }
+}
 
 // ---- Markdown (just enough for the factory's files) ---------------------
 
@@ -707,7 +728,9 @@ function markdown(src) {
       i++
       while (i < lines.length && !lines[i].startsWith('```')) body.push(lines[i++])
       i++
-      html += `<pre><code>${esc(body.join('\n'))}</code></pre>`
+      html += /^```\s*mermaid\s*$/.test(line)
+        ? `<pre class="mermaid">${esc(body.join('\n'))}</pre>`
+        : `<pre><code>${esc(body.join('\n'))}</code></pre>`
       continue
     }
     const h = line.match(/^(#{1,6})\s+(.*)$/)

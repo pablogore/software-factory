@@ -119,7 +119,7 @@ factory/
   bin/job                     the only writer of job.json; refuses illegal moves; merges
   bin/gate                    runs checks.sh in a job's worktree → round-N/checks.md
   bin/route                   risk + surfaces → the job's reviewers and models
-  bin/specgate                checks spec.md (≤ 250 words, 1–4 criteria of ≤ 30 words, Valor, Demo) and slices.md
+  bin/specgate                checks spec.md (≤ 250 words, 1–4 criteria of ≤ 30 words, Valor, Demo, at most one mermaid diagram) and slices.md
   initiatives/<id>/           vision.md, context.md, slices.md, replan.md, initiative.json (gitignored)
   dashboard.html              the board
 examples/jobs/                finished jobs from a real run

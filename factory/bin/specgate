@@ -20,6 +20,9 @@ MAX_CRITERION_WORDS = 30   # one idea per criterion, not a paragraph
 MAX_VALOR_WORDS = 35
 MAX_LIST_ITEMS = 3         # Fuera de alcance, Supuestos
 MAX_DEMO_STEPS = 4
+MAX_DIAGRAMS = 1
+MAX_DIAGRAM_LINES = 15     # inside the ```mermaid fence; doesn't count toward lines/words
+MERMAID = re.compile(r"^```[ \t]*mermaid[ \t]*\n(.*?)^```[ \t]*$\n?", re.M | re.S)
 STATES = {"next", "idea", "in-progress", "merged", "done", "dropped"}
 KINDS = {"slice", "spike"}
 ROW = re.compile(r"^\|\s*([A-Za-z0-9_.-]+)\s*\|\s*([^|]*?)\s*\|(.*)\|\s*([^|]*?)\s*\|\s*$")
@@ -48,8 +51,16 @@ def items(body, numbered):
 
 def check_spec(text):
     errors = []
+    first = text.split("\n", 1)[0].strip()
+    diagrams = MERMAID.findall(text)
+    if len(diagrams) > MAX_DIAGRAMS:
+        errors.append(f"{len(diagrams)} mermaid diagrams; the maximum is {MAX_DIAGRAMS}")
+    for d in diagrams:
+        n = len([l for l in d.splitlines() if l.strip()])
+        if n > MAX_DIAGRAM_LINES:
+            errors.append(f"the mermaid diagram has {n} lines; the maximum is {MAX_DIAGRAM_LINES}. Show only the main flow")
+    text = MERMAID.sub("", text)  # the diagram has its own limit
     lines = text.rstrip("\n").split("\n")
-    first = lines[0].strip()
     if first not in {"STATUS: READY", "STATUS: SPLIT"}:
         errors.append(f"first line must be `STATUS: READY` or `STATUS: SPLIT`, not {first!r}")
     if len(lines) > MAX_LINES:

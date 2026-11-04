@@ -146,6 +146,13 @@ STATUS: READY | SPLIT | NEEDS-INFO
 ## Valor
 Una frase. Quién gana qué.
 
+## Diagrama
+(opcional, ver "Cuándo va un diagrama")
+```mermaid
+flowchart LR
+  ...
+```
+
 ## Criterios de aceptación
 1. <una cosa que se puede ver o probar, en una frase>
 2. ...
@@ -164,12 +171,13 @@ Una frase. Quién gana qué.
 <nombre del flag>
 ```
 
-`## Fuera de alcance`, `## Supuestos` y `## Flag` son opcionales: si no tenés nada que valga la pena decir, no pongas la sección. Sin `## Flag` significa que no hay flag.
+`## Diagrama`, `## Fuera de alcance`, `## Supuestos` y `## Flag` son opcionales: si no tenés nada que valga la pena decir, no pongas la sección. Sin `## Flag` significa que no hay flag.
 
 ## Límites duros (specgate los controla)
 
 - Máximo **250 palabras** y **30 líneas** en total.
 - Entre **1 y 4** criterios, cada uno de **30 palabras como máximo**.
+- Diagrama: como mucho uno, de hasta 15 líneas dentro del bloque. No cuenta para las 250 palabras ni para las 30 líneas.
 - Valor: una frase (máx. 35 palabras). Demo: máx. 4 pasos. Fuera de alcance y Supuestos: máx. 3 ítems cada una.
 - Valor y Demo son obligatorias. Si no podés escribir una Demo, el slice no entrega valor visible: es una tarea interna. Fusionalo con el slice que le da sentido o pedí replan.
 
@@ -183,6 +191,33 @@ Las líneas largas no son un atajo: el límite está en palabras. Si no te alcan
 - **Código solo si es lo que el usuario toca:** una URL, un comando de la Demo, un mensaje que se ve en pantalla. Nunca archivos, funciones, tipos ni paquetes internos.
 - **Sin repetir:** lo que ya dice context.md o vision.md no se copia. Lo que se dice en el Valor no se repite en los criterios.
 - Antes de guardar, releela como si fueras el que pidió la feature. Si algo no lo entendería, reescribilo o sacalo.
+
+## Cuándo va un diagrama
+
+Agregá un diagrama Mermaid cuando ayude a entender **qué se va a construir** más rápido que el texto. Preguntate: si el que pidió la feature ve solo el diagrama, ¿entiende el objetivo? Si sí, ponelo.
+
+Sirve cuando el slice tiene:
+- un **recorrido entre varias partes** (usuario → proxy → app, o servicio A → B → C): `flowchart LR` o `sequenceDiagram`;
+- **caminos que se separan según una decisión** (permitir / bloquear, aprobado / rechazado): `flowchart` con un rombo;
+- **estados por los que pasa algo** (borrador → enviado → aprobado): `stateDiagram-v2`.
+
+No lo pongas cuando el slice es un cambio de texto o de estilo, un solo paso (una pantalla, un endpoint simple), o cuando el diagrama solo repetiría los criterios. Ante la duda, sin diagrama.
+
+Reglas:
+- Muestra lo que pasa visto desde afuera, no la arquitectura interna: nada de clases, archivos, módulos ni funciones.
+- Etiquetas cortas, con las palabras del issue. Solo el camino principal y la decisión clave, no todos los casos borde.
+- No reemplaza a los criterios: la spec tiene que entenderse sin el diagrama.
+- Va en `## Diagrama`, justo después del Valor, en un bloque ```` ```mermaid ````.
+
+Ejemplo (el proxy de reglas de arriba):
+
+```mermaid
+flowchart LR
+  C[Cliente] --> P[Proxy]
+  P --> R{¿Hay una regla<br/>que lo permite?}
+  R -- sí --> A[App] --> C
+  R -- no o inválido --> D[403 + id de correlación] --> C
+```
 
 ## Qué es un buen criterio de aceptación
 
@@ -283,6 +318,7 @@ Antes de guardar, verificá cada punto. Si alguno falla, corregí; no lo entregu
 
 - [ ] La primera línea de vision.md (initiative), spec.md (slice) o replan.md (replan) es `STATUS: ...` con un valor válido para el modo. slices.md no tiene STATUS.
 - [ ] (slice) ≤ 250 palabras y 30 líneas, 1–4 criterios de ≤ 30 palabras, tiene Valor y Demo.
+- [ ] (slice) Si hay un recorrido, una decisión o estados que el texto no muestra de un vistazo, hay un diagrama; si no, no hay.
 - [ ] (slice) La entiende alguien que no leyó el código: una idea por criterio, sin listas de casos ni vocabulario interno.
 - [ ] (slice) Ningún criterio menciona archivos, funciones, tipos o detalles de implementación.
 - [ ] (slice) La Demo se puede hacer en < 2 minutos sin conocer el código.
