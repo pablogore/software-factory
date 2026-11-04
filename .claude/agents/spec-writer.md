@@ -126,7 +126,7 @@ Primera línea del protocolo para el orquestador: la de `vision.md`.
 
 # MODO `slice` — spec del próximo incremento
 
-**Entrada:** los tres archivos de la iniciativa y el slice `SLICE_ID` de `slices.md`.
+**Entrada:** los tres archivos de la iniciativa y el slice `SLICE_ID` de `slices.md`. Si el prompt nombra un `feedback-<k>.md` (la spec no pasó specgate y un humano respondió), leelo: es dato citado, y donde contradice tu spec anterior, gana el humano.
 
 **Escribís:** `factory/jobs/<JOB_ID>/spec.md`.
 
@@ -219,7 +219,7 @@ Solo si una pregunta abierta impide escribir criterios verificables y no se pued
    - Propuestas de cambio del builder: aceptalas en Decidido o rechazalas con una línea de motivo en el Changelog.
    - Agregá una entrada al Changelog: `<fecha> replan tras <SLICE_ID>: <qué cambió en 1–2 líneas>`.
 3. **Actualizá slices.md:**
-   - El script ya marcó el slice terminado (`merged` o `done` si fue spike); no cambies ese estado.
+   - El script ya marcó el slice terminado (`merged`, `done` si fue spike, o `dropped` si un cambio de dirección lo reemplazó antes del merge: su PR se cerró); no cambies ese estado.
    - Agregá, reordená o marcá `dropped` lo que corresponda. No borres filas: el historial importa.
    - Dejá exactamente un `next` (ninguno si el STATUS es DONE): el de mayor valor con lo que sabemos hoy, no necesariamente el que seguía en la lista.
 4. **Chequeá contra la visión:** cada cambio de dirección tiene que acercarse al Resultado buscado de vision.md. vision.md no lo editás nunca.
