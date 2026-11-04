@@ -92,6 +92,8 @@ def main(argv):
         print(json.dumps(out))
     elif group == "issue" and cmd == "comment":
         s["issues"][pos[0]]["comments"].append({"author": {"login": me}, "body": o["body"][0], "createdAt": now()})
+    elif group == "issue" and cmd == "close":
+        s["issues"][pos[0]]["state"] = "CLOSED"
     elif group == "issue" and cmd == "edit":
         i = s["issues"][pos[0]]
         for l in ",".join(o.get("add-label", [])).split(","):
@@ -124,8 +126,9 @@ def main(argv):
         if pr["isDraft"]:
             sys.exit("pull request is still a draft")
         pr["state"] = "MERGED"
-        for word in pr["body"].split():
-            if word.startswith("#") and word[1:].isdigit() and word[1:] in s["issues"]:
+        words = pr["body"].split()
+        for prev, word in zip(words, words[1:]):  # only "Closes #n" closes an issue; "Refs #n" doesn't
+            if prev == "Closes" and word.startswith("#") and word[1:].isdigit() and word[1:] in s["issues"]:
                 s["issues"][word[1:]]["state"] = "CLOSED"
     elif group == "pr" and cmd == "close":
         find_pr(s, pos[0])["state"] = "CLOSED"

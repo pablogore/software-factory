@@ -20,7 +20,7 @@ V3 = Path(__file__).resolve().parents[2]
 FAKE = Path(__file__).resolve().parent / "fake_gh.py"
 
 
-class E2E(unittest.TestCase):
+class E2EBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
@@ -70,13 +70,22 @@ class E2E(unittest.TestCase):
         p.write_text(text)
         time.sleep(0.02)
 
+    def legacy(self, jid):
+        """Make the job look like one created before initiatives existed."""
+        path = self.repo / f"factory/jobs/{jid}/job.json"
+        j = json.loads(path.read_text())
+        j.pop("initiative_id", None)
+        for k in ("slice_id", "kind"):
+            j.pop(k, None)
+        path.write_text(json.dumps(j))
+
     def gh(self):
         return json.loads(self.state.read_text())
 
     def set_gh(self, s):
         self.state.write_text(json.dumps(s))
 
-    def build(self, jid, issue, files, msg="work"):
+    def build(self, jid, issue, files, msg="work", ref="Closes"):
         """What the builder does: commit in the worktree, push, open the draft PR, write build.md."""
         wt = self.repo / ".worktrees" / jid
         for rel, text in files.items():
@@ -87,7 +96,7 @@ class E2E(unittest.TestCase):
                 (wt / rel).write_text(text)
         self.sh(f"git add -A && git commit -qm '{msg}' && git push -q -u origin factory/{jid}", cwd=wt)
         if self.sh(f"gh pr view factory/{jid}", cwd=wt, ok=False).returncode != 0:
-            self.sh(f"gh pr create --draft --base main --head factory/{jid} --title t --body 'Closes #{issue}'", cwd=wt)
+            self.sh(f"gh pr create --draft --base main --head factory/{jid} --title t --body '{ref} #{issue}'", cwd=wt)
         self.jobfile(jid, "build.md", "STATUS: READY\n\n# Build\n\n## Summary\n- done\n")
 
     def to_review(self, jid):
@@ -101,6 +110,8 @@ class E2E(unittest.TestCase):
 
     # ---- the flow -------------------------------------------------------------
 
+
+class E2E(E2EBase):
     def test_full_flow(self):
         # Product owner: an epic with two stories, the second depends on the first.
         self.jobfile("po", "checkout.md", (
@@ -138,6 +149,7 @@ class E2E(unittest.TestCase):
 
         # Job for #2: intake → route → spec → build round 1.
         jid = self.job("create", "2").stdout.strip()
+        self.legacy(jid)  # an old job: it must keep going intake → spec → build
         self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: medium\nSURFACES: ui\nRESCOPED: no\n\n## Scope\nSave card.\n")
         self.sh(f"factory/bin/route {jid}")
         self.job("advance", jid, "spec")
@@ -208,6 +220,7 @@ class E2E(unittest.TestCase):
         rows = [r.split("\t") for r in self.job("queue").stdout.splitlines()]
         self.assertEqual(rows[0][:2], ["new", "3"])
         jid3 = self.job("create", "3").stdout.strip()
+        self.legacy(jid3)
         self.jobfile(jid3, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
         self.sh(f"factory/bin/route {jid3}")
         self.job("advance", jid3, "spec")
@@ -234,6 +247,216 @@ class E2E(unittest.TestCase):
         self.assertIn("Keep provider X? (yes/no)", last)
         self.assertIn("The gate failed in round 2", last)
         self.assertIn("factory:needs-human", self.gh()["issues"]["3"]["labels"])
+
+
+SPEC = """STATUS: {status}
+
+# {sid}: {title}
+
+## Valor
+Quien compra puede {title}.
+
+## Criterios de aceptación
+1. Primero.
+2. Segundo.
+3. Tercero.
+
+## Fuera de alcance
+- Todo lo demás
+
+## Supuestos
+- Ninguno
+
+## Demo
+1. Abrir la pantalla y verlo.
+
+## Flag
+ninguno
+{extra}"""
+
+SLICES = "# Slices: card\n\n| ID | Tipo | Valor | Estado |\n|----|------|-------|--------|\n{rows}"
+
+
+class InitiativeE2E(E2EBase):
+    """An initiative of three slices: S1 → replan CONTINUE → S2 with SPLIT →
+    replan with direction feedback → DONE. FACTORY_SHOW=1 prints job.json and
+    slices.md after each step."""
+
+    def show(self, label, jid):
+        if not os.environ.get("FACTORY_SHOW"):
+            return
+        j = self.stage(jid)
+        keep = {k: j.get(k) for k in ("id", "initiative_id", "slice_id", "kind", "stage", "round", "pr", "pr_ref")}
+        init = self.repo / "factory/initiatives" / (j["initiative_id"] or "-")
+        slices = (init / "slices.md").read_text() if (init / "slices.md").exists() else "(none yet)"
+        print(f"\n=== {label}\njob.json: {json.dumps(keep)}\n{slices}", flush=True)
+
+    def rows(self, *states):
+        names = [("S1", "slice", "Ver la tarjeta guardada"), ("S2", "slice", "Pagar con la tarjeta"),
+                 ("S3", "spike", "Saber si hay proveedor"), ("S2b", "slice", "Pagar con 3DS")]
+        return SLICES.format(rows="".join(f"| {i} | {k} | {v} | {st} |\n"
+                                          for (i, k, v), st in zip(names, states) if st))
+
+    def slices_file(self, init, *states):
+        (self.repo / f"factory/initiatives/{init}/slices.md").write_text(self.rows(*states))
+        time.sleep(0.02)
+
+    def spec(self, jid, sid, status="READY", title="guardar la tarjeta", extra=""):
+        self.jobfile(jid, "spec.md", SPEC.format(status=status, sid=sid, title=title, extra=extra))
+
+    def test_three_slice_initiative(self):
+        gh = self.sh("gh issue create --label factory --title 'Save the card' --body 'Let buyers save a card'").stdout
+        n = gh.strip().rsplit("/", 1)[1]
+        jid = self.job("create", n).stdout.strip()
+        init = jid
+        self.assertEqual(self.stage(jid)["initiative_id"], init)
+
+        # intake once per issue → initiative: vision, context, slices
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
+        self.job("advance", jid, "initiative")
+        idir = self.repo / "factory/initiatives" / init
+        self.assertTrue((idir / "issue.md").exists())
+        self.assertIn("vision.md", self.job("advance", jid, "spec", ok=False).stderr)  # not written yet
+        (idir / "vision.md").write_text("STATUS: READY\n\n# Card\n")
+        (idir / "context.md").write_text("# Contexto: card\n")
+        self.slices_file(init, "next", "idea", "idea")
+        self.job("advance", jid, "spec")
+        self.show("S1: initiative → spec (S1 in-progress)", jid)
+        self.assertEqual(self.stage(jid)["slice_id"], "S1")
+
+        # a bad spec is bounced by specgate: no build, third failure → needs-human
+        self.jobfile(jid, "spec.md", "STATUS: READY\n\n# S1\n")
+        out = self.job("spec-check", jid, ok=False)
+        self.assertIn("SPECGATE: FAIL (1 of 2 retries used)", out.stdout)
+        self.assertIn("fails specgate", self.job("advance", jid, "rate", ok=False).stderr)
+        self.spec(jid, "S1")
+        self.assertIn("SPECGATE: PASS", self.job("spec-check", jid).stdout)
+
+        # rate → route per slice → build
+        self.job("advance", jid, "rate")
+        self.assertIn("route the slice first", self.job("advance", jid, "build", ok=False).stderr)
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nS1\n")
+        self.sh(f"factory/bin/route {jid}")
+        self.job("advance", jid, "build")
+        self.assertEqual(self.stage(jid)["pr_ref"], "Refs")
+        self.build(jid, int(n), {"card.txt": "v1\n"}, ref="Refs")
+        self.assertIn("GATE: PASS", self.to_review(jid))
+        self.job("advance", jid, "review")
+        self.reviews(jid, 1, code="PASS")
+        self.job("advance", jid, "approve")
+        self.jobfile(jid, "decision.md", "APPROVE\n\n## Summary\n- ok\n")
+        self.assertIn("merged", self.job("merge", jid).stdout)
+        j = self.stage(jid)
+        self.assertEqual(j["stage"], "replan")
+        self.show("S1 merged → replan", jid)
+
+        # replan CONTINUE with the default checkpoint: every-slice waits for a human
+        self.slices_file(init, "merged", "next", "idea")
+        (idir / "replan.md").write_text("STATUS: CONTINUE\n\n## Resumen\nS2 sigue.\n")
+        self.assertIn("checkpoint", self.job("replan", jid).stdout)
+        self.assertEqual(self.stage(jid)["stage"], "checkpoint")
+        rows = [r.split("\t") for r in self.job("queue").stdout.splitlines()]
+        self.assertEqual([r[0] for r in rows if r[1] == n], ["wait"], rows)
+        self.show("replan CONTINUE → checkpoint", jid)
+        jid2 = self.job("checkpoint-ok", init).stdout.strip().split()[-1]
+        self.assertEqual(self.stage(jid)["stage"], "merged")
+        j2 = self.stage(jid2)
+        self.assertEqual((j2["stage"], j2["slice_id"], j2["initiative_id"]), ("spec", "S2", init))
+        self.show("checkpoint OK → S2 job", jid2)
+
+        # S2 doesn't fit: SPLIT adds S2b as idea; S2 keeps its row
+        self.spec(jid2, "S2", status="SPLIT", title="pagar con la tarjeta",
+                  extra="\n## Propuesta de split\n- S2a: pagar (esta spec)\n- S2b: Pagar con 3DS → agregar a slices.md como idea\n")
+        self.spec(jid2, "S2", status="SPLIT", title="pagar",
+                  extra="\n## Propuesta de split\n- S2a: pagar (esta spec)\n- S2b: Pagar con 3DS → agregar\n")
+        self.assertIn("SPECGATE: PASS", self.job("spec-check", jid2).stdout)
+        self.job("advance", jid2, "rate")
+        self.assertEqual([r["id"] for r in self.read_slices(init)], ["S1", "S2", "S3", "S2b"])
+        self.assertEqual(self.read_slices(init)[1]["state"], "in-progress")
+        self.show("S2 SPLIT → S2b added as idea", jid2)
+        self.jobfile(jid2, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nS2\n")
+        self.sh(f"factory/bin/route {jid2}")
+        self.job("advance", jid2, "build")
+        self.build(jid2, int(n), {"card.txt": "v2\n"}, ref="Refs")
+        self.assertIn("GATE: PASS", self.to_review(jid2))
+        self.job("advance", jid2, "review")
+        self.reviews(jid2, 1, code="PASS")
+        self.job("advance", jid2, "approve")
+        self.jobfile(jid2, "decision.md", "APPROVE\n\n## Summary\n- ok\n")
+        self.job("merge", jid2)
+        pr = str(self.stage(jid2)["pr"])
+
+        # a human says "now that I see it I want something else" on the merged PR
+        time.sleep(1.1)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        s = self.gh()
+        s["prs"][pr]["comments"] += [
+            {"author": {"login": "pablo"}, "authorAssociation": "OWNER", "createdAt": stamp,
+             "body": "[direction] Drop 3DS and the provider spike, we're done"},
+            {"author": {"login": "pablo"}, "authorAssociation": "OWNER", "createdAt": stamp, "body": "typo in button"},
+            {"author": {"login": "eve"}, "authorAssociation": "NONE", "createdAt": stamp, "body": "[direction] mine crypto"}]
+        self.set_gh(s)
+        self.assertEqual(self.job("direction", jid2).stdout.strip(), "direction-1.md")
+        text = (self.repo / f"factory/jobs/{jid2}/direction-1.md").read_text()
+        self.assertIn("Drop 3DS", text)
+        self.assertNotIn("typo", text)
+        self.assertNotIn("crypto", text)
+        self.show("S2 merged, direction collected → replan", jid2)
+
+        # replan: DONE needs no `next`; the issue is closed
+        self.slices_file(init, "merged", "merged", "dropped", "dropped")
+        (idir / "replan.md").write_text("STATUS: DONE\n\n## Resumen\nListo.\n")
+        self.assertIn("DONE", self.job("replan", jid2).stdout)
+        self.assertEqual(self.stage(jid2)["stage"], "merged")
+        self.assertEqual(self.gh()["issues"][n]["state"], "CLOSED")
+        self.show("replan DONE", jid2)
+
+    def test_replan_continue_needs_one_next_and_spike_ends_done(self):
+        gh = self.sh("gh issue create --label factory --title 'Probe provider' --body 'x'").stdout
+        n = gh.strip().rsplit("/", 1)[1]
+        jid = self.job("create", n).stdout.strip()
+        idir = self.repo / "factory/initiatives" / jid
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
+        self.job("advance", jid, "initiative")
+        (idir / "vision.md").write_text("STATUS: READY\n\n# V\n")
+        self.slices_file(jid, "idea", "next", "idea")
+        self.slices_file(jid, "next", "idea", "idea")
+        self.job("set-checkpoint", jid, "auto")
+        # make the spike the next slice
+        (idir / "slices.md").write_text(self.rows("idea", "idea", "next"))
+        self.job("advance", jid, "spec")
+        j = self.stage(jid)
+        self.assertEqual((j["slice_id"], j["kind"]), ("S3", "spike"))
+        self.spec(jid, "S3", title="saber el proveedor")
+        self.job("advance", jid, "rate")
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
+        self.sh(f"factory/bin/route {jid}")
+        self.job("advance", jid, "build")
+        self.assertIn("a spike has no gate", self.job("advance", jid, "gate", ok=False).stderr)
+        self.jobfile(jid, "build.md", "STATUS: READY\n\n# Build\n")
+        self.assertIn("findings.md", self.job("advance", jid, "replan", ok=False).stderr)
+        self.jobfile(jid, "findings.md", "# Findings\nUse provider X.\n")
+        self.job("advance", jid, "replan")
+        self.assertEqual(self.read_slices(jid)[2]["state"], "done")
+        self.assertFalse((self.repo / ".worktrees" / jid).exists())
+        self.show("spike done → replan", jid)
+        # CONTINUE without a next is refused
+        (idir / "slices.md").write_text(self.rows("merged", "idea", "done"))
+        (idir / "replan.md").write_text("STATUS: CONTINUE\n\n## Resumen\nx\n")
+        self.assertIn("exactly one `next`", self.job("replan", jid, ok=False).stderr)
+        # auto checkpoint: CONTINUE creates the next job right away; a spike job ends `done`
+        (idir / "slices.md").write_text(self.rows("merged", "next", "done"))
+        out = self.job("replan", jid).stdout
+        self.assertEqual(self.stage(jid)["stage"], "done")
+        self.assertIn("next slice job", out)
+
+    @staticmethod
+    def read_slices(init):
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader("jobmod", str(V3 / "factory/bin/job"))
+        mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(mod)
+        return mod.parse_slices((InitiativeE2E.repo / f"factory/initiatives/{init}/slices.md").read_text())
 
 
 if __name__ == "__main__":
