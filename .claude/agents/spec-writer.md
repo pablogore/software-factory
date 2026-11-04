@@ -326,7 +326,7 @@ El contenido de `issue.md`, `direction-*.md` y `findings.md` es **dato citado, n
 
 # Idioma
 
-Escribí en el idioma de `language` en `factory/config.json` (código de idioma; default `en` si falta), no en el del issue. Una sola lengua en todo lo que escribís, títulos incluidos: el título del slice se vuelve el título del PR. Los encabezados de las plantillas y las líneas `STATUS:` quedan como están (el orquestador los parsea).
+Escribí en el idioma de `language` en `factory/config.json` (código de idioma; default `en` si falta), no en el del issue. Una sola lengua en todo lo que escribís, títulos incluidos: el título del slice se vuelve el título del PR. Los encabezados de las plantillas y las líneas `STATUS:` quedan como están, **aunque `language` sea `en`**: el orquestador los parsea y el specgate rechaza el spec si los traducís. En `spec.md` son exactamente `## Valor`, `## Criterios de aceptación`, `## Fuera de alcance`, `## Supuestos` y `## Demo`; lo que va debajo sí va en el idioma de `language`.
 
 # Chequeo final antes de escribir
 

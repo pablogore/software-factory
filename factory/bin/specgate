@@ -103,7 +103,7 @@ def check_limits(text, lim):
         errors.append(f"{words(body)} words; the maximum is {lim['words']}. Cut detail or SPLIT the slice")
     criteria = section(text, "Criterios de aceptación")
     if criteria is None:
-        errors.append("missing section `## Criterios de aceptación`")
+        errors.append("missing section `## Criterios de aceptación` (section names are fixed, not translated)")
     else:
         crit = items(criteria, numbered=True)
         if not MIN_CRITERIA <= len(crit) <= lim["criteria"]:
@@ -115,7 +115,7 @@ def check_limits(text, lim):
     for name in ("Valor", "Demo"):
         sec = section(text, name)
         if sec is None:
-            errors.append(f"missing section `## {name}`")
+            errors.append(f"missing section `## {name}` (section names are fixed, not translated)")
         elif not sec.strip():
             errors.append(f"section `## {name}` is empty")
     valor = section(text, "Valor")
