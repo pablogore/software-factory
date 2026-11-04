@@ -43,7 +43,7 @@ flowchart TD
     BUILD["<b>Builder</b> · opus<br/>commits, pushes, opens a draft PR<br/><code>Refs #n</code>"]:::build
     SPIKE["<b>Spike</b><br/>writes findings.md<br/>no PR, no reviewers, no merge"]:::muted
     GATE{{"<b>Gate</b> · script<br/>factory/checks.sh<br/>no reviewer runs on a failing build"}}:::script
-    REVIEW["<b>Reviewers</b><br/>code (haiku | sonnet)<br/>+ ux &amp; ui on UI changes<br/>+ security"]:::review
+    REVIEW["<b>Reviewers</b><br/>code (haiku | sonnet)<br/>+ ux and ui on UI changes<br/>+ security"]:::review
 
     APPROVER{"<b>Approver</b> · opus"}:::decision
     MERGE["<b>APPROVE</b><br/>sync with main, gate again,<br/><code>gh pr merge</code>"]:::good
@@ -55,28 +55,28 @@ flowchart TD
     ASK["<b>NEEDS-HUMAN</b><br/>asks you"]:::human
 
     ISSUE --> INTAKE
-    INTAKE -- "NEEDS-INFO" --> NEEDS
-    INTAKE -- "REJECT" --> REJECT
-    INTAKE -- "ACCEPT<br/>(maybe rescoped, once per issue)" --> INIT
-    NEEDS -. "author replies" .-> INTAKE
+    INTAKE -->|"NEEDS-INFO"| NEEDS
+    INTAKE -->|"REJECT"| REJECT
+    INTAKE -->|"ACCEPT<br/>(maybe rescoped, once per issue)"| INIT
+    NEEDS -.->|"author replies"| INTAKE
     INIT --> SLICE
     SLICE --> SPECGATE
-    SPECGATE -- "bad spec" -.-> SLICE
-    SPECGATE -- "ok" --> ROUTE
+    SPECGATE -.->|"bad spec"| SLICE
+    SPECGATE -->|"ok"| ROUTE
     ROUTE --> BUILD
-    ROUTE -. "spike" .-> SPIKE
+    ROUTE -.->|"spike"| SPIKE
     BUILD --> GATE
-    GATE -- "FAIL" -.-> BUILD
-    GATE -- "PASS" --> REVIEW
-    REVIEW -- "CHANGES" -.-> BUILD
-    REVIEW -- "all PASS" --> APPROVER
-    APPROVER -- "APPROVE" --> MERGE
-    APPROVER -- "ESCALATE" --> ESC
+    GATE -.->|"FAIL"| BUILD
+    GATE -->|"PASS"| REVIEW
+    REVIEW -.->|"CHANGES"| BUILD
+    REVIEW -->|"all PASS"| APPROVER
+    APPROVER -->|"APPROVE"| MERGE
+    APPROVER -->|"ESCALATE"| ESC
     MERGE --> REPLAN
     REPLAN --> CONT
     REPLAN --> DONE
     REPLAN --> ASK
-    CONT -. "next slice" .-> SLICE
+    CONT -.->|"next slice"| SLICE
 
     classDef input fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px,color:#1e1b4b
     classDef agent fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#0f172a
