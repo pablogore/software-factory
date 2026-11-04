@@ -27,7 +27,7 @@ def load_job_module(repo):
     return mod
 
 
-class JobTest(unittest.TestCase):
+class JobBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         shutil.copytree(SRC, self.tmp / "factory", ignore=shutil.ignore_patterns("tests", "jobs"))
@@ -63,6 +63,8 @@ class JobTest(unittest.TestCase):
         p.write_text(text)
         return p
 
+
+class JobTest(JobBase):
     # ---- partial re-review ------------------------------------------------
 
     def test_rework_round_reruns_only_changed_lenses_plus_code(self):
@@ -157,6 +159,47 @@ class JobTest(unittest.TestCase):
         finally:
             builtins.print = orig
         self.assertTrue(out[0].startswith("resume\t7\t007-test\tneeds-human\tfeedback on PR #42"), out)
+
+
+class InitiativeTest(JobBase):
+    SLICES = ("# Slices: x\n\n| ID | Tipo | Valor | Estado |\n|----|------|-------|--------|\n"
+              "| S1 | slice | Ver la lista | next |\n| S2 | spike | Saber si X | idea |\n")
+
+    def initiative(self):
+        d = self.job.initiative_dir("i1")
+        d.mkdir(parents=True)
+        (d / "slices.md").write_text(self.SLICES)
+
+    def test_old_job_reads_as_one_slice_without_initiative(self):
+        self.make("build")
+        j = self.job.load("007-test")
+        self.assertEqual((j["initiative_id"], j["slice_id"], j["kind"]), (None, None, "slice"))
+
+    def test_parse_slices_skips_header_and_separator(self):
+        rows = self.job.parse_slices(self.SLICES)
+        self.assertEqual([(r["id"], r["kind"], r["state"]) for r in rows],
+                         [("S1", "slice", "next"), ("S2", "spike", "idea")])
+
+    def test_set_state_changes_only_that_row(self):
+        self.initiative()
+        self.job.set_slice_state("i1", "S1", "in-progress")
+        self.assertEqual([r["state"] for r in self.job.read_slices("i1")], ["in-progress", "idea"])
+        with self.assertRaises(self.job.Refused):
+            self.job.set_slice_state("i1", "S9", "merged")
+        with self.assertRaises(self.job.Refused):
+            self.job.set_slice_state("i1", "S1", "bogus")
+
+    def test_add_idea_slices_keeps_original_row_and_skips_duplicates(self):
+        self.initiative()
+        self.job.add_idea_slices("i1", [("S1b", "slice", "Filtrar"), ("S2", "spike", "dup")])
+        rows = self.job.read_slices("i1")
+        self.assertEqual([(r["id"], r["state"]) for r in rows], [("S1", "next"), ("S2", "idea"), ("S1b", "idea")])
+
+    def test_guard_lets_spec_writer_write_initiative_files_only(self):
+        g = GuardTest()
+        for f, want in [("vision.md", 0), ("replan.md", 0), ("issue.md", 2), ("job.json", 2)]:
+            self.assertEqual(g.run_guard("spec-writer", "Write",
+                                         file_path=str(g.REPO / "factory/initiatives/i1" / f)), want)
 
 
 class GuardTest(unittest.TestCase):

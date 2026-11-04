@@ -34,6 +34,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 FACTORY = REPO / "factory"
 JOBS = FACTORY / "jobs"
+INITIATIVES = FACTORY / "initiatives"
 BIN = FACTORY / "bin"
 CONFIG = json.loads((FACTORY / "config.json").read_text())
 LABELS = CONFIG["labels"]
@@ -122,7 +123,16 @@ def load(job_id):
     if job_id not in _locks:
         _locks[job_id] = open(job_dir(job_id) / ".lock", "w")
         fcntl.flock(_locks[job_id], fcntl.LOCK_EX)
-    return json.loads(path.read_text())
+    return with_defaults(json.loads(path.read_text()))
+
+
+def with_defaults(job):
+    """Jobs written before initiatives existed read as a one-slice initiative
+    without files: no initiative_id, so no replan and no spec gate."""
+    job.setdefault("initiative_id", None)
+    job.setdefault("slice_id", None)
+    job.setdefault("kind", "slice")
+    return job
 
 
 def save(job):
@@ -193,6 +203,76 @@ def round_reviewers(job):
     lenses that asked for changes (plus code) in a rework round."""
     planned = job.get("round_reviewers")
     return [r for r in reviewers(job) if planned is None or r in planned]
+
+
+# ---- Initiatives: slices.md ------------------------------------------------
+# Only the spec-writer and these helpers write slices.md, and the helpers only
+# change a row's state or append `idea` rows, one process at a time (the lock).
+
+SLICE_STATES = {"next", "idea", "in-progress", "merged", "done", "dropped"}
+SLICE_KINDS = {"slice", "spike"}
+SLICE_ROW = re.compile(r"^\|\s*(?P<id>[A-Za-z0-9_.-]+)\s*\|\s*(?P<kind>[^|]*?)\s*\|(?P<value>.*)\|\s*(?P<state>[^|]*?)\s*\|\s*$")
+
+
+def initiative_dir(initiative_id):
+    return INITIATIVES / initiative_id
+
+
+def parse_slices(text):
+    """Rows of the slices.md table as dicts; the header and separator rows are skipped."""
+    rows = []
+    for line in text.splitlines():
+        m = SLICE_ROW.match(line)
+        if m and m["id"] != "ID" and not set(m["id"]) <= set("-"):
+            rows.append({"id": m["id"], "kind": m["kind"], "value": m["value"].strip(), "state": m["state"]})
+    return rows
+
+
+def read_slices(initiative_id):
+    path = initiative_dir(initiative_id) / "slices.md"
+    require(path.exists(), f"initiative {initiative_id} has no slices.md")
+    return parse_slices(path.read_text())
+
+
+def edit_slices(initiative_id, edit):
+    """Run edit(text) -> text on slices.md under the initiative's lock."""
+    d = initiative_dir(initiative_id)
+    path = d / "slices.md"
+    require(path.exists(), f"initiative {initiative_id} has no slices.md")
+    with open(d / ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        new = edit(path.read_text())
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(new)
+        tmp.replace(path)
+
+
+def set_slice_state(initiative_id, slice_id, state):
+    require(state in SLICE_STATES, f"unknown slice state {state!r}")
+
+    def edit(text):
+        found = False
+        out = []
+        for line in text.splitlines():
+            m = SLICE_ROW.match(line)
+            if m and m["id"] == slice_id:
+                found = True
+                line = f"| {m['id']} | {m['kind']} |{m['value']}| {state} |"
+            out.append(line)
+        require(found, f"slice {slice_id} isn't in {initiative_id}/slices.md")
+        return "\n".join(out) + "\n"
+
+    edit_slices(initiative_id, edit)
+
+
+def add_idea_slices(initiative_id, rows):
+    """Append (id, kind, value) rows as `idea`; ids already present are skipped."""
+    def edit(text):
+        have = {r["id"] for r in parse_slices(text)}
+        add = [f"| {i} | {k} | {v} | idea |" for i, k, v in rows if i not in have]
+        return text.rstrip("\n") + "\n" + "\n".join(add) + ("\n" if add else "")
+
+    edit_slices(initiative_id, edit)
 
 
 # ---- Issue → issue.md ------------------------------------------------------
@@ -636,6 +716,7 @@ def cmd_create(number):
         "pr": None, "pr_url": None,
         "branch": f"factory/{job_id}",
         "worktree": str(REPO / ".worktrees" / job_id),
+        "initiative_id": None, "slice_id": None, "kind": "slice",
         "stage": "intake", "round": 0, "round_limit": CONFIG["max_rounds"],
         "intake": None, "agents": None, "gate": None, "reviews": {},
         "cost_usd": 0.0, "started": now(), "ended": None,
