@@ -31,6 +31,7 @@ Usage:
 """
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -313,7 +314,10 @@ def specgate_run(kind, path, *flags):
     res = subprocess.run([str(BIN / "specgate"), kind, str(path), *flags], capture_output=True, text=True)
     lines = res.stdout.splitlines()
     reason = next((l[2:] for l in lines if l.startswith("> ")), None)
-    return res.returncode, [l[2:] for l in lines if l.startswith("- ")], reason
+    errors = [l[2:] for l in lines if l.startswith("- ")]
+    if res.returncode not in (0, 3) and not errors:  # usage error or crash: never a pass
+        errors = [f"specgate exited {res.returncode}: {(res.stderr or 'no output').strip().splitlines()[-1]}"]
+    return res.returncode, errors, reason
 
 
 def specgate(kind, path, *flags):
@@ -324,8 +328,18 @@ def specgate(kind, path, *flags):
     return errors if code else []
 
 
+def spec_digest(job):
+    """Fingerprint of the current spec.md; the human's OK is for exactly this text."""
+    f = job_dir(job["id"]) / "spec.md"
+    return hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else None
+
+
+def spec_approved(job):
+    return bool(job.get("long_spec_ok")) and job["long_spec_ok"] == spec_digest(job)
+
+
 def spec_flags(job):
-    return ["--long-ok"] if job.get("long_spec_ok") else []
+    return ["--long-ok"] if spec_approved(job) else []
 
 
 def parse_split(spec_text, slice_id):
@@ -908,9 +922,10 @@ def advance(job, stage):
         require_slot(job["id"])
         if job["initiative_id"]:  # the spec failed specgate: a fresh try with the human's feedback
             job["spec_failures"], job["spec_errors"] = 0, []
-        if job.get("long_spec_ok") and job.get("spec_exception"):
-            job.pop("spec_exception")  # `job spec-ok`: the human accepted the long spec as is
+        if job.get("spec_exception") and spec_approved(job):
+            job.pop("spec_exception")  # `job spec-ok`: the human accepted this exact spec as is
         else:
+            job.pop("long_spec_ok", None)  # a rewrite needs its own OK
             job.pop("spec_exception", None)  # feedback instead: the spec-writer rewrites it
             feedback = sorted(d.glob("feedback-*.md"))
             require(feedback and feedback[-1].stat().st_mtime > (d / "decision.md").stat().st_mtime,
@@ -1133,7 +1148,7 @@ def cmd_spec_ok(job):
     """A human accepts the spec's length exception: back to spec, where spec-check passes."""
     if job["stage"] != "needs-human" or not job.get("spec_exception"):
         die(f"{job['id']} isn't waiting on a spec length exception")
-    job["long_spec_ok"] = True
+    job["long_spec_ok"] = spec_digest(job)
     save(advance(sync(job), "spec"))
     print(f"{job['id']}: long spec accepted → spec (run spec-check)")
 

@@ -66,6 +66,30 @@ class SpecGateExceptionTest(unittest.TestCase):
         self.assertIn("`## Excepción de largo` has 41 words", out)
 
 
+class SpecGateReviewFixesTest(unittest.TestCase):
+    def test_short_spec_with_long_reason_passes(self):
+        code, out = gate(long_spec(criteria=2, words=20, reason=" ".join(["razon"] * 50)))
+        self.assertEqual(code, 0, out)
+
+    def test_exception_text_does_not_count_toward_lines(self):
+        reason = "\n".join(["motivo"] * 12)
+        code, out = gate(long_spec(criteria=2, words=20, reason=reason))
+        self.assertEqual(code, 0, out)
+
+    def test_flags_are_per_subcommand(self):
+        for kind, flag in (("spec", "--done"), ("slices", "--long-ok")):
+            with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
+                f.write("x")
+            res = subprocess.run([str(GATE), kind, f.name, flag], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 2, (kind, flag))
+
+    def test_text_after_a_blank_line_is_not_part_of_the_criterion(self):
+        spec = long_spec(criteria=1, words=25).replace("## Demo", "Nota suelta: " + "x " * 20 + "\n\n## Demo")
+        spec = spec.replace("\n\nNota", "\n\nNota")
+        code, out = gate(spec)
+        self.assertEqual(code, 0, out)
+
+
 class SpecExceptionE2E(E2EBase):
     # the helpers only, not InitiativeFixesE2E's tests
     rows, slices, init_dir, start = (InitiativeFixesE2E.rows, InitiativeFixesE2E.slices,
