@@ -269,13 +269,14 @@ then moves the job to `merged`; stop any agents still running for it.
    questions waiting on authors.
 
 **Resuming.** State lives in files, so a new session picks up where a dead one
-stopped. For a `resume` job, run its stage's step again: `intake` and `spec`
-respawn their agent; `build` spawns a new builder told it is resuming (it reads
+stopped. For a `resume` job, run its stage's step again: `intake`, `initiative`, `spec`, `rate` and `replan`
+respawn their agent (`replan` first runs `job direction <id>`); `build` spawns a new builder told it is resuming (it reads
 `build.md` and `git log` to see how far the last one got); `gate` runs the
 gate; `review` spawns only the reviewers from `factory/bin/job reviewers <id>`
 whose `review-<r>.md` is missing in the current round; `approve` respawns the approver; `triage` respawns the tech-lead; `merging` runs
 `factory/bin/job merge <id>`. A `needs-info` job the author has answered shows
-as `resume`: run `factory/bin/job advance <id> intake` and go to **intake**. A
+as `resume`: run `factory/bin/job advance <id> <stage>` with the stage it asked
+from (`job.json` `info_from`: `initiative` or `spec`; no `info_from` means `intake`) and go to that step. A
 `needs-human` job with new comments on its PR shows as `resume` with the note
 `feedback on PR #<pr>`: run `factory/bin/job feedback <id> </dev/null` (it
 takes the PR comments) and go to the stage it prints: **build** for rework (an
