@@ -1100,7 +1100,12 @@ def cmd_queue():
             running_rows.append(("resume", n, j["id"], j["stage"], f"round {j['round']}"))
     for n, j in sorted(jobs.items()):
         if n not in open_numbers and j["stage"] not in TERMINAL | WAITING:
-            other_rows.append(("skip", n, j["id"], j["stage"], f"issue is closed or no longer labeled {LABELS['queue']}"))
+            if j["stage"] in {"replan", "merging"}:
+                # The merge closes the issue when the PR says "Closes #n", so a job past the merge
+                # must still finish its replan.
+                running_rows.append(("resume", n, j["id"], j["stage"], f"round {j['round']}; the merge closed the issue"))
+            else:
+                other_rows.append(("skip", n, j["id"], j["stage"], f"issue is closed or no longer labeled {LABELS['queue']}"))
     # Jobs already in a running stage hold a slot whether or not an agent is on them.
     slots = CONCURRENCY - len(running(jobs.values()))
     rows = list(running_rows)

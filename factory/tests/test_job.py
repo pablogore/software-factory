@@ -160,6 +160,20 @@ class JobTest(JobBase):
             builtins.print = orig
         self.assertTrue(out[0].startswith("resume\t7\t007-test\tneeds-human\tfeedback on PR #42"), out)
 
+    def test_queue_resumes_a_replan_whose_issue_the_merge_closed(self):
+        self.make("replan", round_=1, merged=True)
+        self.job.pr_state = lambda job: "MERGED"
+        self.job.gh_json = lambda *a: []  # the merged PR said "Closes #7", so no open issue is left
+        out = []
+        import builtins
+        orig = builtins.print
+        builtins.print = lambda *a, **k: out.append(" ".join(map(str, a)))
+        try:
+            self.job.cmd_queue()
+        finally:
+            builtins.print = orig
+        self.assertTrue(out[0].startswith("resume\t7\t007-test\treplan\t"), out)
+
 
 class InitiativeTest(JobBase):
     SLICES = ("# Slices: x\n\n| ID | Tipo | Valor | Estado |\n|----|------|-------|--------|\n"
