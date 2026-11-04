@@ -27,7 +27,7 @@ intake (sonnet)    → ACCEPT (scope possibly changed) | NEEDS-INFO | REJECT, po
 spec-writer        → MODE=initiative: vision.md, context.md, slices.md (an atomic issue = 1 slice)
                      NEEDS-INFO → asked on the issue, like intake
 slice job          → the `next` slice becomes a job (worktree factory/<job-id> from origin/<base>)
-spec-writer (opus) → MODE=slice: spec.md (≤ 40 lines). READY | SPLIT (script adds the "b" slices) | NEEDS-INFO
+spec-writer (opus) → MODE=slice: spec.md (≤ 250 words, 1–4 short criteria). READY | SPLIT (script adds the "b" slices) | NEEDS-INFO
 specgate (script)  → spec.md must pass before anything is built; 2 retries, then needs-human
 intake (sonnet)    → rates THIS slice from its spec.md (risk, surfaces); route (script) picks reviewers + models
 builder (opus)     → commits; the first push opens a draft PR "Refs #<n>"; a spike writes findings.md instead

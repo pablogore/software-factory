@@ -13,7 +13,13 @@ import re
 import sys
 from pathlib import Path
 
-MAX_LINES = 40
+MAX_LINES = 30
+MAX_WORDS = 250            # whole spec, without `## Propuesta de split` / `## Preguntas`
+MIN_CRITERIA, MAX_CRITERIA = 1, 4
+MAX_CRITERION_WORDS = 30   # one idea per criterion, not a paragraph
+MAX_VALOR_WORDS = 35
+MAX_LIST_ITEMS = 3         # Fuera de alcance, Supuestos
+MAX_DEMO_STEPS = 4
 STATES = {"next", "idea", "in-progress", "merged", "done", "dropped"}
 KINDS = {"slice", "spike"}
 ROW = re.compile(r"^\|\s*([A-Za-z0-9_.-]+)\s*\|\s*([^|]*?)\s*\|(.*)\|\s*([^|]*?)\s*\|\s*$")
@@ -24,6 +30,22 @@ def section(text, heading):
     return m.group(1) if m else None
 
 
+def words(text):
+    return len(re.findall(r"\S+", text))
+
+
+def items(body, numbered):
+    """List items of a section, each with its continuation lines joined."""
+    start = r"^\s*\d+\.\s+" if numbered else r"^\s*[-*]\s+"
+    out = []
+    for line in body.splitlines():
+        if re.match(start, line):
+            out.append(re.sub(start, "", line))
+        elif out and line.strip() and not line.startswith("#"):
+            out[-1] += " " + line.strip()
+    return out
+
+
 def check_spec(text):
     errors = []
     lines = text.rstrip("\n").split("\n")
@@ -32,19 +54,36 @@ def check_spec(text):
         errors.append(f"first line must be `STATUS: READY` or `STATUS: SPLIT`, not {first!r}")
     if len(lines) > MAX_LINES:
         errors.append(f"{len(lines)} lines; the maximum is {MAX_LINES}")
+    body = re.sub(r"^## (Propuesta de split|Preguntas)[ \t]*\n.*?(?=^## |\Z)", "", text, flags=re.M | re.S)
+    if words(body) > MAX_WORDS:
+        errors.append(f"{words(body)} words; the maximum is {MAX_WORDS}. Cut detail or SPLIT the slice")
     criteria = section(text, "Criterios de aceptación")
     if criteria is None:
         errors.append("missing section `## Criterios de aceptación`")
     else:
-        numbered = re.findall(r"^\s*(\d+)\.\s+\S", criteria, re.M)
-        if not 3 <= len(numbered) <= 5:
-            errors.append(f"{len(numbered)} numbered criteria; need 3 to 5")
+        crit = items(criteria, numbered=True)
+        if not MIN_CRITERIA <= len(crit) <= MAX_CRITERIA:
+            errors.append(f"{len(crit)} numbered criteria; need {MIN_CRITERIA} to {MAX_CRITERIA}")
+        for n, c in enumerate(crit, 1):
+            if words(c) > MAX_CRITERION_WORDS:
+                errors.append(f"criterion {n} has {words(c)} words; the maximum is {MAX_CRITERION_WORDS} "
+                              "(one idea per criterion, plain words)")
     for name in ("Valor", "Demo"):
-        body = section(text, name)
-        if body is None:
+        sec = section(text, name)
+        if sec is None:
             errors.append(f"missing section `## {name}`")
-        elif not body.strip():
+        elif not sec.strip():
             errors.append(f"section `## {name}` is empty")
+    valor = section(text, "Valor")
+    if valor and words(valor) > MAX_VALOR_WORDS:
+        errors.append(f"`## Valor` has {words(valor)} words; the maximum is {MAX_VALOR_WORDS} (one sentence)")
+    demo = section(text, "Demo")
+    if demo and len(items(demo, numbered=True)) > MAX_DEMO_STEPS:
+        errors.append(f"`## Demo` has {len(items(demo, numbered=True))} steps; the maximum is {MAX_DEMO_STEPS}")
+    for name in ("Fuera de alcance", "Supuestos"):
+        sec = section(text, name)
+        if sec and len(items(sec, numbered=False)) > MAX_LIST_ITEMS:
+            errors.append(f"`## {name}` has {len(items(sec, numbered=False))} items; the maximum is {MAX_LIST_ITEMS}")
     return errors
 
 
