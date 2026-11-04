@@ -215,6 +215,14 @@ class E2E(E2EBase):
         self.assertIn("merged", self.job("merge", jid).stdout)
         self.assertEqual(self.gh()["prs"][pr]["state"], "MERGED")
         self.assertFalse((self.repo / ".worktrees" / jid).exists())
+        # the merge leaves nothing behind: no local branch, no remote branch
+        self.assertEqual(self.sh(f"git branch --list factory/{jid}").stdout.strip(), "")
+        self.assertEqual(self.sh(f"git ls-remote --heads origin factory/{jid}").stdout.strip(), "")
+        # a worktree that survived (crash, locked dir) is swept by `job cleanup`
+        self.sh(f"git worktree add -b factory/{jid} .worktrees/{jid} origin/main")
+        self.job("cleanup")
+        self.assertFalse((self.repo / ".worktrees" / jid).exists())
+        self.assertEqual(self.sh(f"git branch --list factory/{jid}").stdout.strip(), "")
 
         # #3 is released now that #2 merged. Its builder gets blocked → triage.
         rows = [r.split("\t") for r in self.job("queue").stdout.splitlines()]

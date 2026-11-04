@@ -17,6 +17,7 @@ Usage:
   job reject <job>               needs-info or needs-human → rejected, with your reason (stdin) as rejection.md
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
+  job cleanup                    remove worktrees and branches that finished jobs left behind (queue does it too)
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
   job spec-check <job>           run specgate on spec.md; counts failures (3rd → needs-human);
                                  a spec asking for a length exception → needs-human
@@ -354,9 +355,42 @@ def parse_split(spec_text, slice_id):
 
 
 def drop_worktree(job):
+    """Remove the job's worktree and local branch. Best effort: a locked or missing
+    worktree must not undo a merge that already happened (`job cleanup` retries)."""
     if Path(job["worktree"]).exists():
-        run(["git", "worktree", "remove", "--force", job["worktree"]])
+        res = run(["git", "worktree", "remove", "--force", job["worktree"]], check=False)
+        if res.returncode != 0:
+            print(f"warning: couldn't remove {job['worktree']}: {res.stderr.strip()}", file=sys.stderr)
+    run(["git", "worktree", "prune"], check=False)
     run(["git", "branch", "-D", job["branch"]], check=False)
+
+
+def drop_remote_branch(job):
+    """The merged PR's branch on origin (GitHub may have deleted it already)."""
+    return run(["git", "push", "origin", "--delete", job["branch"]], check=False).returncode == 0
+
+
+def cmd_cleanup():
+    """Sweep what finished jobs left behind: worktrees, local branches, the remote branch
+    of merged PRs. Safe to repeat; `queue` runs it. Unknown dirs in .worktrees are only reported."""
+    jobs = all_jobs()
+    for j in jobs:
+        if j["stage"] not in TERMINAL:
+            continue
+        if Path(j["worktree"]).exists() or run(["git", "rev-parse", "--verify", "-q", j["branch"]], check=False).returncode == 0:
+            drop_worktree(j)
+            print(f"{j['id']}: removed worktree and local branch", file=sys.stderr)
+        if j.get("merged") or j["stage"] == "merged":
+            if not j.get("remote_cleaned"):
+                drop_remote_branch(j)
+                j["remote_cleaned"] = True
+                save(j)
+    run(["git", "worktree", "prune"], check=False)
+    known = {Path(j["worktree"]).name for j in jobs}
+    wt = REPO / ".worktrees"
+    for d in sorted(wt.iterdir()) if wt.exists() else []:
+        if d.is_dir() and d.name not in known and not d.name.startswith("_"):
+            print(f"warning: {d} belongs to no job; remove it by hand if it isn't yours", file=sys.stderr)
 
 
 # ---- Issue → issue.md ------------------------------------------------------
@@ -800,6 +834,8 @@ def advance(job, stage):
 
     elif stage == "merged" and old not in {"replan", "checkpoint"}:
         require(job["pr"] and pr_state(job) == "MERGED", "the PR isn't merged")
+        drop_remote_branch(job)  # merged by a person too: the branch is spent
+        job["remote_cleaned"] = True
         if old == "needs-human":
             label("issue", job["issue"], remove=LABELS["needs_human"])
 
@@ -973,9 +1009,8 @@ def advance(job, stage):
         stage = "replan"  # the slice is merged; the initiative still has to be replanned
         drop_worktree(job)
 
-    if stage in TERMINAL and Path(job["worktree"]).exists():
-        run(["git", "worktree", "remove", "--force", job["worktree"]])
-        run(["git", "branch", "-D", job["branch"]], check=False)
+    if stage in TERMINAL:
+        drop_worktree(job)
 
     job["stage"] = stage
     job["ended"] = now() if stage in TERMINAL | WAITING else None
@@ -1051,6 +1086,7 @@ def cmd_plan_check():
 def cmd_queue():
     """Rows in the order to start them. `resume` and `new` rows fit in the
     concurrency slots; the rest show as `hold` until a running job finishes."""
+    cmd_cleanup()
     jobs = {j["issue"]: j for j in all_jobs()}
     # A job is done once its PR is merged on GitHub, which also closes the issue.
     for j in jobs.values():
@@ -1494,6 +1530,8 @@ def main(argv):
             save(job)
             reviews = " ".join(f"{k}:{v}" for k, v in job["reviews"].items())
             print(f"{job['id']}: {job['stage']} round {job['round']} gate {job['gate'] or '-'} {reviews}".rstrip())
+        elif cmd == "cleanup" and not args:
+            cmd_cleanup()
         elif cmd == "summary":
             cmd_summary(args)
         else:
