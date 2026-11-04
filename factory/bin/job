@@ -18,7 +18,9 @@ Usage:
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
-  job spec-check <job>           run specgate on spec.md; counts failures (3rd → needs-human)
+  job spec-check <job>           run specgate on spec.md; counts failures (3rd → needs-human);
+                                 a spec asking for a length exception → needs-human
+  job spec-ok <job>              a human accepts the spec's length exception → spec (spec-check passes)
   job direction <job>            collect [direction] comments on the merged PR as direction-<k>.md
   job replan <job>               apply replan.md: CONTINUE (checkpoint or next slice) | DONE | NEEDS-HUMAN
   job next-slice <initiative>    create the job for the initiative's `next` slice
@@ -29,6 +31,7 @@ Usage:
 """
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -306,9 +309,37 @@ def status_line(path, valid):
     return m.group(1) if m and m.group(1) in valid else None
 
 
-def specgate(kind, path, *flags):
+def specgate_run(kind, path, *flags):
+    """(exit code, error lines, exception reason). Exit 3 = the spec asks for a length exception."""
     res = subprocess.run([str(BIN / "specgate"), kind, str(path), *flags], capture_output=True, text=True)
-    return [l[2:] for l in res.stdout.splitlines() if l.startswith("- ")] if res.returncode else []
+    lines = res.stdout.splitlines()
+    reason = next((l[2:] for l in lines if l.startswith("> ")), None)
+    errors = [l[2:] for l in lines if l.startswith("- ")]
+    if res.returncode not in (0, 3) and not errors:  # usage error or crash: never a pass
+        errors = [f"specgate exited {res.returncode}: {(res.stderr or 'no output').strip().splitlines()[-1]}"]
+    return res.returncode, errors, reason
+
+
+def specgate(kind, path, *flags):
+    """Errors that block; a pending length exception blocks too."""
+    code, errors, reason = specgate_run(kind, path, *flags)
+    if code == 3:
+        return [f"the spec asks for a length exception a human hasn't accepted: {reason}"]
+    return errors if code else []
+
+
+def spec_digest(job):
+    """Fingerprint of the current spec.md; the human's OK is for exactly this text."""
+    f = job_dir(job["id"]) / "spec.md"
+    return hashlib.sha256(f.read_bytes()).hexdigest() if f.exists() else None
+
+
+def spec_approved(job):
+    return bool(job.get("long_spec_ok")) and job["long_spec_ok"] == spec_digest(job)
+
+
+def spec_flags(job):
+    return ["--long-ok"] if spec_approved(job) else []
 
 
 def parse_split(spec_text, slice_id):
@@ -702,13 +733,21 @@ def advance(job, stage):
         label("issue", job["issue"], add=LABELS["needs_info"])
         job["info_from"] = "spec"
 
+    elif old == "spec" and stage == "needs-human" and job.get("spec_exception"):
+        exc = job["spec_exception"]
+        escalate(job, f"La spec de {job['slice_id']} es más larga de lo normal y el spec-writer pide una excepción:\n\n"
+                      f"> {exc['reason']}\n\n"
+                      + "\n".join(f"- {e}" for e in exc["over"]) + "\n\n"
+                      "Para seguir con esta spec: `factory/bin/job spec-ok " + job["id"] + "` (`/factory aprobar spec " + str(job["issue"]) + "`).\n"
+                      "Para que la acorte o la parta: mandá feedback (`/factory " + str(job["issue"]) + " <qué recortar>`).")
+
     elif old == "spec" and stage == "needs-human":
         escalate(job, f"The spec for {job['slice_id']} failed specgate {job.get('spec_failures', 0)} times:\n\n"
                       + "\n".join(f"- {e}" for e in job.get("spec_errors", [])))
 
     elif old == "spec" and stage == "rate":
         require(job["initiative_id"], "old jobs go spec → build")
-        errors = specgate("spec", d / "spec.md")
+        errors = specgate("spec", d / "spec.md", *spec_flags(job))
         require(not errors, "spec.md fails specgate: " + "; ".join(errors))
         if status_line(d / "spec.md", {"SPLIT"}):
             rows = parse_split((d / "spec.md").read_text(), job["slice_id"])
@@ -883,9 +922,14 @@ def advance(job, stage):
         require_slot(job["id"])
         if job["initiative_id"]:  # the spec failed specgate: a fresh try with the human's feedback
             job["spec_failures"], job["spec_errors"] = 0, []
-        feedback = sorted(d.glob("feedback-*.md"))
-        require(feedback and feedback[-1].stat().st_mtime > (d / "decision.md").stat().st_mtime,
-                "use `job feedback` to send a job back")
+        if job.get("spec_exception") and spec_approved(job):
+            job.pop("spec_exception")  # `job spec-ok`: the human accepted this exact spec as is
+        else:
+            job.pop("long_spec_ok", None)  # a rewrite needs its own OK
+            job.pop("spec_exception", None)  # feedback instead: the spec-writer rewrites it
+            feedback = sorted(d.glob("feedback-*.md"))
+            require(feedback and feedback[-1].stat().st_mtime > (d / "decision.md").stat().st_mtime,
+                    "use `job feedback` to send a job back")
         # spec → build starts the round; the feedback round gets a fresh budget.
         job["round_limit"] = job["round"] + CONFIG["max_rounds"]
         label("issue", job["issue"], remove=LABELS["needs_human"])
@@ -1077,8 +1121,14 @@ def cmd_spec_check(job):
     if status_line(d / "spec.md", {"NEEDS-INFO"}):
         print("SPECGATE: NEEDS-INFO")
         return
-    errors = specgate("spec", d / "spec.md")
-    if not errors:
+    code, errors, reason = specgate_run("spec", d / "spec.md", *spec_flags(job))
+    if code == 3:  # within the exception limits: a human decides, no retry is spent
+        job["spec_exception"] = {"reason": reason, "over": errors}
+        save(advance(sync(job), "needs-human"))
+        print(f"SPECGATE: EXCEPTION → {job['id']}: needs-human (asks for a longer spec)")
+        print(f"> {reason}")
+        sys.exit(1)
+    if not code:
         print(f"SPECGATE: PASS ({first_line(d / 'spec.md')})")
         return
     job["spec_failures"] = job.get("spec_failures", 0) + 1
@@ -1092,6 +1142,15 @@ def cmd_spec_check(job):
     for e in errors:
         print(f"- {e}")
     sys.exit(1)
+
+
+def cmd_spec_ok(job):
+    """A human accepts the spec's length exception: back to spec, where spec-check passes."""
+    if job["stage"] != "needs-human" or not job.get("spec_exception"):
+        die(f"{job['id']} isn't waiting on a spec length exception")
+    job["long_spec_ok"] = spec_digest(job)
+    save(advance(sync(job), "spec"))
+    print(f"{job['id']}: long spec accepted → spec (run spec-check)")
 
 
 def next_job_id(title):
@@ -1396,6 +1455,8 @@ def main(argv):
             cmd_feedback(resolve(args[0]), "" if sys.stdin.isatty() else sys.stdin.read(), direction=True)
         elif cmd == "spec-check" and len(args) == 1:
             cmd_spec_check(resolve(args[0]))
+        elif cmd == "spec-ok" and len(args) == 1:
+            cmd_spec_ok(resolve(args[0]))
         elif cmd == "direction" and len(args) == 1:
             cmd_direction(resolve(args[0]))
         elif cmd == "replan" and len(args) == 1:

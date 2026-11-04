@@ -35,7 +35,7 @@ intake (sonnet) ─ NEEDS-INFO → asks the author on the issue, waits for a rep
         ▼ ACCEPT, maybe rescoped (once per issue)
 spec-writer MODE=initiative → vision.md, context.md, slices.md  (a small issue = 1 slice)
         ▼  the `next` slice becomes a job
-spec-writer MODE=slice → spec.md (≤ 40 lines)  ─ specgate (script) rejects a bad spec, no build spent
+spec-writer MODE=slice → spec.md (≤ 250 words)  ─ specgate (script) rejects a bad spec, no build spent
         ▼
 intake rates this slice → route (script) picks reviewers and models from config.json
         ▼
@@ -119,7 +119,7 @@ factory/
   bin/job                     the only writer of job.json; refuses illegal moves; merges
   bin/gate                    runs checks.sh in a job's worktree → round-N/checks.md
   bin/route                   risk + surfaces → the job's reviewers and models
-  bin/specgate                checks spec.md (≤ 40 lines, 3–5 criteria, Valor, Demo) and slices.md
+  bin/specgate                checks spec.md (≤ 250 words, 1–4 criteria of ≤ 30 words, Valor, Demo, at most one mermaid diagram; a longer spec with `## Excepción de largo` waits for a human: `job spec-ok`) and slices.md
   initiatives/<id>/           vision.md, context.md, slices.md, replan.md, initiative.json (gitignored)
   dashboard.html              the board
 examples/jobs/                finished jobs from a real run

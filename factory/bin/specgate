@@ -2,18 +2,33 @@
 """Deterministic checks on the spec-writer's files, before anything is built.
 
 Usage:
-  specgate spec <spec.md>                 a slice spec the builder can start from
+  specgate spec <spec.md> [--long-ok]     a slice spec the builder can start from
   specgate slices <slices.md> [--done]    the slice table; --done allows no `next` (replan DONE)
 
 Prints `SPECGATE: PASS`, or `SPECGATE: FAIL` and one error per line. Exit 0 on
 PASS, 1 on FAIL. The orchestrator hands the errors back to the spec-writer.
+
+A spec over the normal limits may carry `## Excepción de largo` (why it can't be
+shorter or split). Within the exception limits it prints `SPECGATE: EXCEPTION`
+and the reason (`> ...`), exit 3: a human decides. `--long-ok` (a human already
+said yes) turns that into PASS.
 """
 
 import re
 import sys
 from pathlib import Path
 
-MAX_LINES = 40
+NORMAL = {"lines": 30, "words": 250, "criteria": 4, "criterion_words": 30}
+EXCEPTION = {"lines": 45, "words": 400, "criteria": 5, "criterion_words": 45}  # only with a human's OK
+EXCEPTION_HEADING = "Excepción de largo"
+MAX_REASON_WORDS = 40
+MIN_CRITERIA = 1
+MAX_VALOR_WORDS = 35
+MAX_LIST_ITEMS = 3         # Fuera de alcance, Supuestos
+MAX_DEMO_STEPS = 4
+MAX_DIAGRAMS = 1
+MAX_DIAGRAM_LINES = 15     # inside the ```mermaid fence; doesn't count toward lines/words
+MERMAID = re.compile(r"^```[ \t]*mermaid[ \t]*\n(.*?)^```[ \t]*$\n?", re.M | re.S)
 STATES = {"next", "idea", "in-progress", "merged", "done", "dropped"}
 KINDS = {"slice", "spike"}
 ROW = re.compile(r"^\|\s*([A-Za-z0-9_.-]+)\s*\|\s*([^|]*?)\s*\|(.*)\|\s*([^|]*?)\s*\|\s*$")
@@ -24,27 +39,95 @@ def section(text, heading):
     return m.group(1) if m else None
 
 
-def check_spec(text):
+def words(text):
+    return len(re.findall(r"\S+", text))
+
+
+def items(body, numbered):
+    """List items of a section, each with its continuation lines joined."""
+    start = r"^\s*\d+\.\s+" if numbered else r"^\s*[-*]\s+"
+    out, open_item = [], False
+    for line in body.splitlines():
+        if re.match(start, line):
+            out.append(re.sub(start, "", line))
+            open_item = True
+        elif not line.strip():
+            open_item = False  # a blank line ends the item: prose after it isn't part of it
+        elif open_item and not line.startswith("#"):
+            out[-1] += " " + line.strip()
+    return out
+
+
+def check_spec(text, long_ok=False):
+    """(errors, exception reason or None). A reason means: over the normal limits,
+    within the exception ones, and no human OK yet."""
+    errors = check_limits(text, NORMAL)
+    reason = section(text, EXCEPTION_HEADING)
+    if reason is None:
+        return errors, None
+    if not errors:
+        return [], None  # fits anyway: nothing to ask
+    reason = reason.strip()
+    if not reason:
+        return errors + [f"section `## {EXCEPTION_HEADING}` is empty"], None
+    if words(reason) > MAX_REASON_WORDS:
+        return errors + [f"`## {EXCEPTION_HEADING}` has {words(reason)} words; the maximum is {MAX_REASON_WORDS}"], None
+    if not text.startswith("STATUS: READY"):
+        return errors + [f"only a `STATUS: READY` spec can ask for `## {EXCEPTION_HEADING}`"], None
+    errors = check_limits(text, EXCEPTION)
+    if errors:
+        return [e + " (with the exception)" for e in errors], None
+    return [], (None if long_ok else reason)
+
+
+def check_limits(text, lim):
     errors = []
-    lines = text.rstrip("\n").split("\n")
-    first = lines[0].strip()
+    first = text.split("\n", 1)[0].strip()
+    diagrams = MERMAID.findall(text)
+    if len(diagrams) > MAX_DIAGRAMS:
+        errors.append(f"{len(diagrams)} mermaid diagrams; the maximum is {MAX_DIAGRAMS}")
+    for d in diagrams:
+        n = len([l for l in d.splitlines() if l.strip()])
+        if n > MAX_DIAGRAM_LINES:
+            errors.append(f"the mermaid diagram has {n} lines; the maximum is {MAX_DIAGRAM_LINES}. Show only the main flow")
+    text = MERMAID.sub("", text)  # the diagram has its own limit
+    # like the word count, the exception's own text doesn't count toward the lines
+    no_exc = re.sub(rf"^## {EXCEPTION_HEADING}[ \t]*\n.*?(?=^## |\Z)", "", text, flags=re.M | re.S)
+    lines = no_exc.rstrip("\n").split("\n")
     if first not in {"STATUS: READY", "STATUS: SPLIT"}:
         errors.append(f"first line must be `STATUS: READY` or `STATUS: SPLIT`, not {first!r}")
-    if len(lines) > MAX_LINES:
-        errors.append(f"{len(lines)} lines; the maximum is {MAX_LINES}")
+    if len(lines) > lim["lines"]:
+        errors.append(f"{len(lines)} lines; the maximum is {lim['lines']}")
+    body = re.sub(rf"^## (Propuesta de split|Preguntas|{EXCEPTION_HEADING})[ \t]*\n.*?(?=^## |\Z)", "", text, flags=re.M | re.S)
+    if words(body) > lim["words"]:
+        errors.append(f"{words(body)} words; the maximum is {lim['words']}. Cut detail or SPLIT the slice")
     criteria = section(text, "Criterios de aceptación")
     if criteria is None:
         errors.append("missing section `## Criterios de aceptación`")
     else:
-        numbered = re.findall(r"^\s*(\d+)\.\s+\S", criteria, re.M)
-        if not 3 <= len(numbered) <= 5:
-            errors.append(f"{len(numbered)} numbered criteria; need 3 to 5")
+        crit = items(criteria, numbered=True)
+        if not MIN_CRITERIA <= len(crit) <= lim["criteria"]:
+            errors.append(f"{len(crit)} numbered criteria; need {MIN_CRITERIA} to {lim['criteria']}")
+        for n, c in enumerate(crit, 1):
+            if words(c) > lim["criterion_words"]:
+                errors.append(f"criterion {n} has {words(c)} words; the maximum is {lim['criterion_words']} "
+                              "(one idea per criterion, plain words)")
     for name in ("Valor", "Demo"):
-        body = section(text, name)
-        if body is None:
+        sec = section(text, name)
+        if sec is None:
             errors.append(f"missing section `## {name}`")
-        elif not body.strip():
+        elif not sec.strip():
             errors.append(f"section `## {name}` is empty")
+    valor = section(text, "Valor")
+    if valor and words(valor) > MAX_VALOR_WORDS:
+        errors.append(f"`## Valor` has {words(valor)} words; the maximum is {MAX_VALOR_WORDS} (one sentence)")
+    demo = section(text, "Demo")
+    if demo and len(items(demo, numbered=True)) > MAX_DEMO_STEPS:
+        errors.append(f"`## Demo` has {len(items(demo, numbered=True))} steps; the maximum is {MAX_DEMO_STEPS}")
+    for name in ("Fuera de alcance", "Supuestos"):
+        sec = section(text, name)
+        if sec and len(items(sec, numbered=False)) > MAX_LIST_ITEMS:
+            errors.append(f"`## {name}` has {len(items(sec, numbered=False))} items; the maximum is {MAX_LIST_ITEMS}")
     return errors
 
 
@@ -77,16 +160,24 @@ def check_slices(text, allow_no_next=False):
 
 
 def main(argv):
-    if len(argv) not in (2, 3) or argv[0] not in {"spec", "slices"}:
+    allowed = {"spec": [[], ["--long-ok"]], "slices": [[], ["--done"]]}
+    if len(argv) not in (2, 3) or argv[0] not in allowed or argv[2:] not in allowed[argv[0]]:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     path = Path(argv[1])
+    reason = None
     if not path.exists():
         errors = [f"{path} doesn't exist"]
     elif argv[0] == "spec":
-        errors = check_spec(path.read_text())
+        errors, reason = check_spec(path.read_text(), long_ok="--long-ok" in argv[2:])
     else:
         errors = check_slices(path.read_text(), allow_no_next="--done" in argv[2:])
+    if reason:
+        print("SPECGATE: EXCEPTION")
+        for e in check_limits(path.read_text(), NORMAL):
+            print(f"- {e}")
+        print("> " + " ".join(reason.split()))
+        return 3
     print("SPECGATE: " + ("FAIL" if errors else "PASS"))
     for e in errors:
         print(f"- {e}")

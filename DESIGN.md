@@ -32,7 +32,7 @@ skim a job on the dashboard and read the detail only where it matters.
 intake (sonnet)    → ACCEPT (scope possibly changed) | NEEDS-INFO | REJECT, posted as an issue comment
 spec-writer        → MODE=initiative: vision.md, context.md, slices.md (1 to 7 slices)
 slice job          → the `next` slice: worktree factory/<job-id> from origin/main
-spec-writer (opus) → MODE=slice: spec.md, at most 40 lines. READY | SPLIT | NEEDS-INFO
+spec-writer (opus) → MODE=slice: spec.md, at most 250 words / 30 lines. READY | SPLIT | NEEDS-INFO
 specgate (script)  → rejects a malformed spec before any build (2 retries, then a human)
 intake + route     → rate this slice from its spec.md; reviewers + models via config.json
 builder            → commits; first round pushes + opens draft PR "Refs #<n>"
@@ -58,7 +58,7 @@ start, so a request becomes an *initiative*: `vision.md` (problem, desired
 result, how we know it's done), `context.md` (the living memory: Decidido,
 Supuestos, Abierto, Changelog) and `slices.md` (a table of vertical slices, each
 delivering visible value, exactly one `next`). Only the next slice gets a spec,
-at most 40 lines with 3 to 5 criteria, a Valor and a Demo; the rest are
+at most 250 words with 1 to 4 short criteria (30 words each), a Valor and a Demo; the rest are
 one-line hypotheses. A slice that doesn't fit is split (`SPLIT`: the script adds
 the extra rows as `idea`). A *spike* is a throwaway build that produces
 `findings.md` instead of a merge; its worktree is discarded and it goes straight
