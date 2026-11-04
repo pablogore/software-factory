@@ -26,33 +26,71 @@ You need Claude Code 2.1.257 or later, `python3`, and an authenticated
 
 ## The loop
 
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif", "fontSize": "15px", "lineColor": "#64748b"}, "flowchart": {"curve": "basis", "nodeSpacing": 40, "rankSpacing": 50}}}%%
+flowchart TD
+    ISSUE(["<b>GitHub issues</b><br/>labeled <code>factory</code>"]):::input
+
+    INTAKE["<b>Intake</b> · sonnet<br/>is it worth building? at what scope?"]:::agent
+    NEEDS["<b>NEEDS-INFO</b><br/>asks the author on the issue<br/>and waits for a reply"]:::human
+    REJECT["<b>REJECT</b><br/>says why on the issue<br/>and removes the label"]:::bad
+
+    INIT["<b>Spec-writer</b> · MODE=initiative<br/>vision.md · context.md · slices.md<br/><i>a small issue = 1 slice</i>"]:::agent
+    SLICE["<b>Spec-writer</b> · MODE=slice<br/>spec.md (max 250 words)<br/><i>the <code>next</code> slice becomes a job</i>"]:::agent
+    SPECGATE{{"<b>specgate</b> · script<br/>rejects a bad spec,<br/>no build spent"}}:::script
+    ROUTE["<b>Intake rates the slice</b><br/>route (script) picks reviewers<br/>and models from config.json"]:::agent
+
+    BUILD["<b>Builder</b> · opus<br/>commits, pushes, opens a draft PR<br/><code>Refs #n</code>"]:::build
+    SPIKE["<b>Spike</b><br/>writes findings.md<br/>no PR, no reviewers, no merge"]:::muted
+    GATE{{"<b>Gate</b> · script<br/>factory/checks.sh<br/>no reviewer runs on a failing build"}}:::script
+    REVIEW["<b>Reviewers</b><br/>code (haiku | sonnet)<br/>+ ux &amp; ui on UI changes<br/>+ security"]:::review
+
+    APPROVER{"<b>Approver</b> · opus"}:::decision
+    MERGE["<b>APPROVE</b><br/>sync with main, gate again,<br/><code>gh pr merge</code>"]:::good
+    ESC["<b>ESCALATE</b><br/>PR ready for you<br/>issue labeled <code>factory:needs-human</code>"]:::human
+
+    REPLAN["<b>Spec-writer</b> · MODE=replan<br/>context.md · slices.md · replan.md"]:::agent
+    CONT["<b>CONTINUE</b><br/>wait for your OK (every-slice)<br/>or start next slice (auto)"]:::good
+    DONE(["<b>DONE</b><br/>initiative and its issue close"]):::good
+    ASK["<b>NEEDS-HUMAN</b><br/>asks you"]:::human
+
+    ISSUE --> INTAKE
+    INTAKE -- "NEEDS-INFO" --> NEEDS
+    INTAKE -- "REJECT" --> REJECT
+    INTAKE -- "ACCEPT<br/>(maybe rescoped, once per issue)" --> INIT
+    NEEDS -. "author replies" .-> INTAKE
+    INIT --> SLICE
+    SLICE --> SPECGATE
+    SPECGATE -- "bad spec" -.-> SLICE
+    SPECGATE -- "ok" --> ROUTE
+    ROUTE --> BUILD
+    ROUTE -. "spike" .-> SPIKE
+    BUILD --> GATE
+    GATE -- "FAIL" -.-> BUILD
+    GATE -- "PASS" --> REVIEW
+    REVIEW -- "CHANGES" -.-> BUILD
+    REVIEW -- "all PASS" --> APPROVER
+    APPROVER -- "APPROVE" --> MERGE
+    APPROVER -- "ESCALATE" --> ESC
+    MERGE --> REPLAN
+    REPLAN --> CONT
+    REPLAN --> DONE
+    REPLAN --> ASK
+    CONT -. "next slice" .-> SLICE
+
+    classDef input fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px,color:#1e1b4b
+    classDef agent fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#0f172a
+    classDef script fill:#f1f5f9,stroke:#475569,stroke-width:2px,stroke-dasharray:4 3,color:#0f172a
+    classDef build fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#2e1065
+    classDef review fill:#cffafe,stroke:#0891b2,stroke-width:2px,color:#083344
+    classDef decision fill:#fef3c7,stroke:#d97706,stroke-width:2.5px,color:#451a03
+    classDef good fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#052e16
+    classDef human fill:#ffedd5,stroke:#ea580c,stroke-width:2px,color:#431407
+    classDef bad fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#450a0a
+    classDef muted fill:#f8fafc,stroke:#94a3b8,stroke-width:1.5px,color:#334155
 ```
-issues labeled `factory`
-        │
-        ▼
-intake (sonnet) ─ NEEDS-INFO → asks the author on the issue, waits for a reply
-        │         REJECT     → says why on the issue, removes the label
-        ▼ ACCEPT, maybe rescoped (once per issue)
-spec-writer MODE=initiative → vision.md, context.md, slices.md  (a small issue = 1 slice)
-        ▼  the `next` slice becomes a job
-spec-writer MODE=slice → spec.md (≤ 250 words)  ─ specgate (script) rejects a bad spec, no build spent
-        ▼
-intake rates this slice → route (script) picks reviewers and models from config.json
-        ▼
-builder (opus) → commits, pushes, opens a draft PR "Refs #n" (the issue closes when the initiative is DONE)
-                 (a spike writes findings.md instead: no PR, no reviewers, no merge)
-        ▼            ▲
-gate (script) ─FAIL──┤  factory/checks.sh; no reviewer runs on a failing build
-        ▼ PASS       │
-reviewers ─CHANGES───┘  code (haiku | sonnet), + ux & ui on UI changes, + security
-        ▼ all PASS
-approver (opus) ── APPROVE  → sync with main, gate again, gh pr merge
-                │              ▼
-                │   spec-writer MODE=replan → context.md, slices.md, replan.md
-                │     CONTINUE → wait for your OK (checkpoint: every-slice) or start the next slice (auto)
-                │     DONE → the initiative and its issue close · NEEDS-HUMAN → asks you
-                └─ ESCALATE → PR ready for you, issue labeled factory:needs-human
-```
+
+**Legend:** 🔵 agent · ⬜ script (deterministic) · 🟣 builder · 🟦 reviewers · 🟡 decision · 🟢 success · 🟠 needs a human · 🔴 rejected. Dashed arrows are loops and retries.
 
 An initiative is built in slices: small vertical increments that each deliver
 visible value. Build one, merge it, see it, learn, replan. Only the next slice
