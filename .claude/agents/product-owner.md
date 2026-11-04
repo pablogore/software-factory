@@ -33,6 +33,8 @@ the code.
 
 ## Write the backlog file
 
+Write everything, titles included, in the language of `language` in `factory/config.json` (default `en`). Keep the `EPIC:`/`STORY:`/`DEPENDS:` markers as they are.
+
 ```markdown
 EPIC: <outcome in a few words>
 

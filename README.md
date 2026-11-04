@@ -114,7 +114,7 @@ you a copy when you [sign up to my newsletter](https://zazencodes.com/newsletter
     reviewer-ui.md            haiku    only when intake flags `ui`
     approver.md               opus     APPROVE or ESCALATE
 factory/
-  config.json                 concurrency, rounds, labels, routing, protected paths, prices
+  config.json                 concurrency, rounds, language (default en), labels, routing, protected paths, prices
   checks.sh                   your repo's checks (the installer fills it in)
   bin/job                     the only writer of job.json; refuses illegal moves; merges
   bin/gate                    runs checks.sh in a job's worktree → round-N/checks.md
