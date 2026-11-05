@@ -23,6 +23,7 @@ As a desarrollador de factoryd, I want los tipos del dominio definidos y validad
 1. Given el paquete `internal/domain`, when se lo compila, then existen los tipos Job, Stage, Pipeline, Role, Kind (intake, spec, build, review, approve, task), Result por kind, Finding, Origin, Subscription y Event, sin importar nada fuera de la biblioteca estándar.
 2. Given un Result de review con un hallazgo sin archivo o sin severidad, when se lo valida, then devuelve un error que nombra el campo faltante.
 3. Given un Job, when se lo serializa a JSON y se lo vuelve a leer, then queda igual (test de ida y vuelta).
+4. Given el repo, when se agregan los primeros tests, then usan go-specs fijado a `v0.4.0` (`go get github.com/getsyntegrity/go-specs@v0.4.0`) con las convenciones de `AGENTS.md`, y `make check` pasa.
 
 ## Notes
 Los Result por kind son los schemas de `submit_result` de `01-diseno.md`. Un Finding tiene archivo, línea, severidad, categoría y rol (formato común de `04-roles.md`).

@@ -8,7 +8,7 @@ factoryd: the software factory rewritten as a Go server, agent-agnostic (Claude 
 The design lives in `docs/factoryd/` (read `README.md` there first; numbered docs, read in order; a higher number wins on conflict). The backlog is in GitHub issues; each one names the docs it implements.
 
 ## Build and check
-- Go 1.24, module `github.com/pablogore/software-factory`.
+- Go 1.27+, module `github.com/pablogore/software-factory` (required by go-specs).
 - `make check` runs gofmt, vet, tests, golangci-lint (if installed) and the build. The factory's gate runs exactly this; it must pass before review.
 - The server and the CLI build with `CGO_ENABLED=0`. Only `cmd/factory-desktop` (Wails) may use cgo, behind its own build.
 
@@ -32,11 +32,18 @@ Hexagonal + vertical slices. See `docs/factoryd/07-arquitectura.md`.
 - `decide.Decide` is pure: no IO, no `time.Now()`; time comes from a `Clock` port.
 
 ## Code conventions
-- Standard library first. New dependencies must be justified in the PR description; prefer pure-Go (no cgo) libraries, e.g. `modernc.org/sqlite`.
+- Standard library first. New dependencies (other than go-specs for tests) must be justified in the PR description; prefer pure-Go (no cgo) libraries, e.g. `modernc.org/sqlite`.
 - Errors: wrap with `%w`, compare with `errors.Is/As`. No panics outside `main`.
 - `context.Context` is the first parameter of anything that does IO or may block.
-- Table-driven tests. Domain and slice tests use in-memory fakes, never the network, real agents or GitHub.
-- Adapters of the same port share one contract test suite.
+- Unit tests use **go-specs** (`github.com/getsyntegrity/go-specs`), pinned to an exact version (it is pre-1.0: never upgrade it in a feature PR). Do not add testify, gomega or other assertion libraries.
+  - Structure: `specs.Describe(t, "<unit>", func(s *specs.Spec) { s.When(...); s.It(...) })`, assertions with `ctx.Expect(x).ToEqual(y)` and its matchers.
+  - Case tables: `specs.Table(s, rows, nameFn, body)` (it validates row names; use it for `decide` transitions and parity cases ported from `main`).
+  - Adapter contract suites: a shared behavior, i.e. a plain `func(s *specs.Spec, newX func() ports.X)` called from the `Describe` of each adapter and of the in-memory fake.
+  - Fakes in memory first; `mock.Controller` and spies only to assert interactions (call order, counts) that a fake can't show.
+  - Invariants of `decide` (rounds never exceed the maximum, no transition out of a stopped job, same input → same output): native Go fuzz tests (`FuzzXxx`). `go-specs/property` is a separate module without a tagged release yet: don't add it until it has one.
+  - Stable outputs (CLI `--json`, `context_pack`, prompts sent to agents): snapshot tests with `go-specs/snapshots`.
+  - Never commit `s.FIt` (it fails the suite) and never use `SkipIt`/`PendingIt` to make the gate pass.
+- Domain and slice tests never touch the network, real agents or GitHub.
 - Small packages, small files; comments explain why, not what.
 - Identifiers, code comments and commit messages in English. User-facing docs in `docs/factoryd/` are in Spanish.
 

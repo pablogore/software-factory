@@ -37,7 +37,7 @@ La fábrica actual (en `main`) corre desde tu checkout de `main` y crea los work
    set -euo pipefail
    exec make check
    ```
-   Requiere Go 1.24+ en la máquina; golangci-lint es opcional (si no está, se saltea).
+   Requiere Go 1.27+ en la máquina (lo pide go-specs; con `GOTOOLCHAIN=auto`, el default, Go lo baja solo); golangci-lint es opcional (si no está, se saltea).
 3. **Paths protegidos** (recomendado) en `factory/config.json`, para que ningún job toque las reglas del proyecto:
    ```json
    "protected_paths": ["factory/checks.sh", "factory/config.json", "AGENTS.md", "Makefile",

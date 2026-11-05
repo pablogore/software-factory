@@ -116,11 +116,13 @@ func (h *Handler) Handle(ctx context.Context, in ApproveInput) (ApproveOutput, e
 ```
 
 ## Tests
+Con **go-specs** (`github.com/getsyntegrity/go-specs`, versión fija): `Describe`/`When`/`It`, `specs.Table` para tablas de casos, shared behaviors para las suites de contrato, fuzzing nativo de Go para invariantes de `Decide` y `snapshots` para salidas estables. Detalle en `AGENTS.md`.
+
 | Nivel | Qué | Cómo |
 |---|---|---|
-| Dominio | `Decide` y reglas | tablas de casos, sin mocks; aquí van los 29 tests portados |
+| Dominio | `Decide` y reglas | `specs.Table` sin mocks + fuzzing de invariantes; aquí van los tests portados |
 | Slice | handler + evento | fakes en memoria de sus puertos angostos |
-| Contrato de adaptador | que cada adaptador cumpla su puerto | misma suite para github/gitlab, telegram/discord, acp+claude/acp+codex |
+| Contrato de adaptador | que cada adaptador cumpla su puerto | una shared behavior de go-specs por puerto, corrida contra cada adaptador y su fake |
 | Punta a punta | ticket → merge | repo fixture, code host falso, agente ACP falso que responde con guiones |
 
 ## Diagrama
