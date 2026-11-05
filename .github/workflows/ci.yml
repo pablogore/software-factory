@@ -1,0 +1,19 @@
+name: ci
+on:
+  push:
+    branches: [arch/factoryd-go]
+  pull_request:
+    branches: [arch/factoryd-go]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          install-only: true
+      - run: make check
