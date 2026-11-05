@@ -16,6 +16,7 @@ Se leen en orden; cada uno usa conceptos de los anteriores.
 | 5 | [05-config.md](05-config.md) | Configuración como código: export, import y sync con GitHub |
 | 6 | [06-interfaz-y-observabilidad.md](06-interfaz-y-observabilidad.md) | Se opera desde el agente (CLI + skill, MCP opcional); TUI y desktop de solo lectura con kanban |
 | 7 | [07-arquitectura.md](07-arquitectura.md) | Hexagonal + vertical slices en Go: estructura, reglas de dependencia, tests |
+|  | [backlog/](backlog/README.md) | Épicas e historias (issues #12–#83) y cómo poner a trabajar a la fábrica actual |
 
 Si dos documentos se contradicen, vale el de número más alto.
 
