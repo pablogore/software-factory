@@ -1,2 +1,4 @@
 github.com/getsyntegrity/go-specs v0.4.0 h1:U9cMp53v6ZemuZHAiZWPT68/hWLbhojfuwXgmPuO9hw=
 github.com/getsyntegrity/go-specs v0.4.0/go.mod h1:GhPuo1oQ9hg3HSAse+hlAeLga0EcvnCW/3bqyAAqo+8=
+go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
