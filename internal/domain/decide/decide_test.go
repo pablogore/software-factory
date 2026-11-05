@@ -62,6 +62,11 @@ func passed(role string, minute int) domain.ReviewPassed {
 	return domain.ReviewPassed{Job: jobID, Role: role, At: at(minute)}
 }
 
+func message(kind domain.AuthorKind, allowed bool, minute int) domain.MessageReceived {
+	return domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: "pablogore",
+		AuthorKind: kind, Allowed: allowed, Text: "rename the flag", At: at(minute)}
+}
+
 type step struct {
 	name string
 	ev   domain.Event
@@ -106,6 +111,11 @@ type illegalRow struct {
 	name  string
 	stage string
 	ev    domain.Event
+}
+
+type messageRow struct {
+	name string
+	ev   domain.MessageReceived
 }
 
 type reviewRow struct {
@@ -280,6 +290,66 @@ func TestDecide(t *testing.T) {
 			})
 		})
 
+		s.When("a job waits in needs-human", func(s *specs.Spec) {
+			needsHuman := func() domain.Job {
+				job := newJob()
+				job.Stage, job.Round = domain.StageNeedsHuman, 3
+				return job
+			}
+
+			s.It("goes back to build in the same round with an allowed person's rework feedback", func(ctx *specs.Context) {
+				job := needsHuman()
+
+				evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 1), defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{
+					domain.ReworkRequested{Job: jobID, By: "pablogore", Text: "rename the flag", At: at(1)},
+					entered("build", 1),
+				})
+				after := decide.Apply(job, evs)
+				ctx.Expect(after.Stage).ToEqual("build")
+				ctx.Expect(after.Round).ToEqual(3)
+			})
+
+			s.It("requests the merge on a person's approval", func(ctx *specs.Context) {
+				job := needsHuman()
+
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)}, defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.MergeRequested{Job: jobID, At: at(1)}})
+				ctx.Expect(decide.Apply(job, evs).Stage).ToEqual(domain.StageMerge)
+			})
+
+			rows := []messageRow{
+				{"ignores a person who is not allowed", message(domain.AuthorPerson, false, 1)},
+				{"ignores a bot even when marked allowed", message(domain.AuthorBot, true, 1)},
+				{"ignores CI even when marked allowed", message(domain.AuthorCI, true, 1)},
+				{"ignores a bot that is not allowed", message(domain.AuthorBot, false, 1)},
+				{"ignores an author of unknown kind", message("", true, 1)},
+			}
+			specs.Table(s, rows, func(r messageRow) string { return r.name }, func(ctx *specs.Context, r messageRow) {
+				job := needsHuman()
+
+				evs, err := decide.Decide(job, r.ev, defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).To(specs.BeEmpty())
+				ctx.Expect(decide.Apply(job, evs)).ToEqual(needsHuman())
+			})
+		})
+
+		s.It("leaves an allowed person's message outside needs-human unsupported", func(ctx *specs.Context) {
+			job := newJob()
+			job.Stage = "review"
+
+			evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 1), defaultPipeline())
+
+			ctx.Expect(err).To(specs.MatchError(decide.ErrUnsupported))
+			ctx.Expect(evs).To(specs.BeEmpty())
+		})
+
 		s.It("returns exactly the same output for the same input", func(ctx *specs.Context) {
 			job, p := newJob(), defaultPipeline()
 			for _, st := range happyPath() {
@@ -330,6 +400,8 @@ func eventTime(ev domain.Event) time.Time {
 	case domain.NeedsHuman:
 		return e.At
 	case domain.MergeRequested:
+		return e.At
+	case domain.ReworkRequested:
 		return e.At
 	}
 	return time.Time{}

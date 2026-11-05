@@ -14,9 +14,9 @@ import (
 // Decide returns no events with it, so nothing changes.
 var ErrIllegalTransition = errors.New("illegal transition")
 
-// ErrUnsupported means the result is legal in this stage but its outcome
-// (NEEDS_INFO, REJECT, BLOCKED, ESCALATE, task results) is not decided yet;
-// E01.4 adds it.
+// ErrUnsupported means the result or message is legal in this stage but its
+// outcome (NEEDS_INFO, REJECT, BLOCKED, ESCALATE, task results, a person's
+// message outside needs-human) is not decided yet; E01.4 and E01.5 add it.
 var ErrUnsupported = errors.New("unsupported result")
 
 // Decide returns the events that follow ev for job in pipeline p. It never
@@ -29,6 +29,12 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return afterGate(job, ev, domain.StageSpecgate, domain.KindSpec, e.At, p)
 	case domain.GatePassed:
 		return afterGate(job, ev, domain.StageGate, domain.KindBuild, e.At, p)
+	case domain.HumanApproved:
+		if job.Stage == domain.StageNeedsHuman {
+			return []domain.Event{domain.MergeRequested{Job: job.ID, At: e.At}}, nil
+		}
+	case domain.MessageReceived:
+		return decideMessage(job, e, p)
 	}
 	return nil, illegal(job, ev)
 }
@@ -87,6 +93,27 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 		}
 	}
 	return nil, fmt.Errorf("%w: %s result from %q in stage %q", ErrUnsupported, stage.Kind, e.Role, job.Stage)
+}
+
+// decideMessage ignores, without error, a message the event source did not
+// mark as coming from an allowed person: bots, CI and strangers change nothing.
+// In needs-human an allowed person's message is rework feedback: the job goes
+// back to the build stage in the same round, with the text as input.
+func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
+	if !e.Allowed || e.AuthorKind != domain.AuthorPerson {
+		return nil, nil
+	}
+	if job.Stage != domain.StageNeedsHuman {
+		return nil, fmt.Errorf("%w: message from %q in stage %q", ErrUnsupported, e.Author, job.Stage)
+	}
+	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
+	if i < 0 {
+		return nil, fmt.Errorf("decide: pipeline %q has no build stage", p.Name)
+	}
+	return []domain.Event{
+		domain.ReworkRequested{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
+		domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At},
+	}, nil
 }
 
 // reviewed records the role's verdict and, once every role of the stage has
