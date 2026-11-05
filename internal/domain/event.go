@@ -69,6 +69,38 @@ type ReviewPassed struct {
 // EventName implements Event.
 func (ReviewPassed) EventName() string { return "ReviewPassed" }
 
+// ChangesRequested records that one review role of the current stage asked
+// for CHANGES.
+type ChangesRequested struct {
+	Job      JobID     `json:"job"`
+	Role     string    `json:"role"`
+	Findings []Finding `json:"findings,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (ChangesRequested) EventName() string { return "ChangesRequested" }
+
+// RoundStarted records that the job starts another review round after CHANGES.
+type RoundStarted struct {
+	Job   JobID     `json:"job"`
+	Round int       `json:"round"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (RoundStarted) EventName() string { return "RoundStarted" }
+
+// NeedsHuman records that the job stops until a person acts, and why.
+type NeedsHuman struct {
+	Job    JobID     `json:"job"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (NeedsHuman) EventName() string { return "NeedsHuman" }
+
 // MergeRequested records that the job finished its pipeline and asks to merge.
 type MergeRequested struct {
 	Job JobID     `json:"job"`
