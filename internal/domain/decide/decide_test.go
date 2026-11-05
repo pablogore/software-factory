@@ -31,7 +31,7 @@ func defaultPipeline() domain.Pipeline {
 }
 
 func newJob() domain.Job {
-	return domain.Job{ID: jobID, Title: "Decide happy path", Pipeline: "default", Stage: "intake"}
+	return domain.Job{ID: jobID, Title: "Decide happy path", Pipeline: "default", Stage: "intake", Round: 1}
 }
 
 func at(minute int) time.Time {
@@ -44,6 +44,14 @@ func result(role string, minute int, r domain.Result) domain.ResultSubmitted {
 
 func pass(role string, minute int) domain.ResultSubmitted {
 	return result(role, minute, domain.ReviewResult{Verdict: domain.ReviewPass})
+}
+
+func changes(role string, minute int) domain.ResultSubmitted {
+	return result(role, minute, domain.ReviewResult{Verdict: domain.ReviewChanges})
+}
+
+func asked(role string, minute int) domain.ChangesRequested {
+	return domain.ChangesRequested{Job: jobID, Role: role, At: at(minute)}
 }
 
 func entered(stage string, minute int) domain.StageEntered {
@@ -101,10 +109,12 @@ type illegalRow struct {
 }
 
 type reviewRow struct {
-	name   string
-	before []string
-	role   string
-	want   []domain.Event
+	name    string
+	round   int
+	passed  []string
+	changed []string
+	ev      domain.ResultSubmitted
+	want    []domain.Event
 }
 
 func TestDecide(t *testing.T) {
@@ -169,22 +179,104 @@ func TestDecide(t *testing.T) {
 
 		s.When("reviews come in", func(s *specs.Spec) {
 			rows := []reviewRow{
-				{"first PASS waits for the rest", nil, "reviewer-code",
+				{"first PASS waits for the rest", 1, nil, nil, pass("reviewer-code", 1),
 					[]domain.Event{passed("reviewer-code", 1)}},
-				{"fourth PASS still waits", reviewers[:3], "security-deep",
+				{"fourth PASS still waits", 1, reviewers[:3], nil, pass("security-deep", 1),
 					[]domain.Event{passed("security-deep", 1)}},
-				{"last PASS in any order enters approve", []string{"security-deep", "reviewer-code", "reviewer-ui", "reviewer-ux"}, "reviewer-security",
+				{"last PASS in any order enters approve", 1, []string{"security-deep", "reviewer-code", "reviewer-ui", "reviewer-ux"}, nil, pass("reviewer-security", 1),
 					[]domain.Event{passed("reviewer-security", 1), entered("approve", 1)}},
+				{"first CHANGES waits for the rest", 1, nil, nil, changes("reviewer-code", 1),
+					[]domain.Event{asked("reviewer-code", 1)}},
+				{"CHANGES with one reviewer left still waits", 1, reviewers[:3], nil, changes("reviewer-code", 1),
+					[]domain.Event{asked("reviewer-code", 1)}},
+				{"last PASS after a CHANGES in round 1 goes back to build at round 2", 1, reviewers[:3], []string{"reviewer-code"}, pass("security-deep", 1),
+					[]domain.Event{passed("security-deep", 1), domain.RoundStarted{Job: jobID, Round: 2, At: at(1)}, entered("build", 1)}},
+				{"last CHANGES in round 1 goes back to build at round 2", 1, reviewers[:4], nil, changes("security-deep", 1),
+					[]domain.Event{asked("security-deep", 1), domain.RoundStarted{Job: jobID, Round: 2, At: at(1)}, entered("build", 1)}},
+				{"CHANGES in round 2 of 3 goes back to build at round 3", 2, reviewers[1:], nil, changes("reviewer-security", 1),
+					[]domain.Event{asked("reviewer-security", 1), domain.RoundStarted{Job: jobID, Round: 3, At: at(1)}, entered("build", 1)}},
+				{"CHANGES in round 3 of 3 ends in needs-human naming the reviewers", 3, []string{"reviewer-ux", "reviewer-ui"}, []string{"security-deep", "reviewer-security"}, changes("reviewer-code", 1),
+					[]domain.Event{asked("reviewer-code", 1), domain.NeedsHuman{Job: jobID,
+						Reason: "CHANGES in the last round (3 of 3) from reviewer-security, reviewer-code, security-deep", At: at(1)}}},
+				{"all PASS in round 3 of 3 enters approve", 3, reviewers[:4], nil, pass("security-deep", 1),
+					[]domain.Event{passed("security-deep", 1), entered("approve", 1)}},
 			}
 			specs.Table(s, rows, func(r reviewRow) string { return r.name }, func(ctx *specs.Context, r reviewRow) {
 				job := newJob()
-				job.Stage = "review"
-				job.Passed = r.before
+				job.Stage, job.Round, job.Passed, job.Changes = "review", r.round, r.passed, r.changed
 
-				evs, err := decide.Decide(job, pass(r.role, 1), defaultPipeline())
+				evs, err := decide.Decide(job, r.ev, defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(evs).ToEqual(r.want)
+			})
+
+			s.It("rejects a second verdict from a role that asked for CHANGES", func(ctx *specs.Context) {
+				job := newJob()
+				job.Stage, job.Changes = "review", []string{"reviewer-code"}
+
+				for _, ev := range []domain.Event{pass("reviewer-code", 1), changes("reviewer-code", 1)} {
+					evs, err := decide.Decide(job, ev, defaultPipeline())
+
+					ctx.Expect(err).To(specs.MatchError(decide.ErrIllegalTransition))
+					ctx.Expect(evs).To(specs.BeEmpty())
+				}
+			})
+		})
+
+		s.When("a reviewer asks for CHANGES in round 1", func(s *specs.Spec) {
+			// toReview walks job from build through the gate into review.
+			toReview := func(ctx *specs.Context, job domain.Job, minute int) domain.Job {
+				for _, ev := range []domain.Event{
+					result("builder", minute, domain.BuildResult{Status: domain.BuildReady}),
+					domain.GatePassed{Job: jobID, At: at(minute)},
+				} {
+					evs, err := decide.Decide(job, ev, defaultPipeline())
+					ctx.Expect(err).To(specs.BeNil())
+					job = decide.Apply(job, evs)
+				}
+				return job
+			}
+			// reviewRound has every reviewer answer, reviewer-code with verdict.
+			reviewRound := func(ctx *specs.Context, job domain.Job, verdict domain.ReviewVerdict) domain.Job {
+				for _, role := range reviewers {
+					v := domain.ReviewPass
+					if role == "reviewer-code" {
+						v = verdict
+					}
+					evs, err := decide.Decide(job, result(role, 20, domain.ReviewResult{Verdict: v}), defaultPipeline())
+					ctx.Expect(err).To(specs.BeNil())
+					job = decide.Apply(job, evs)
+				}
+				return job
+			}
+
+			s.It("starts round 2 in build with no reviewer counted as finished", func(ctx *specs.Context) {
+				job := reviewRound(ctx, walk(ctx, happyPath(), 5), domain.ReviewChanges)
+
+				ctx.Expect(job.Stage).ToEqual("build")
+				ctx.Expect(job.Round).ToEqual(2)
+				ctx.Expect(job.Passed).To(specs.BeEmpty())
+				ctx.Expect(job.Changes).To(specs.BeEmpty())
+			})
+
+			s.It("runs every reviewer again in round 2 and enters approve when all pass", func(ctx *specs.Context) {
+				job := reviewRound(ctx, walk(ctx, happyPath(), 5), domain.ReviewChanges)
+				job = reviewRound(ctx, toReview(ctx, job, 30), domain.ReviewPass)
+
+				ctx.Expect(job.Stage).ToEqual("approve")
+				ctx.Expect(job.Round).ToEqual(2)
+			})
+
+			s.It("ends in needs-human after CHANGES in every round", func(ctx *specs.Context) {
+				job := reviewRound(ctx, walk(ctx, happyPath(), 5), domain.ReviewChanges)
+				job = reviewRound(ctx, toReview(ctx, job, 30), domain.ReviewChanges)
+				job = reviewRound(ctx, toReview(ctx, job, 40), domain.ReviewChanges)
+
+				ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
+				ctx.Expect(job.Round).ToEqual(3)
+				ctx.Expect(job.Passed).To(specs.BeEmpty())
+				ctx.Expect(job.Changes).To(specs.BeEmpty())
 			})
 		})
 
@@ -213,11 +305,11 @@ func TestDecide(t *testing.T) {
 			}
 		})
 
-		s.It("leaves the outcomes of E01.4 unsupported", func(ctx *specs.Context) {
+		s.It("leaves the other outcomes of E01.4 unsupported", func(ctx *specs.Context) {
 			job := newJob()
-			job.Stage = "review"
+			job.Stage = "approve"
 
-			evs, err := decide.Decide(job, result("reviewer-code", 1, domain.ReviewResult{Verdict: domain.ReviewChanges}), defaultPipeline())
+			evs, err := decide.Decide(job, result("approver", 1, domain.ApproveResult{Decision: domain.ApproveEscalate}), defaultPipeline())
 
 			ctx.Expect(err).To(specs.MatchError(decide.ErrUnsupported))
 			ctx.Expect(evs).To(specs.BeEmpty())
@@ -230,6 +322,12 @@ func eventTime(ev domain.Event) time.Time {
 	case domain.StageEntered:
 		return e.At
 	case domain.ReviewPassed:
+		return e.At
+	case domain.ChangesRequested:
+		return e.At
+	case domain.RoundStarted:
+		return e.At
+	case domain.NeedsHuman:
 		return e.At
 	case domain.MergeRequested:
 		return e.At

@@ -1,11 +1,13 @@
 package domain
 
 // Stages a job can be in that are not pipeline stages: the deterministic gates
-// after a spec and after a build, and the end of the pipeline (02-diagramas.md).
+// after a spec and after a build, the end of the pipeline and the wait for a
+// person (02-diagramas.md).
 const (
-	StageSpecgate = "specgate"
-	StageGate     = "gate"
-	StageMerge    = "merge"
+	StageSpecgate   = "specgate"
+	StageGate       = "gate"
+	StageMerge      = "merge"
+	StageNeedsHuman = "needs-human"
 )
 
 // JobID identifies a job inside factoryd.
@@ -18,8 +20,9 @@ type Job struct {
 	Title         string         `json:"title"`
 	Pipeline      string         `json:"pipeline"`
 	Stage         string         `json:"stage"`
-	Round         int            `json:"round"`
-	Passed        []string       `json:"passed,omitempty"` // review roles of the current stage that passed
+	Round         int            `json:"round"`             // review round, from 1
+	Passed        []string       `json:"passed,omitempty"`  // review roles of the current stage that passed
+	Changes       []string       `json:"changes,omitempty"` // review roles of the current stage that asked for CHANGES
 	Origin        Origin         `json:"origin"`
 	Subscriptions []Subscription `json:"subscriptions,omitempty"`
 }
