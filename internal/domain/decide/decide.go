@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
@@ -14,8 +15,8 @@ import (
 var ErrIllegalTransition = errors.New("illegal transition")
 
 // ErrUnsupported means the result is legal in this stage but its outcome
-// (CHANGES, NEEDS_INFO, REJECT, BLOCKED, ESCALATE, task results) is not
-// decided yet; E01.4 adds it.
+// (NEEDS_INFO, REJECT, BLOCKED, ESCALATE, task results) is not decided yet;
+// E01.4 adds it.
 var ErrUnsupported = errors.New("unsupported result")
 
 // Decide returns the events that follow ev for job in pipeline p. It never
@@ -38,11 +39,17 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 	for _, ev := range evs {
 		switch e := ev.(type) {
 		case domain.StageEntered:
-			job.Stage, job.Passed = e.Stage, nil
+			job.Stage, job.Passed, job.Changes = e.Stage, nil, nil
 		case domain.ReviewPassed:
 			job.Passed = append(slices.Clip(job.Passed), e.Role)
+		case domain.ChangesRequested:
+			job.Changes = append(slices.Clip(job.Changes), e.Role)
+		case domain.RoundStarted:
+			job.Round, job.Passed, job.Changes = e.Round, nil, nil
+		case domain.NeedsHuman:
+			job.Stage, job.Passed, job.Changes = domain.StageNeedsHuman, nil, nil
 		case domain.MergeRequested:
-			job.Stage, job.Passed = domain.StageMerge, nil
+			job.Stage, job.Passed, job.Changes = domain.StageMerge, nil, nil
 		}
 	}
 	return job
@@ -73,9 +80,7 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 			return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageGate, At: e.At}}, nil
 		}
 	case domain.ReviewResult:
-		if r.Verdict == domain.ReviewPass {
-			return reviewPassed(job, e, p, i)
-		}
+		return reviewed(job, e, r, p, i)
 	case domain.ApproveResult:
 		if r.Decision == domain.ApproveApprove {
 			return next(job, p, i, e.At), nil
@@ -84,19 +89,54 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 	return nil, fmt.Errorf("%w: %s result from %q in stage %q", ErrUnsupported, stage.Kind, e.Role, job.Stage)
 }
 
-// reviewPassed records the role's PASS and moves on once every role of the
-// stage has passed.
-func reviewPassed(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline, i int) ([]domain.Event, error) {
-	if slices.Contains(job.Passed, e.Role) {
+// reviewed records the role's verdict and, once every role of the stage has
+// answered, moves on: to the next stage when all passed, back to on_changes
+// for another round when any asked for CHANGES, or to needs-human when that
+// happens in the stage's last round.
+func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p domain.Pipeline, i int) ([]domain.Event, error) {
+	if slices.Contains(job.Passed, e.Role) || slices.Contains(job.Changes, e.Role) {
 		return nil, illegal(job, e)
 	}
-	evs := []domain.Event{domain.ReviewPassed{Job: job.ID, Role: e.Role, At: e.At}}
-	for _, role := range p.Stages[i].Roles {
-		if role != e.Role && !slices.Contains(job.Passed, role) {
+	stage := p.Stages[i]
+	if r.Verdict == domain.ReviewChanges && stage.OnChanges == "" {
+		return nil, fmt.Errorf("decide: review stage %q has no on_changes", stage.Name)
+	}
+	changes := job.Changes
+	var evs []domain.Event
+	if r.Verdict == domain.ReviewPass {
+		evs = []domain.Event{domain.ReviewPassed{Job: job.ID, Role: e.Role, At: e.At}}
+	} else {
+		changes = append(slices.Clip(changes), e.Role)
+		evs = []domain.Event{domain.ChangesRequested{Job: job.ID, Role: e.Role, Findings: r.Findings, At: e.At}}
+	}
+	for _, role := range stage.Roles {
+		if role != e.Role && !slices.Contains(job.Passed, role) && !slices.Contains(changes, role) {
 			return evs, nil
 		}
 	}
-	return append(evs, next(job, p, i, e.At)...), nil
+	if len(changes) == 0 {
+		return append(evs, next(job, p, i, e.At)...), nil
+	}
+	if job.Round >= stage.MaxRounds {
+		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, stage.MaxRounds, strings.Join(inOrder(stage.Roles, changes), ", "))
+		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}), nil
+	}
+	return append(evs,
+		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, At: e.At},
+		domain.StageEntered{Job: job.ID, Stage: stage.OnChanges, At: e.At},
+	), nil
+}
+
+// inOrder returns the roles in subset in the order the stage lists them, so
+// the reason does not depend on the order reviewers answered in.
+func inOrder(roles, subset []string) []string {
+	var out []string
+	for _, role := range roles {
+		if slices.Contains(subset, role) {
+			out = append(out, role)
+		}
+	}
+	return out
 }
 
 // afterGate leaves a gate for the stage after the one of the given kind (a
