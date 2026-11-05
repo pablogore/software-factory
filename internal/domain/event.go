@@ -29,3 +29,51 @@ type HumanApproved struct {
 
 // EventName implements Event.
 func (HumanApproved) EventName() string { return "HumanApproved" }
+
+// SpecgatePassed records that the deterministic specgate accepted the spec.
+type SpecgatePassed struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (SpecgatePassed) EventName() string { return "SpecgatePassed" }
+
+// GatePassed records that the deterministic gate (checks) passed on the branch.
+type GatePassed struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (GatePassed) EventName() string { return "GatePassed" }
+
+// StageEntered records that the job moved to a pipeline stage or to one of
+// the gates (StageSpecgate, StageGate).
+type StageEntered struct {
+	Job   JobID     `json:"job"`
+	Stage string    `json:"stage"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (StageEntered) EventName() string { return "StageEntered" }
+
+// ReviewPassed records that one review role of the current stage passed.
+type ReviewPassed struct {
+	Job  JobID     `json:"job"`
+	Role string    `json:"role"`
+	At   time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (ReviewPassed) EventName() string { return "ReviewPassed" }
+
+// MergeRequested records that the job finished its pipeline and asks to merge.
+type MergeRequested struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (MergeRequested) EventName() string { return "MergeRequested" }
