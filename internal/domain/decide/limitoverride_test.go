@@ -262,6 +262,9 @@ func TestLimitOverride(t *testing.T) {
 				{"refuses one with a requester of only punctuation", needsHumanJob, func(job domain.Job) domain.LimitOverrideRequested {
 					return signedLimit(current(job), "-_-")
 				}, domain.ErrMissingField},
+				{"refuses one with a requester of only a Braille blank", needsHumanJob, func(job domain.Job) domain.LimitOverrideRequested {
+					return signedLimit(current(job), "\u2800")
+				}, domain.ErrMissingField},
 				{"refuses one with an invisible requester on a stopped job", stoppedJob, func(job domain.Job) domain.LimitOverrideRequested {
 					return signedLimit(current(job), "\u200b")
 				}, decide.ErrStopped},

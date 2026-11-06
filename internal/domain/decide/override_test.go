@@ -201,6 +201,8 @@ func TestOverride(t *testing.T) {
 			invisible, controls, dots, invisibleReason, dotsReason := person, person, person, person, person
 			invisible.By, controls.By, dots.By = "\u200b\u2060\ufeff", "\x00\x1b", "-.-"
 			invisibleReason.Reason, dotsReason.Reason = "\u200c \u200d", "...!?"
+			braille, brailleReason := person, person
+			braille.By, brailleReason.Reason = "\u2800", "\u2800"
 			other := person
 			other.Job = "999-other"
 			otherInvisible := invisible
@@ -217,6 +219,8 @@ func TestOverride(t *testing.T) {
 				{"refuses a name of only punctuation", changesJob, dots, domain.ErrMissingField},
 				{"refuses a reason of only zero-width characters", changesJob, invisibleReason, domain.ErrMissingField},
 				{"refuses a reason of only punctuation", changesJob, dotsReason, domain.ErrMissingField},
+				{"refuses a name of only a Braille blank", changesJob, braille, domain.ErrMissingField},
+				{"refuses a reason of only a Braille blank", changesJob, brailleReason, domain.ErrMissingField},
 				{"refuses an invisible name before the cause", blocked, invisible, domain.ErrMissingField},
 				{"refuses a punctuation reason before the cause", blocked, dotsReason, domain.ErrMissingField},
 				{"refuses an invisible name on a stopped job as it refuses any event", stoppedJob, invisible, decide.ErrStopped},
