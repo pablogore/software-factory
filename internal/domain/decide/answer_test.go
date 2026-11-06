@@ -1,7 +1,9 @@
 package decide_test
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -206,7 +208,8 @@ func TestInitiativeAnswer(t *testing.T) {
 }
 
 // FuzzInitiativeNeedsHuman checks that an initiative in needs-human leaves it
-// only on an allowed person's message, and then only for the replan: any
+// only on an allowed person's message that names who sent it, and then only
+// for the replan; the same message without a name is refused. Any
 // other event, a message from any other author or a missing one returns no
 // events and leaves the initiative as it was, never panicking.
 func FuzzInitiativeNeedsHuman(f *testing.F) {
@@ -233,6 +236,12 @@ func FuzzInitiativeNeedsHuman(f *testing.F) {
 		}
 		after := decide.ApplyInitiative(in, out)
 		msg, ok := ev.(domain.MessageReceived)
+		if ok && msg.Allowed && msg.AuthorKind == domain.AuthorPerson && strings.TrimSpace(msg.Author) == "" {
+			if !errors.Is(err, domain.ErrMissingField) || len(out) > 0 {
+				t.Fatalf("answer without a name gave %v, %v", out, err)
+			}
+			return
+		}
 		if ok && msg.Allowed && msg.AuthorKind == domain.AuthorPerson {
 			if err != nil || after.Stage != domain.InitiativeReplan {
 				t.Fatalf("allowed answer gave %v, %v, stage %q", out, err, after.Stage)
