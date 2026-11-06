@@ -27,6 +27,18 @@ func continued(minute int) domain.ReplanSubmitted {
 	return domain.ReplanSubmitted{Job: jobID, Initiative: initiativeID, Status: domain.ReplanContinue, At: at(minute)}
 }
 
+func doneReplan(minute int) domain.ReplanSubmitted {
+	e := continued(minute)
+	e.Status = domain.ReplanDone
+	return e
+}
+
+func needsHumanReplan(minute int, reason string) domain.ReplanSubmitted {
+	e := continued(minute)
+	e.Status, e.Reason = domain.ReplanNeedsHuman, reason
+	return e
+}
+
 func nextSlice(minute int) domain.NextSliceRequested {
 	return domain.NextSliceRequested{Job: jobID, Initiative: initiativeID, At: at(minute)}
 }
@@ -91,6 +103,65 @@ func TestInitiative(t *testing.T) {
 				ctx.Expect(in.Stage).ToEqual(domain.InitiativeActive)
 				ctx.Expect(job.Stage).ToEqual(domain.StageDone)
 			}},
+			{"a replan DONE closes the initiative: no next slice starts and nobody is asked for an OK", func(ctx *specs.Context) {
+				for _, checkpoint := range []domain.Checkpoint{domain.CheckpointEverySlice, domain.CheckpointAuto} {
+					job, in := mergeSlice(ctx, threeSlices(checkpoint))
+
+					in = replan(ctx, in, doneReplan(2), []domain.Event{
+						domain.InitiativeEnded{Job: jobID, Initiative: initiativeID, At: at(2)},
+					})
+
+					ctx.Expect(in.Stage).ToEqual(domain.InitiativeClosed)
+					ctx.Expect(job.Stage).ToEqual(domain.StageDone)
+				}
+			}},
+			{"a replan NEEDS-HUMAN puts the initiative in needs-human, keeping the replan's reason, and starts no slice", func(ctx *specs.Context) {
+				const reason = "S3 needs a decision on the API shape before it can be cut"
+				for _, checkpoint := range []domain.Checkpoint{domain.CheckpointEverySlice, domain.CheckpointAuto} {
+					_, in := mergeSlice(ctx, threeSlices(checkpoint))
+
+					in = replan(ctx, in, needsHumanReplan(2, reason), []domain.Event{
+						domain.InitiativeNeedsHumanRaised{Job: jobID, Initiative: initiativeID, Reason: reason, At: at(2)},
+					})
+
+					ctx.Expect(in.Stage).ToEqual(domain.InitiativeNeedsHuman)
+					ctx.Expect(in.Reason).ToEqual(reason)
+				}
+			}},
+			{"a closed initiative stays closed: a later replan or a person's OK starts no slice", func(ctx *specs.Context) {
+				_, in := mergeSlice(ctx, threeSlices(domain.CheckpointAuto))
+				closed := replan(ctx, in, doneReplan(2), []domain.Event{
+					domain.InitiativeEnded{Job: jobID, Initiative: initiativeID, At: at(2)},
+				})
+
+				for _, ev := range []domain.Event{
+					continued(3),
+					doneReplan(3),
+					domain.HumanApproved{Job: jobID, By: "pablogore", At: at(3)},
+				} {
+					evs, err := decide.Initiative(closed, ev)
+					ctx.Expect(err).To(specs.MatchError(decide.ErrIllegalTransition))
+					ctx.Expect(evs).To(specs.BeEmpty())
+				}
+
+				// Not even a fold that would restart it reopens a closed initiative.
+				reopening := []domain.Event{
+					domain.ReplanRequested{Job: jobID, Initiative: initiativeID, At: at(4)},
+					nextSlice(4),
+				}
+				ctx.Expect(decide.ApplyInitiative(closed, reopening)).ToEqual(closed)
+			}},
+			{"a replan CONTINUE still behaves as in S1, for both checkpoints", func(ctx *specs.Context) {
+				_, in := mergeSlice(ctx, threeSlices(domain.CheckpointEverySlice))
+				in = replan(ctx, in, continued(2), []domain.Event{
+					domain.CheckpointReached{Job: jobID, Initiative: initiativeID, At: at(2)},
+				})
+				ctx.Expect(in.Stage).ToEqual(domain.InitiativeCheckpoint)
+
+				_, in = mergeSlice(ctx, threeSlices(domain.CheckpointAuto))
+				in = replan(ctx, in, continued(2), []domain.Event{nextSlice(2)})
+				ctx.Expect(in.Stage).ToEqual(domain.InitiativeActive)
+			}},
 			{"a job outside any initiative ends done after its merge with no replan", func(ctx *specs.Context) {
 				job := newJob()
 				job.Stage = domain.StageMerge
@@ -147,8 +218,8 @@ func TestInitiative(t *testing.T) {
 			otherInitiative.Initiative = "018-other"
 			otherJob := continued(2)
 			otherJob.Job = "018-other-s1"
-			done, human, unknown := continued(2), continued(2), continued(2)
-			done.Status, human.Status, unknown.Status = domain.ReplanDone, domain.ReplanNeedsHuman, "MAYBE"
+			unknown := continued(2)
+			unknown.Status = "MAYBE"
 			badCheckpoint := replanning()
 			badCheckpoint.Checkpoint = "weekly"
 			approval := domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}
@@ -160,8 +231,8 @@ func TestInitiative(t *testing.T) {
 				{"refuses a person's OK before the replan", replanning(), approval, decide.ErrIllegalTransition},
 				{"refuses a person's OK while a slice runs", threeSlices(domain.CheckpointEverySlice), approval, decide.ErrIllegalTransition},
 				{"refuses a missing event", replanning(), nil, decide.ErrIllegalTransition},
-				{"leaves a replan DONE unsupported", replanning(), done, decide.ErrUnsupported},
-				{"leaves a replan NEEDS-HUMAN unsupported", replanning(), human, decide.ErrUnsupported},
+				{"refuses a replan DONE while a slice runs", threeSlices(domain.CheckpointAuto), doneReplan(2), decide.ErrIllegalTransition},
+				{"refuses a replan NEEDS-HUMAN at the checkpoint", waiting(), needsHumanReplan(2, "why"), decide.ErrIllegalTransition},
 				{"rejects an unknown replan status", replanning(), unknown, domain.ErrInvalidValue},
 				{"rejects an unknown checkpoint", badCheckpoint, continued(2), domain.ErrInvalidValue},
 			}
