@@ -300,6 +300,42 @@ func (InfoAnswered) EventName() string { return "InfoAnswered" }
 // JobID implements Event.
 func (e InfoAnswered) JobID() JobID { return e.Job }
 
+// OverrideRequested asks to merge a job that waits in needs-human after
+// CHANGES in the last round: the only way a person merges work review
+// rejected. Like MessageReceived, the event source decides Allowed and
+// AuthorKind, and decide.Decide only acts on an allowed person; By names
+// that person. Reason is their own words, data only: Decide never parses it
+// or routes on it.
+type OverrideRequested struct {
+	Job        JobID      `json:"job"`
+	By         string     `json:"by"`
+	AuthorKind AuthorKind `json:"author_kind"`
+	Allowed    bool       `json:"allowed"`
+	Reason     string     `json:"reason"`
+	At         time.Time  `json:"at"`
+}
+
+// EventName implements Event.
+func (OverrideRequested) EventName() string { return "OverrideRequested" }
+
+// JobID implements Event.
+func (e OverrideRequested) JobID() JobID { return e.Job }
+
+// MergeOverridden is the job's history entry for an accepted override: who
+// merged work review rejected, why and when. A MergeRequested follows it.
+type MergeOverridden struct {
+	Job    JobID     `json:"job"`
+	By     string    `json:"by"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (MergeOverridden) EventName() string { return "MergeOverridden" }
+
+// JobID implements Event.
+func (e MergeOverridden) JobID() JobID { return e.Job }
+
 // StopRequested asks to stop the job for good. Like HumanApproved, the event
 // source vouches that an allowed person sent it; By names that person.
 type StopRequested struct {

@@ -24,7 +24,7 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 	if ev.JobID() != in.Job {
 		return nil, fmt.Errorf("%w: %s for job %q, initiative %q waits on job %q", ErrOtherInitiative, ev.EventName(), ev.JobID(), in.ID, in.Job)
 	}
-	if m, ok := ev.(domain.MessageReceived); ok && ignored(m) {
+	if m, ok := ev.(domain.MessageReceived); ok && ignored(m.Allowed, m.AuthorKind) {
 		return nil, nil
 	}
 	switch e := ev.(type) {
