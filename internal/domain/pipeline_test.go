@@ -139,3 +139,20 @@ func TestPipelineSpecRejections(t *testing.T) {
 		})
 	})
 }
+
+func TestPipelineHumanReworks(t *testing.T) {
+	specs.Describe(t, "Pipeline.HumanReworks", func(s *specs.Spec) {
+		s.It("is unlimited when limits does not set it", func(ctx *specs.Context) {
+			_, capped := validPipeline().HumanReworks()
+			ctx.Expect(capped).ToEqual(false)
+		})
+
+		s.It("is limits.human_reworks when set", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Limits.HumanReworks = ptr(2)
+			n, capped := p.HumanReworks()
+			ctx.Expect(n).ToEqual(2)
+			ctx.Expect(capped).ToEqual(true)
+		})
+	})
+}
