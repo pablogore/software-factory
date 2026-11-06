@@ -161,7 +161,13 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 		case domain.IntakeNeedsInfo:
 			return []domain.Event{domain.NeedsInfo{Job: job.ID, From: stage.Name, At: e.At}}, nil
 		case domain.IntakeReject:
-			return []domain.Event{domain.JobRejected{Job: job.ID, Reason: rejected(r.Reason), At: e.At}}, nil
+			evs := []domain.Event{domain.JobRejected{Job: job.ID, Reason: rejected(r.Reason), At: e.At}}
+			// A rejected slice never merges, so like a dropped one it asks its
+			// initiative for a replan instead of leaving it on a dead job.
+			if job.Initiative != "" {
+				evs = append(evs, domain.ReplanRequested{Job: job.ID, Initiative: job.Initiative, At: e.At})
+			}
+			return evs, nil
 		}
 	case domain.SpecResult:
 		return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageSpecgate, At: e.At}}, nil

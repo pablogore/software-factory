@@ -195,7 +195,8 @@ func (NeedsInfo) EventName() string { return "NeedsInfo" }
 func (e NeedsInfo) JobID() JobID { return e.Job }
 
 // JobRejected records that intake discarded the ticket: the job ends
-// rejected, final, with Reason. Reason is agent-written text, data only:
+// rejected, final, with Reason. On a slice job it comes with a
+// ReplanRequested. Reason is agent-written text, data only:
 // adapters show it quoted and escaped, never as markup or commands.
 type JobRejected struct {
 	Job    JobID     `json:"job"`
