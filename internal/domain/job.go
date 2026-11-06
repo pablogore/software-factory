@@ -20,9 +20,10 @@ type Job struct {
 	Title         string         `json:"title"`
 	Pipeline      string         `json:"pipeline"`
 	Stage         string         `json:"stage"`
-	Round         int            `json:"round"`             // review round, from 1
-	Passed        []string       `json:"passed,omitempty"`  // review roles of the current stage that passed
-	Changes       []string       `json:"changes,omitempty"` // review roles of the current stage that asked for CHANGES
+	Round         int            `json:"round"`               // review round, from 1
+	Passed        []string       `json:"passed,omitempty"`    // review roles of the current stage that passed
+	Changes       []string       `json:"changes,omitempty"`   // review roles of the current stage that asked for CHANGES
+	Reviewers     []string       `json:"reviewers,omitempty"` // review roles that run in this round; empty runs every role of the stage
 	Origin        Origin         `json:"origin"`
 	Subscriptions []Subscription `json:"subscriptions,omitempty"`
 }

@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -35,6 +36,22 @@ func TestRole(t *testing.T) {
 			}
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 			ctx.Expect(err.Error()).ToEqual(r.want)
+		})
+	})
+
+	specs.Describe(t, "Role.AlwaysRerun", func(s *specs.Spec) {
+		s.It("is off unless the role is marked", func(ctx *specs.Context) {
+			var r domain.Role
+			ctx.Expect(json.Unmarshal([]byte(`{"name":"reviewer-code","kind":"review","mode":"blocking"}`), &r)).To(specs.BeNil())
+
+			ctx.Expect(r.AlwaysRerun).ToEqual(false)
+		})
+
+		s.It("reads always_rerun next to the mode", func(ctx *specs.Context) {
+			var r domain.Role
+			ctx.Expect(json.Unmarshal([]byte(`{"name":"reviewer-security","kind":"review","mode":"blocking","always_rerun":true}`), &r)).To(specs.BeNil())
+
+			ctx.Expect(r.AlwaysRerun).ToEqual(true)
 		})
 	})
 }

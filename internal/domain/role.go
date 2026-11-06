@@ -13,6 +13,8 @@ type Role struct {
 	Model       string `json:"model,omitempty"`
 	When        When   `json:"when,omitempty"`
 	Mode        Mode   `json:"mode,omitempty"`
+	// AlwaysRerun makes a review role run in every round, even after it passed.
+	AlwaysRerun bool `json:"always_rerun,omitempty"`
 }
 
 // When says when a role runs; a role whose conditions don't apply is skipped
