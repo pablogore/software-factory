@@ -51,11 +51,11 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.ChangesRequested:
 			job.Changes = append(slices.Clip(job.Changes), e.Role)
 		case domain.RoundStarted:
-			job.Round, job.Passed, job.Changes = e.Round, nil, nil
+			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
-			job.Stage, job.Passed, job.Changes = domain.StageNeedsHuman, nil, nil
+			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, nil, nil, nil
 		case domain.MergeRequested:
-			job.Stage, job.Passed, job.Changes = domain.StageMerge, nil, nil
+			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, nil, nil, nil
 		}
 	}
 	return job
@@ -117,15 +117,21 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 	}, nil
 }
 
-// reviewed records the role's verdict and, once every role of the stage has
+// reviewed records the role's verdict and, once every role of the round has
 // answered, moves on: to the next stage when no blocking role asked for
 // CHANGES, back to on_changes for another round when one did, or to
-// needs-human when that happens in the stage's last round.
+// needs-human when that happens in the stage's last round. Round 1 runs every
+// role of the stage; a later round runs only job.Reviewers, and the roles
+// left out keep their earlier pass.
 func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p domain.Pipeline, i int) ([]domain.Event, error) {
-	if slices.Contains(job.Passed, e.Role) || slices.Contains(job.Changes, e.Role) {
+	stage := p.Stages[i]
+	round := stage.Roles
+	if len(job.Reviewers) > 0 {
+		round = job.Reviewers
+	}
+	if (len(job.Reviewers) > 0 && !slices.Contains(round, e.Role)) || slices.Contains(job.Passed, e.Role) || slices.Contains(job.Changes, e.Role) {
 		return nil, illegal(job, e)
 	}
-	stage := p.Stages[i]
 	if r.Verdict == domain.ReviewChanges && stage.OnChanges == "" {
 		return nil, fmt.Errorf("decide: review stage %q has no on_changes", stage.Name)
 	}
@@ -137,7 +143,7 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 		changes = append(slices.Clip(changes), e.Role)
 		evs = []domain.Event{domain.ChangesRequested{Job: job.ID, Role: e.Role, Findings: r.Findings, At: e.At}}
 	}
-	for _, role := range stage.Roles {
+	for _, role := range round {
 		if role != e.Role && !slices.Contains(job.Passed, role) && !slices.Contains(changes, role) {
 			return evs, nil
 		}
@@ -151,7 +157,7 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}), nil
 	}
 	return append(evs,
-		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, At: e.At},
+		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: rerun(p, stage.Roles, changes), At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: stage.OnChanges, At: e.At},
 	), nil
 }
@@ -162,6 +168,19 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 func blocks(p domain.Pipeline, role string) bool {
 	i := slices.IndexFunc(p.Roles, func(r domain.Role) bool { return r.Name == role })
 	return i < 0 || (p.Roles[i].Mode != domain.ModeShadow && p.Roles[i].Mode != domain.ModeAdvisory)
+}
+
+// rerun lists, in stage order, the roles of the next round: every role that
+// asked for CHANGES in this one, whatever its mode, plus the always_rerun ones.
+func rerun(p domain.Pipeline, roles, changes []string) []string {
+	var out []string
+	for _, role := range roles {
+		j := slices.IndexFunc(p.Roles, func(r domain.Role) bool { return r.Name == role })
+		if slices.Contains(changes, role) || (j >= 0 && p.Roles[j].AlwaysRerun) {
+			out = append(out, role)
+		}
+	}
+	return out
 }
 
 // escalated is the needs-human reason for an approver ESCALATE: a person

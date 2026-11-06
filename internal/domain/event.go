@@ -82,10 +82,12 @@ type ChangesRequested struct {
 func (ChangesRequested) EventName() string { return "ChangesRequested" }
 
 // RoundStarted records that the job starts another review round after CHANGES.
+// Reviewers are the review roles that run in it; the others keep their pass.
 type RoundStarted struct {
-	Job   JobID     `json:"job"`
-	Round int       `json:"round"`
-	At    time.Time `json:"at"`
+	Job       JobID     `json:"job"`
+	Round     int       `json:"round"`
+	Reviewers []string  `json:"reviewers,omitempty"`
+	At        time.Time `json:"at"`
 }
 
 // EventName implements Event.
