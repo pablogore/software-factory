@@ -1,7 +1,9 @@
 package decide_test
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pablogore/software-factory/internal/domain"
@@ -13,7 +15,7 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
 // has not answered in any fuzzed job, a failing gate and specgate, a spec
 // asking for a length exception, a specgate rejection count, a person's approval, an intake NEEDS_INFO and REJECT, a builder BLOCKED, messages (and
-// so answers) and direction marks from every kind of author, stop requests with and without a
+// so answers) and direction marks from every kind of author, with and without a name, stop requests with and without a
 // name, a completed merge and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
@@ -25,6 +27,8 @@ func fuzzEvents() []domain.Event {
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
 		direction(domain.AuthorPerson, true, 1), direction(domain.AuthorPerson, false, 1), direction(domain.AuthorBot, true, 1),
+		signed(message(domain.AuthorPerson, true, 1), ""), signed(message(domain.AuthorPerson, false, 1), " "),
+		signed(direction(domain.AuthorPerson, true, 1), " \t"), signed(direction(domain.AuthorBot, true, 1), ""),
 		stop("pablogore", 1), stop("", 1), merged(1), needsInfo(), blockedBuild("cannot reach the API", 1), rejectIntake("duplicate of #12", 1))
 	for _, r := range nilEvents() {
 		evs = append(evs, r.ev)
@@ -35,7 +39,8 @@ func fuzzEvents() []domain.Event {
 // FuzzDecide checks that the same input always gives the same output, that
 // Decide never changes the job it receives and that no round goes past the
 // review stage's max_rounds, that a message not from an allowed person
-// changes nothing and is not an error, that a job a decision moves records an
+// changes nothing and is not an error, that an allowed person's message
+// without a name is refused unless the job is stopped or rejected, that a job a decision moves records an
 // asker exactly when it lands in needs-info, that only a job in needs-human
 // waits on a length exception, and that a missing or nil event is an error,
 // never a panic.
@@ -71,6 +76,10 @@ func FuzzDecide(f *testing.F) {
 		}
 		if m, ok := ev.(domain.MessageReceived); ok && (!m.Allowed || m.AuthorKind != domain.AuthorPerson) && (err1 != nil || len(first) > 0) {
 			t.Fatalf("message from %s (allowed %v) gave %v, %v", m.AuthorKind, m.Allowed, first, err1)
+		}
+		if m, ok := ev.(domain.MessageReceived); ok && m.Allowed && m.AuthorKind == domain.AuthorPerson && strings.TrimSpace(m.Author) == "" &&
+			job.Stage != domain.StageStopped && job.Stage != domain.StageRejected && !errors.Is(err1, domain.ErrMissingField) {
+			t.Fatalf("message without a name in stage %q gave %v, %v", job.Stage, first, err1)
 		}
 		if missing(ev) && err1 == nil {
 			t.Fatalf("missing event %#v accepted in stage %q", ev, job.Stage)

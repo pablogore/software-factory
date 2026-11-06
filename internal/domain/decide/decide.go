@@ -83,6 +83,11 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 			return evs, nil
 		}
 	case domain.MessageReceived:
+		// Checked after the stopped and rejected refusals, so the missing
+		// name never tells a person more about the job than any other event.
+		if strings.TrimSpace(e.Author) == "" {
+			return nil, fmt.Errorf("decide: message without who sent it: %w", domain.ErrMissingField)
+		}
 		return decideMessage(job, e, p)
 	}
 	return nil, illegal(job, ev)

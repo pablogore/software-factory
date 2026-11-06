@@ -29,6 +29,9 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 	}
 	switch e := ev.(type) {
 	case domain.MessageReceived:
+		if strings.TrimSpace(e.Author) == "" {
+			return nil, fmt.Errorf("decide: message without who sent it: %w", domain.ErrMissingField)
+		}
 		// A person's answer is the only way out of needs-human: the replan
 		// runs again with it.
 		if in.Stage == domain.InitiativeNeedsHuman {
