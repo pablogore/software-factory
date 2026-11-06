@@ -16,9 +16,9 @@ import (
 var ErrIllegalTransition = errors.New("illegal transition")
 
 // ErrUnsupported means the result or message is legal in this stage but its
-// outcome (REJECT, task results, a person's message outside
-// needs-human, needs-info and done) is not decided yet; E01.4 and E01.5 add
-// it.
+// outcome is not decided yet. Among agent results it covers only task results
+// (#76); otherwise only a person's message outside needs-human, needs-info
+// and done.
 var ErrUnsupported = errors.New("unsupported result")
 
 // ErrOtherJob means the event is addressed to a different job than the one
@@ -119,6 +119,10 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.SliceDropped:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", nil, nil, nil
 			job = leftNeedsHuman(job)
+		case domain.JobRejected:
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", nil, nil, nil
+			job = leftNeedsHuman(job)
+			job.Reason = e.Reason
 		}
 	}
 	return job
@@ -151,6 +155,8 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 			return next(job, p, i, e.At), nil
 		case domain.IntakeNeedsInfo:
 			return []domain.Event{domain.NeedsInfo{Job: job.ID, From: stage.Name, At: e.At}}, nil
+		case domain.IntakeReject:
+			return []domain.Event{domain.JobRejected{Job: job.ID, Reason: rejected(r.Reason), At: e.At}}, nil
 		}
 	case domain.SpecResult:
 		return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageSpecgate, At: e.At}}, nil
@@ -337,6 +343,16 @@ func blocked(role, summary string) string {
 		return fmt.Sprintf("%s blocked", role)
 	}
 	return summary
+}
+
+// rejected is the reason a rejected job keeps: intake's own, trimmed, or a
+// fixed one when it gave none, so the reason is never empty. The text is
+// stored as data: Decide never parses it or routes on it.
+func rejected(reason string) string {
+	if r := strings.TrimSpace(reason); r != "" {
+		return r
+	}
+	return "intake rejected"
 }
 
 // inOrder returns the roles in subset in the order the stage lists them, so

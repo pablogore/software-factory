@@ -25,10 +25,13 @@ type Slice struct {
 	Title string `json:"title"`
 }
 
-// IntakeResult starts, asks about or discards a ticket.
+// IntakeResult starts, asks about or discards a ticket. Reason is the intake
+// agent's own words, kept on a rejected job; it is optional, so results
+// written before it existed still validate.
 type IntakeResult struct {
 	Decision IntakeDecision `json:"decision"`
 	Slices   []Slice        `json:"slices,omitempty"`
+	Reason   string         `json:"reason,omitempty"`
 }
 
 // Kind implements Result.
