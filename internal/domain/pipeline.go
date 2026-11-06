@@ -95,7 +95,7 @@ func (p Pipeline) SpecRejections() int {
 	return *p.Limits.SpecRejections
 }
 
-// HumanReworks is how many reworks a person may send from needs-human:
+// HumanReworks is how many reworks back to build a person may send from needs-human:
 // limits.human_reworks, and false when it is not set (unlimited).
 func (p Pipeline) HumanReworks() (int, bool) {
 	if p.Limits.HumanReworks == nil {

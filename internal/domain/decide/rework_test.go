@@ -1,6 +1,7 @@
 package decide_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -59,6 +60,21 @@ func usedUp(ctx *specs.Context, p domain.Pipeline) domain.Job {
 	return job
 }
 
+// toSpec reports whether feedback on cause sends the job back to spec.
+func toSpec(cause domain.HumanCause) bool {
+	return cause == domain.CauseSpecEscalated || cause == domain.CauseSpecException
+}
+
+// buildBound is causeRows whose feedback sends the job back to build.
+func buildBound() []causeRow {
+	return slices.DeleteFunc(causeRows(), func(r causeRow) bool { return toSpec(r.cause) })
+}
+
+// specBound is causeRows whose feedback sends the job back to spec.
+func specBound() []causeRow {
+	return slices.DeleteFunc(causeRows(), func(r causeRow) bool { return !toSpec(r.cause) })
+}
+
 type unlimitedRow struct {
 	name string
 	p    func() domain.Pipeline
@@ -67,12 +83,22 @@ type unlimitedRow struct {
 func TestHumanReworks(t *testing.T) {
 	specs.Describe(t, "Decide on limits.human_reworks", func(s *specs.Spec) {
 		s.When("a person sends a job back from needs-human", func(s *specs.Spec) {
-			specs.Table(s, causeRows(), func(r causeRow) string { return "counts one rework after " + string(r.cause) }, func(ctx *specs.Context, r causeRow) {
+			specs.Table(s, buildBound(), func(r causeRow) string { return "counts one rework back to build after " + string(r.cause) }, func(ctx *specs.Context, r causeRow) {
 				job := waitingFor(ctx, r.cause)
 
 				after := reworkOnce(ctx, job, defaultPipeline())
 
-				ctx.Expect(after.Stage).To(specs.Not(specs.Equal(domain.StageNeedsHuman)))
+				ctx.Expect(after.Stage).ToEqual("build")
+				ctx.Expect(after.HumanReworks).ToEqual(1)
+			})
+
+			specs.Table(s, specBound(), func(r causeRow) string { return "keeps the count on feedback back to spec after " + string(r.cause) }, func(ctx *specs.Context, r causeRow) {
+				job := waitingFor(ctx, r.cause)
+				job.HumanReworks = 1
+
+				after := reworkOnce(ctx, job, defaultPipeline())
+
+				ctx.Expect(after.Stage).ToEqual("spec")
 				ctx.Expect(after.HumanReworks).ToEqual(1)
 			})
 
@@ -84,7 +110,20 @@ func TestHumanReworks(t *testing.T) {
 
 				ctx.Expect(after.Stage).ToEqual("spec")
 				ctx.Expect(after.SpecRejections).ToEqual(0)
-				ctx.Expect(after.HumanReworks).ToEqual(2)
+				ctx.Expect(after.HumanReworks).ToEqual(1)
+			})
+
+			s.It("replays a recorded rework back to spec without counting it", func(ctx *specs.Context) {
+				job := waitingFor(ctx, domain.CauseSpecException)
+				history := []domain.Event{
+					domain.ReworkRequested{Job: jobID, By: "pablogore", Text: "shorter", At: at(2)},
+					domain.StageEntered{Job: jobID, Stage: "spec", At: at(2)},
+				}
+
+				after := decide.Apply(job, history)
+
+				ctx.Expect(after.Stage).ToEqual("spec")
+				ctx.Expect(after.HumanReworks).ToEqual(0)
 			})
 		})
 
@@ -131,13 +170,34 @@ func TestHumanReworks(t *testing.T) {
 				ctx.Expect(evs).ToEqual(droppedBy(12))
 			})
 
-			specs.Table(s, causeRows(), func(r causeRow) string { return "refuses a third rework after " + string(r.cause) }, func(ctx *specs.Context, r causeRow) {
+			specs.Table(s, buildBound(), func(r causeRow) string { return "refuses a third rework back to build after " + string(r.cause) }, func(ctx *specs.Context, r causeRow) {
 				job := waitingFor(ctx, r.cause)
 				job.HumanReworks = 2
 
 				evs, err := decide.Decide(job, feedbackOn(job, 2), reworksPipeline(2))
 
 				ctx.Expect(err).To(specs.MatchError(decide.ErrReworkRefused))
+				ctx.Expect(evs).To(specs.BeEmpty())
+			})
+
+			specs.Table(s, specBound(), func(r causeRow) string { return "still accepts feedback back to spec after " + string(r.cause) }, func(ctx *specs.Context, r causeRow) {
+				job := waitingFor(ctx, r.cause)
+				job.HumanReworks = 2
+
+				after := reworkOnce(ctx, job, reworksPipeline(2))
+
+				ctx.Expect(after.Stage).ToEqual("spec")
+				ctx.Expect(after.HumanReworks).ToEqual(2)
+			})
+
+			s.It("refuses feedback with an unknown cause before the cap", func(ctx *specs.Context) {
+				job := waitingFor(ctx, domain.CauseEscalated)
+				job.Cause, job.HumanReworks = "mystery", 2
+
+				evs, err := decide.Decide(job, feedbackOn(job, 2), reworksPipeline(2))
+
+				ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+				ctx.Expect(err).To(specs.Not(specs.MatchError(decide.ErrReworkRefused)))
 				ctx.Expect(evs).To(specs.BeEmpty())
 			})
 		})

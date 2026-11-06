@@ -29,7 +29,7 @@ type Job struct {
 	Stage          string         `json:"stage"`
 	Round          int            `json:"round"`                     // review round, from 1
 	SpecRejections int            `json:"spec_rejections,omitempty"` // times specgate rejected the spec
-	HumanReworks   int            `json:"human_reworks,omitempty"`   // reworks a person sent from needs-human; never reset
+	HumanReworks   int            `json:"human_reworks,omitempty"`   // reworks back to build a person sent from needs-human; never reset
 	Limits         Limits         `json:"limits,omitzero"`           // limits a person overrode for this job; a nil one is the pipeline's
 	ReworksLifted  bool           `json:"reworks_lifted,omitempty"`  // a person overrode human_reworks to unlimited for this job
 	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer

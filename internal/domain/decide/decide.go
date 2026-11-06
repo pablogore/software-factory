@@ -188,9 +188,11 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			// It answered the wait, so a replay of it never acts again.
 			job.WaitSeq++
 		case domain.ReworkRequested:
-			// Only a rework from needs-human counts toward human_reworks: a
-			// comment reopening a merged job in done does not.
-			if job.Stage == domain.StageNeedsHuman {
+			// Only a rework from needs-human back to build counts toward
+			// human_reworks: a comment reopening a merged job in done does not,
+			// nor does feedback back to spec, which spec_rejections bounds. The
+			// cause is still recorded here, so old histories replay as they are.
+			if job.Stage == domain.StageNeedsHuman && !specBound(job.Cause) {
 				job.HumanReworks++
 			}
 		case domain.RoundStarted:
@@ -437,13 +439,11 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 // build with it. A missing or unknown cause fails closed, and the switch
 // refuses by default, so a future cause is never routed by accident. Once the
 // job has used every rework its human_reworks allows (a person's override for
-// this job, else the pipeline's), feedback is refused whatever the cause.
+// this job, else the pipeline's), feedback back to build is refused; feedback
+// back to spec is not, since spec_rejections already bounds that loop.
 func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
 	if err := job.Cause.Validate(); err != nil {
 		return nil, fmt.Errorf("decide: feedback in needs-human: %w", err)
-	}
-	if limit, ok := humanReworks(job, p); ok && job.HumanReworks >= limit {
-		return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
 	}
 	switch job.Cause {
 	case domain.CauseSpecEscalated:
@@ -451,6 +451,9 @@ func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 	case domain.CauseSpecException:
 		return respecified(job, e, p, false)
 	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated:
+		if limit, ok := humanReworks(job, p); ok && job.HumanReworks >= limit {
+			return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
+		}
 		return reworked(job, e, p)
 	}
 	return nil, fmt.Errorf("decide: feedback in needs-human, cause %q: %w", job.Cause, domain.ErrInvalidValue)
@@ -467,6 +470,11 @@ func reworked(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 		domain.ReworkRequested{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At},
 	}, nil
+}
+
+// specBound reports whether feedback on cause sends the job back to spec.
+func specBound(cause domain.HumanCause) bool {
+	return cause == domain.CauseSpecEscalated || cause == domain.CauseSpecException
 }
 
 // respecified sends a job back to the spec stage with the person's feedback
