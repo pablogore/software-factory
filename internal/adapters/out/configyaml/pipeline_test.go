@@ -38,7 +38,8 @@ func TestLoadPipeline(t *testing.T) {
 			data, err := os.ReadFile("../../../../pipelines/default.yaml")
 			ctx.Expect(err).To(specs.BeNil())
 
-			p, err := configyaml.LoadPipeline(data, loadedRoles(ctx))
+			roles := loadedRoles(ctx)
+			p, err := configyaml.LoadPipeline(data, roles)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(p).ToEqual(domain.Pipeline{
@@ -50,6 +51,7 @@ func TestLoadPipeline(t *testing.T) {
 					{Name: "review", Kind: domain.KindReview, Roles: reviewers, OnChanges: "build", MaxRounds: 3},
 					{Name: "approve", Kind: domain.KindApprove},
 				},
+				Roles: roles,
 			})
 		})
 
