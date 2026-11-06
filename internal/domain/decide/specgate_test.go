@@ -92,5 +92,45 @@ func TestDecideSpecgate(t *testing.T) {
 			ctx.Expect(job.SpecRejections).ToEqual(3)
 			ctx.Expect(job.Round).ToEqual(1)
 		})
+
+		s.When("the pipeline sets limits.spec_rejections", func(s *specs.Spec) {
+			rows := []limitRow{
+				{"with 1, the first rejection ends in needs-human", 1, 0,
+					[]domain.Event{rejected(1, 1), domain.NeedsHuman{Job: jobID, Reason: "spec rejected by specgate 1 times", Cause: domain.CauseSpecEscalated, At: at(1)}}},
+				{"with 5, the fourth rejection goes back to spec", 5, 3,
+					[]domain.Event{rejected(4, 1), entered("spec", 1)}},
+				{"with 5, the fifth rejection ends in needs-human", 5, 4,
+					[]domain.Event{rejected(5, 1), domain.NeedsHuman{Job: jobID, Reason: "spec rejected by specgate 5 times", Cause: domain.CauseSpecEscalated, At: at(1)}}},
+				{"with 3, the third rejection ends in needs-human as without limits", 3, 2,
+					[]domain.Event{rejected(3, 1), domain.NeedsHuman{Job: jobID, Reason: "spec rejected by specgate 3 times", Cause: domain.CauseSpecEscalated, At: at(1)}}},
+			}
+			specs.Table(s, rows, func(r limitRow) string { return r.name }, func(ctx *specs.Context, r limitRow) {
+				p := defaultPipeline()
+				p.Limits.SpecRejections = &r.limit
+
+				evs, err := decide.Decide(atSpecgate(r.rejected), specgateFailed(1), p)
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual(r.want)
+			})
+		})
+
+		s.It("with limits but no spec_rejections, the third rejection ends in needs-human", func(ctx *specs.Context) {
+			p := defaultPipeline()
+			two := 2
+			p.Limits.MaxRounds = &two
+
+			evs, err := decide.Decide(atSpecgate(2), specgateFailed(1), p)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(evs).ToEqual([]domain.Event{rejected(3, 1), domain.NeedsHuman{Job: jobID, Reason: "spec rejected by specgate 3 times", Cause: domain.CauseSpecEscalated, At: at(1)}})
+		})
 	})
+}
+
+type limitRow struct {
+	name     string
+	limit    int
+	rejected int
+	want     []domain.Event
 }
