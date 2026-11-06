@@ -28,3 +28,21 @@ func (k Kind) Validate() error {
 	}
 	return fmt.Errorf("%w: kind %q", ErrInvalidValue, k)
 }
+
+// DefaultRole is the role a stage of kind k takes when it lists none, named
+// like the current factory's agents. Review and task have no default: a
+// review lists its reviewers and a task is always a role of its own.
+func DefaultRole(k Kind) (string, bool) {
+	switch k {
+	case KindIntake:
+		return "intake", true
+	case KindSpec:
+		return "spec-writer", true
+	case KindBuild:
+		return "builder", true
+	case KindApprove:
+		return "approver", true
+	default:
+		return "", false
+	}
+}

@@ -50,6 +50,12 @@ func TestPipeline(t *testing.T) {
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
 
+		s.It("accepts a pipeline with no approve stage", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Stages = p.Stages[:3]
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+		})
+
 		s.It("accepts a review that leaves out max_rounds", func(ctx *specs.Context) {
 			p := validPipeline()
 			p.Stages[2].MaxRounds = nil
@@ -111,6 +117,18 @@ func TestPipeline(t *testing.T) {
 				{"names a rejected stage of kind spec", func(p *domain.Pipeline) {
 					p.Stages = append(p.Stages, domain.Stage{Name: "rejected", Kind: domain.KindSpec})
 				}, domain.ErrInvalidValue, "stage rejected: invalid value: stage name is reserved"},
+				{"names a needs-human stage of kind approve", func(p *domain.Pipeline) {
+					p.Stages[3].Name = "needs-human"
+				}, domain.ErrInvalidValue, "stage needs-human: invalid value: stage name is reserved"},
+				{"names a done stage of kind approve", func(p *domain.Pipeline) {
+					p.Stages[3].Name = "done"
+				}, domain.ErrInvalidValue, "stage done: invalid value: stage name is reserved"},
+				{"names an approve stage with no review stage", func(p *domain.Pipeline) {
+					p.Stages = []domain.Stage{p.Stages[0], p.Stages[1], p.Stages[3]}
+				}, domain.ErrInvalidValue, "stage approve: invalid value: approve stage has no review stage before it"},
+				{"names an approve stage that comes before review", func(p *domain.Pipeline) {
+					p.Stages[2], p.Stages[3] = p.Stages[3], p.Stages[2]
+				}, domain.ErrInvalidValue, "stage approve: invalid value: approve stage has no review stage before it"},
 				{"names spec_rejections 0", func(p *domain.Pipeline) {
 					p.Limits.SpecRejections = ptr(0)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: spec_rejections 0, want at least 1"},
@@ -150,6 +168,62 @@ func TestPipeline(t *testing.T) {
 				ctx.Expect(err).To(specs.MatchError(r.sentinel))
 				ctx.Expect(err.Error()).ToEqual(r.want)
 			})
+		})
+	})
+}
+
+type defaultRoleRow struct {
+	name  string
+	stage domain.Stage
+	want  []string
+}
+
+func TestPipelineWithDefaultRoles(t *testing.T) {
+	specs.Describe(t, "Pipeline.WithDefaultRoles", func(s *specs.Spec) {
+		rows := []defaultRoleRow{
+			{"gives a roleless intake the intake role", domain.Stage{Name: "intake", Kind: domain.KindIntake}, []string{"intake"}},
+			{"gives a roleless spec the spec-writer role", domain.Stage{Name: "spec", Kind: domain.KindSpec}, []string{"spec-writer"}},
+			{"gives a roleless build the builder role", domain.Stage{Name: "build", Kind: domain.KindBuild}, []string{"builder"}},
+			{"gives a roleless approve the approver role", domain.Stage{Name: "approve", Kind: domain.KindApprove}, []string{"approver"}},
+			{"keeps the roles a stage lists", domain.Stage{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder-go"}}, []string{"builder-go"}},
+			{"keeps the roles a task lists", domain.Stage{Name: "changelog", Kind: domain.KindTask, Roles: []string{"scribe"}}, []string{"scribe"}},
+		}
+		specs.Table(s, rows, func(r defaultRoleRow) string { return r.name }, func(ctx *specs.Context, r defaultRoleRow) {
+			p := domain.Pipeline{Name: "p", Stages: []domain.Stage{r.stage}}
+
+			got, err := p.WithDefaultRoles()
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got.Stages[0].Roles).ToEqual(r.want)
+		})
+
+		s.It("leaves the pipeline it was called on unchanged", func(ctx *specs.Context) {
+			p := validPipeline()
+
+			_, err := p.WithDefaultRoles()
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p).ToEqual(validPipeline())
+		})
+
+		s.It("names a task stage that lists no roles, since task has no default", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Stages = append(p.Stages, domain.Stage{Name: "changelog", Kind: domain.KindTask})
+
+			_, err := p.WithDefaultRoles()
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+			ctx.Expect(err.Error()).ToEqual("stage changelog: missing field: kind task lists no roles and has no default role")
+		})
+
+		s.It("names a review stage that lists no roles, since review has no default", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Stages[2].Roles = nil
+
+			_, err := p.WithDefaultRoles()
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+			ctx.Expect(err.Error()).ToEqual("stage review: missing field: kind review lists no roles and has no default role")
 		})
 	})
 }

@@ -161,9 +161,10 @@ func (p Pipeline) Label() string {
 
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
 // the pipeline: exactly one build stage, stage names are unique and not
-// reserved, every review goes back to an earlier stage, lists roles and allows
-// at least one round and at most the max_rounds cap when it sets max_rounds,
-// every role a stage lists exists, and every limit set is between 1 and its cap.
+// reserved, every approve comes after some review, every review goes back to an
+// earlier stage, lists roles and allows at least one round and at most the
+// max_rounds cap when it sets max_rounds, every role a stage lists exists, and
+// every limit set is between 1 and its cap.
 func (p Pipeline) Validate(roles []Role) error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", p.Label(), err)
@@ -180,6 +181,16 @@ func (p Pipeline) Validate(roles []Role) error {
 	}
 	if builds != 1 {
 		return fmt.Errorf("%s: %w: %d build stages, want exactly 1", p.Label(), ErrInvalidValue, builds)
+	}
+	// An approve with no review before it would sign off unreviewed work.
+	reviewed := false
+	for _, st := range p.Stages {
+		if st.Kind == KindReview {
+			reviewed = true
+		}
+		if st.Kind == KindApprove && !reviewed {
+			return fmt.Errorf("stage %s: %w: approve stage has no review stage before it", st.Name, ErrInvalidValue)
+		}
 	}
 	seen := make(map[string]bool, len(p.Stages))
 	for _, st := range p.Stages {
@@ -221,4 +232,24 @@ func (p Pipeline) Validate(roles []Role) error {
 		seen[st.Name] = true
 	}
 	return nil
+}
+
+// WithDefaultRoles returns p with every stage that lists no roles given the
+// DefaultRole of its kind, so Decide takes a stage's results only from its own
+// roles. A stage whose kind has no default is an error that names it. The
+// default role needs no role file: none exists for it yet.
+func (p Pipeline) WithDefaultRoles() (Pipeline, error) {
+	stages := slices.Clone(p.Stages)
+	for i, st := range stages {
+		if len(st.Roles) > 0 {
+			continue
+		}
+		role, ok := DefaultRole(st.Kind)
+		if !ok {
+			return Pipeline{}, fmt.Errorf("stage %s: %w: kind %s lists no roles and has no default role", st.Name, ErrMissingField, st.Kind)
+		}
+		stages[i].Roles = []string{role}
+	}
+	p.Stages = stages
+	return p, nil
 }
