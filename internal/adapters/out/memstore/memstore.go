@@ -19,14 +19,19 @@ import (
 // encoded, so a caller never shares slices with what was saved and both
 // refuse the same unknown events.
 type Store struct {
-	mu     sync.Mutex
-	jobs   map[domain.JobID][]byte
-	events map[domain.JobID][]eventjson.Envelope
+	mu       sync.Mutex
+	jobs     map[domain.JobID][]byte
+	versions map[domain.JobID]ports.Version
+	events   map[domain.JobID][]eventjson.Envelope
 }
 
 // New returns an empty store.
 func New() *Store {
-	return &Store{jobs: map[domain.JobID][]byte{}, events: map[domain.JobID][]eventjson.Envelope{}}
+	return &Store{
+		jobs:     map[domain.JobID][]byte{},
+		versions: map[domain.JobID]ports.Version{},
+		events:   map[domain.JobID][]eventjson.Envelope{},
+	}
 }
 
 // Create implements ports.JobStore.
@@ -41,47 +46,52 @@ func (s *Store) Create(_ context.Context, job domain.Job) error {
 		return fmt.Errorf("memstore: encode job %q: %w", job.ID, err)
 	}
 	s.jobs[job.ID] = data
+	s.versions[job.ID] = 1
 	return nil
 }
 
 // Load implements ports.JobStore.
-func (s *Store) Load(_ context.Context, id domain.JobID) (domain.Job, error) {
+func (s *Store) Load(_ context.Context, id domain.JobID) (domain.Job, ports.Version, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, ok := s.jobs[id]
 	if !ok {
-		return domain.Job{}, fmt.Errorf("memstore: %q: %w", id, ports.ErrJobNotFound)
+		return domain.Job{}, 0, fmt.Errorf("memstore: %q: %w", id, ports.ErrJobNotFound)
 	}
 	var job domain.Job
 	if err := json.Unmarshal(data, &job); err != nil {
-		return domain.Job{}, fmt.Errorf("memstore: decode job %q: %w", id, err)
+		return domain.Job{}, 0, fmt.Errorf("memstore: decode job %q: %w", id, err)
 	}
-	return job, nil
+	return job, s.versions[id], nil
 }
 
 // Apply implements ports.JobStore. Everything is encoded before anything is
 // kept, so a failure keeps nothing.
-func (s *Store) Apply(_ context.Context, job domain.Job, evs []domain.Event) error {
+func (s *Store) Apply(_ context.Context, job domain.Job, v ports.Version, evs []domain.Event) (ports.Version, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[job.ID]; !ok {
-		return fmt.Errorf("memstore: %q: %w", job.ID, ports.ErrJobNotFound)
+		return 0, fmt.Errorf("memstore: %q: %w", job.ID, ports.ErrJobNotFound)
+	}
+	if cur := s.versions[job.ID]; cur != v {
+		return 0, fmt.Errorf("memstore: %q loaded at version %d, now %d: %w", job.ID, v, cur, ports.ErrVersionConflict)
 	}
 	data, err := json.Marshal(decide.Apply(job, evs))
 	if err != nil {
-		return fmt.Errorf("memstore: encode job %q: %w", job.ID, err)
+		return 0, fmt.Errorf("memstore: encode job %q: %w", job.ID, err)
 	}
 	envs := make([]eventjson.Envelope, 0, len(evs))
 	for _, ev := range evs {
 		env, err := eventjson.Encode(ev)
 		if err != nil {
-			return fmt.Errorf("memstore: job %q: %w", job.ID, err)
+			return 0, fmt.Errorf("memstore: job %q: %w", job.ID, err)
 		}
 		envs = append(envs, env)
 	}
 	s.jobs[job.ID] = data
+	s.versions[job.ID] = v + 1
 	s.events[job.ID] = append(s.events[job.ID], envs...)
-	return nil
+	return v + 1, nil
 }
 
 // History implements ports.EventLog.

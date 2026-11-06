@@ -33,13 +33,13 @@ func TestStoreDatabase(t *testing.T) {
 				BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 			ctx.Expect(err).To(specs.BeNil())
 
-			err = st.Apply(bg, job, []domain.Event{
+			_, err = st.Apply(bg, job, 1, []domain.Event{
 				domain.StageEntered{Job: job.ID, Stage: domain.StageGate, At: at},
 				domain.GatePassed{Job: job.ID, At: at},
 			})
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-			got, err := st.Load(bg, job.ID)
+			got, _, err := st.Load(bg, job.ID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).ToEqual(job)
 			hist, err := st.History(bg, job.ID)
