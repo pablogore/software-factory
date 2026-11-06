@@ -337,6 +337,49 @@ func (MergeOverridden) EventName() string { return "MergeOverridden" }
 // JobID implements Event.
 func (e MergeOverridden) JobID() JobID { return e.Job }
 
+// LimitOverrideRequested asks to change one retry limit for this job only,
+// such as one more human rework, without changing the pipeline. Like
+// OverrideRequested, the event source decides Allowed and AuthorKind, and
+// decide.Decide only acts on an allowed person; By names that person. Limit
+// is one of LimitKeys and Value is the new value as written ("4" or
+// "unlimited"). WaitSeq is the job's WaitSeq when it was asked: it acts only
+// on that needs-human wait.
+type LimitOverrideRequested struct {
+	Job        JobID      `json:"job"`
+	By         string     `json:"by"`
+	AuthorKind AuthorKind `json:"author_kind"`
+	Allowed    bool       `json:"allowed"`
+	Limit      string     `json:"limit"`
+	Value      string     `json:"value"`
+	WaitSeq    int        `json:"wait_seq"`
+	At         time.Time  `json:"at"`
+}
+
+// EventName implements Event.
+func (LimitOverrideRequested) EventName() string { return "LimitOverrideRequested" }
+
+// JobID implements Event.
+func (e LimitOverrideRequested) JobID() JobID { return e.Job }
+
+// LimitOverridden is the job's history entry for an accepted limit override:
+// who changed which limit to what, and when. Value is the new limit, or 0
+// with Unlimited for human_reworks lifted. It answers the wait it was asked
+// for, so the job waits in needs-human again under a new WaitSeq.
+type LimitOverridden struct {
+	Job       JobID     `json:"job"`
+	By        string    `json:"by"`
+	Limit     string    `json:"limit"`
+	Value     int       `json:"value,omitempty"`
+	Unlimited bool      `json:"unlimited,omitempty"`
+	At        time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (LimitOverridden) EventName() string { return "LimitOverridden" }
+
+// JobID implements Event.
+func (e LimitOverridden) JobID() JobID { return e.Job }
+
 // StopRequested asks to stop the job for good. Like HumanApproved, the event
 // source vouches that an allowed person sent it; By names that person.
 type StopRequested struct {

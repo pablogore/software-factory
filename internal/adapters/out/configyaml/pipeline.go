@@ -104,9 +104,6 @@ func parseStage(n *yaml.Node) (domain.Stage, error) {
 	}
 }
 
-// limitKeys are the keys a limits block may set.
-var limitKeys = []string{"spec_rejections", "human_reworks", "triage_retries", "max_rounds"}
-
 // parseLimits reads the limits block. A value must be a YAML integer, and
 // human_reworks may also be "unlimited"; Limits.Validate checks the range.
 // Each value is decoded on its own so a bad one is named by its key.
@@ -121,7 +118,7 @@ func parseLimits(n *yaml.Node) (domain.Limits, error) {
 	if n.Kind != yaml.MappingNode {
 		return l, fmt.Errorf("%w: line %d: want a map of limits", domain.ErrInvalidValue, n.Line)
 	}
-	if err := knownKeys(n, limitKeys...); err != nil {
+	if err := knownKeys(n, domain.LimitKeys...); err != nil {
 		return l, err
 	}
 	for i := 0; i < len(n.Content); i += 2 {
@@ -129,7 +126,7 @@ func parseLimits(n *yaml.Node) (domain.Limits, error) {
 		if v.Kind == yaml.AliasNode {
 			v = v.Alias
 		}
-		if key == "human_reworks" && v.Kind == yaml.ScalarNode && v.Tag == "!!str" && v.Value == "unlimited" {
+		if key == "human_reworks" && v.Kind == yaml.ScalarNode && v.Tag == "!!str" && v.Value == domain.Unlimited {
 			continue
 		}
 		var x int
