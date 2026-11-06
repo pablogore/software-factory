@@ -38,12 +38,15 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 }
 
 // replanned starts the next slice on CONTINUE, right away with checkpoint
-// auto and after a person's OK otherwise. DONE and NEEDS-HUMAN come in E01.6 S2.
+// auto and after a person's OK otherwise. DONE closes the initiative and
+// NEEDS-HUMAN stops it for a person; neither starts a slice.
 func replanned(in domain.Initiative, e domain.ReplanSubmitted) ([]domain.Event, error) {
 	switch e.Status {
 	case domain.ReplanContinue:
-	case domain.ReplanDone, domain.ReplanNeedsHuman:
-		return nil, fmt.Errorf("%w: replan %s for initiative %q", ErrUnsupported, e.Status, in.ID)
+	case domain.ReplanDone:
+		return []domain.Event{domain.InitiativeEnded{Job: e.Job, Initiative: in.ID, At: e.At}}, nil
+	case domain.ReplanNeedsHuman:
+		return []domain.Event{domain.InitiativeNeedsHumanRaised{Job: e.Job, Initiative: in.ID, Reason: e.Reason, At: e.At}}, nil
 	default:
 		return nil, fmt.Errorf("decide: replan status %q: %w", e.Status, domain.ErrInvalidValue)
 	}
@@ -57,9 +60,13 @@ func replanned(in domain.Initiative, e domain.ReplanSubmitted) ([]domain.Event, 
 }
 
 // ApplyInitiative folds events into in and returns the new initiative.
-// Events of other initiatives, and job events, leave it as it is.
+// Events of other initiatives, and job events, leave it as it is, and so
+// does anything after it closed: a closed initiative never reopens.
 func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative {
 	for _, ev := range evs {
+		if in.Stage == domain.InitiativeClosed {
+			return in
+		}
 		switch e := ev.(type) {
 		case domain.ReplanRequested:
 			if e.Initiative == in.ID {
@@ -72,6 +79,14 @@ func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative
 		case domain.NextSliceRequested:
 			if e.Initiative == in.ID {
 				in.Stage = domain.InitiativeActive
+			}
+		case domain.InitiativeEnded:
+			if e.Initiative == in.ID {
+				in.Stage = domain.InitiativeClosed
+			}
+		case domain.InitiativeNeedsHumanRaised:
+			if e.Initiative == in.ID {
+				in.Stage, in.Reason = domain.InitiativeNeedsHuman, e.Reason
 			}
 		}
 	}

@@ -17,21 +17,25 @@ const (
 )
 
 // Stages of an initiative: a slice job running, the replan after a slice
-// merged, and the wait for a person's OK before the next slice.
+// merged, the wait for a person's OK before the next slice, closed for good
+// after a replan DONE, and stopped for a person after a replan NEEDS-HUMAN.
 const (
 	InitiativeActive     = "active"
 	InitiativeReplan     = "replan"
 	InitiativeCheckpoint = "checkpoint"
+	InitiativeClosed     = "closed"
+	InitiativeNeedsHuman = "needs-human"
 )
 
 // Initiative is the state decide keeps for an initiative. Job is the slice
 // job it last heard of: the one whose merge is being replanned or waits at
-// the checkpoint.
+// the checkpoint. Reason is why it needs a person, as the replan wrote it.
 type Initiative struct {
 	ID         InitiativeID `json:"id"`
 	Checkpoint Checkpoint   `json:"checkpoint,omitempty"`
 	Stage      string       `json:"stage"`
 	Job        JobID        `json:"job,omitempty"`
+	Reason     string       `json:"reason,omitempty"`
 }
 
 // ReplanStatus is what the replan decided after a slice merged.
@@ -59,11 +63,13 @@ func (ReplanRequested) EventName() string { return "ReplanRequested" }
 func (e ReplanRequested) JobID() JobID { return e.Job }
 
 // ReplanSubmitted records the replan's outcome after Job merged. It is its
-// own event, not a role result, so no new kind or schema is needed.
+// own event, not a role result, so no new kind or schema is needed. Reason
+// is the replan agent's own words, kept when it asks for a person.
 type ReplanSubmitted struct {
 	Job        JobID        `json:"job"`
 	Initiative InitiativeID `json:"initiative"`
 	Status     ReplanStatus `json:"status"`
+	Reason     string       `json:"reason,omitempty"`
 	At         time.Time    `json:"at"`
 }
 
@@ -100,3 +106,32 @@ func (NextSliceRequested) EventName() string { return "NextSliceRequested" }
 
 // JobID implements Event.
 func (e NextSliceRequested) JobID() JobID { return e.Job }
+
+// InitiativeEnded records that the replan after Job said DONE: the
+// initiative is closed and no slice follows.
+type InitiativeEnded struct {
+	Job        JobID        `json:"job"`
+	Initiative InitiativeID `json:"initiative"`
+	At         time.Time    `json:"at"`
+}
+
+// EventName implements Event.
+func (InitiativeEnded) EventName() string { return "InitiativeEnded" }
+
+// JobID implements Event.
+func (e InitiativeEnded) JobID() JobID { return e.Job }
+
+// InitiativeNeedsHumanRaised records that the replan after Job said NEEDS-HUMAN:
+// the initiative stops for a person, for the replan's Reason.
+type InitiativeNeedsHumanRaised struct {
+	Job        JobID        `json:"job"`
+	Initiative InitiativeID `json:"initiative"`
+	Reason     string       `json:"reason"`
+	At         time.Time    `json:"at"`
+}
+
+// EventName implements Event.
+func (InitiativeNeedsHumanRaised) EventName() string { return "InitiativeNeedsHumanRaised" }
+
+// JobID implements Event.
+func (e InitiativeNeedsHumanRaised) JobID() JobID { return e.Job }
