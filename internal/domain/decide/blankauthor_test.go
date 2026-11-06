@@ -50,7 +50,7 @@ func humanRoutes() []route {
 	review := newJob()
 	review.Stage = "review"
 	checkpoint := threeSlices(domain.CheckpointEverySlice)
-	checkpoint.Stage = domain.InitiativeCheckpoint
+	checkpoint.Stage, checkpoint.WaitSeq = domain.InitiativeCheckpoint, 1
 	msg := messageBy(message(domain.AuthorPerson, true, 2))
 	return []route{
 		{"a stop", onJob(review, stopBy)},
@@ -170,7 +170,7 @@ func TestBlankAuthor(t *testing.T) {
 			msg := messageBy(message(domain.AuthorPerson, true, 2))
 			drop := messageBy(direction(domain.AuthorPerson, true, 2))
 			checkpoint := threeSlices(domain.CheckpointEverySlice)
-			checkpoint.Stage = domain.InitiativeCheckpoint
+			checkpoint.Stage, checkpoint.WaitSeq = domain.InitiativeCheckpoint, 1
 			firsts := []struct {
 				name string
 				run  signedBy
