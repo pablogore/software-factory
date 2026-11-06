@@ -61,6 +61,15 @@ func (p Pipeline) SpecRejections() int {
 	return *p.Limits.SpecRejections
 }
 
+// HumanReworks is how many reworks a person may send from needs-human:
+// limits.human_reworks, and false when it is not set (unlimited).
+func (p Pipeline) HumanReworks() (int, bool) {
+	if p.Limits.HumanReworks == nil {
+		return 0, false
+	}
+	return *p.Limits.HumanReworks, true
+}
+
 // Stage is one step of a pipeline. Its roles run in parallel; a review stage
 // says where to go back on CHANGES and how many rounds it allows.
 type Stage struct {

@@ -49,6 +49,13 @@ var ErrOverrideRefused = errors.New("override refused")
 // stage. Decide returns no events with it, so nothing changes.
 var ErrStaleWait = errors.New("action for another wait")
 
+// ErrReworkRefused means a person's feedback in needs-human would be one more
+// rework than the pipeline's limits.human_reworks allows, so a job that keeps
+// getting stuck ends with a final decision instead of looping. The error names
+// the limit. Approve, reject (a direction) and stop still act on the job.
+// Decide returns no events with it, so the job stays in needs-human.
+var ErrReworkRefused = errors.New("rework refused")
+
 // Decide returns the events that follow ev for job in pipeline p. It never
 // reads a clock: every event it returns carries the time of ev.
 func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event, error) {
@@ -161,6 +168,12 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Changes = append(slices.Clip(job.Changes), e.Role)
 		case domain.SpecRejected:
 			job.SpecRejections = e.Rejections
+		case domain.ReworkRequested:
+			// Only a rework from needs-human counts toward human_reworks: a
+			// comment reopening a merged job in done does not.
+			if job.Stage == domain.StageNeedsHuman {
+				job.HumanReworks++
+			}
 		case domain.RoundStarted:
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
@@ -347,10 +360,15 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 // length exception the spec is rewritten with it (not read from the rejection
 // count, which can be stale), and after every other cause the job goes back to
 // build with it. A missing or unknown cause fails closed, and the switch
-// refuses by default, so a future cause is never routed by accident.
+// refuses by default, so a future cause is never routed by accident. Once the
+// job has used every rework limits.human_reworks allows, feedback is refused
+// whatever the cause.
 func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
 	if err := job.Cause.Validate(); err != nil {
 		return nil, fmt.Errorf("decide: feedback in needs-human: %w", err)
+	}
+	if limit, ok := p.HumanReworks(); ok && job.HumanReworks >= limit {
+		return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
 	}
 	switch job.Cause {
 	case domain.CauseSpecEscalated:
