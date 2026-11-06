@@ -74,3 +74,18 @@ As a operador de la fábrica, I want que los issues se tomen en orden, respetand
 2. Given un orden explícito (prioridad del product owner u orden del tech-lead), when hay slots libres, then se toma el siguiente según ese orden.
 3. Given un job que choca contra una pared detectada por el sistema (último gate fallido, rondas agotadas, BLOCKED, merge fallido), when ocurre, then corre primero el rol de triage, que devuelve RETRY (una vez, con instrucciones para el builder) o ESCALATE (con una pregunta cerrada).
 4. Given la paridad con `factory/bin/job queue` y el triage de `SKILL.md` en `main`, when se comparan los casos, then el comportamiento es el mismo o la diferencia queda explicada en el PR.
+
+---
+STORY: Modo de corrida: frenar entre issues, resumen y topes
+DEPENDS: 4, 5
+
+As a operador de la fábrica, I want que la fábrica frene al terminar cada issue y me muestre un resumen con el siguiente recomendado, o que corra desatendida con topes, so that controle el gasto sin tener que pedirle a mano que pare.
+
+## Acceptance criteria
+1. Given el modo por defecto, when una iniciativa termina (DONE), un job pasa a needs-human o needs-info, o un issue se rechaza, then la fábrica no arranca trabajo nuevo; lo que ya está corriendo termina, y los slices de una misma iniciativa siguen según su checkpoint sin frenar.
+2. Given ese freno, when ocurre, then se publica en el canal de origen y en `factory inbox` un resumen con: issue, PRs, estado final, slices y rondas, costo real en USD, duración, el siguiente issue recomendado con una línea de por qué (dependencias, riesgo, valor) y las opciones continuar, elegir otro, replan o parar.
+3. Given `factory run --auto [--max-jobs N] [--max-usd N]`, when corre, then no frena entre issues; se detiene al llegar a N issues terminados o a USD N gastados en la corrida, y frena igual ante needs-human o needs-info.
+4. Given un issue que pasa de 5 slices o de USD 8 acumulados (configurables), when ocurre, then ese issue frena con el motivo aunque esté en modo `--auto`; los demás siguen.
+
+## Notes
+Viene de la fábrica actual, donde se agregó a `SKILL.md` después de tener que pedir "cuando termines esta ronda, frená" a mano. El tope de rondas no alcanza: el bucle de E01.2b fue de slices agregados por el replan, no de rondas.

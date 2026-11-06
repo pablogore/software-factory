@@ -1,6 +1,6 @@
 # Backlog de factoryd
 
-El backlog completo de la nueva arquitectura, en el formato del product-owner de la fábrica (`EPIC:` / `STORY:` / `DEPENDS:`), cargado en GitHub como 11 épicas (#12–#22) y 61 historias (#23–#83), todas con la etiqueta `factoryd`.
+El backlog completo de la nueva arquitectura, en el formato del product-owner de la fábrica (`EPIC:` / `STORY:` / `DEPENDS:`), cargado en GitHub como 11 épicas (#12–#22) y 62 historias (#23–#83 y #103), todas con la etiqueta `factoryd`. La fábrica sumó #97 (seguimiento de E01.2) por su cuenta.
 
 | Archivo | Épica | Issue |
 |---|---|---|
