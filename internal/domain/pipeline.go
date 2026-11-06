@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"slices"
+	"strconv"
 )
 
 // ReservedStageNames are the stages a job is in outside its pipeline, plus its
@@ -36,6 +37,35 @@ type Limits struct {
 	HumanReworks   *int `json:"human_reworks,omitempty"`
 	TriageRetries  *int `json:"triage_retries,omitempty"`
 	MaxRounds      *int `json:"max_rounds,omitempty"`
+}
+
+// LimitKeys are the retry limits a pipeline's limits block may set and a
+// person may override for one job.
+var LimitKeys = []string{"spec_rejections", "human_reworks", "triage_retries", "max_rounds"}
+
+// Unlimited is the value that lifts human_reworks, the only limit that may
+// be unlimited.
+const Unlimited = "unlimited"
+
+// ParseLimit reads one limit as a person writes it: a known key and a whole
+// number of 1 or more, or Unlimited for human_reworks, as in a pipeline's
+// limits block. The error names the key.
+func ParseLimit(key, value string) (n int, unlimited bool, err error) {
+	if !slices.Contains(LimitKeys, key) {
+		return 0, false, fmt.Errorf("%w: unknown key %q", ErrInvalidValue, key)
+	}
+	if key == "human_reworks" && value == Unlimited {
+		return 0, true, nil
+	}
+	n, err = strconv.Atoi(value)
+	if err != nil || n < 1 {
+		want := "want a whole number of 1 or more"
+		if key == "human_reworks" {
+			want += " or " + Unlimited
+		}
+		return 0, false, fmt.Errorf("%w: %s %q, %s", ErrInvalidValue, key, value, want)
+	}
+	return n, false, nil
 }
 
 // Validate checks that every limit that is set is at least 1, naming the key.
