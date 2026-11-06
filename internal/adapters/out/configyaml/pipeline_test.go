@@ -93,6 +93,21 @@ func TestLoadPipeline(t *testing.T) {
 					`parse pipeline: invalid value: line 2: unknown key "stage"`,
 				},
 				{
+					"rejects an empty pipeline file",
+					"",
+					"parse pipeline: invalid value: file is empty",
+				},
+				{
+					"leaves no blank for a stage error in a pipeline without a name",
+					"stages:\n  - build\n  - {review: {on_changes: build}, approve: {}}\n",
+					"pipeline: stages[1]: invalid value: line 3: want a stage name or a one-key map",
+				},
+				{
+					"leaves no blank for a pipeline without a name and no build stage",
+					"stages: [intake, approve]\n",
+					"pipeline: invalid value: 0 build stages, want exactly 1",
+				},
+				{
 					"names the review stage with max_rounds 0",
 					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n      max_rounds: 0\n",
 					"stage review: invalid value: max_rounds 0, want at least 1",
@@ -138,6 +153,8 @@ func TestLoadPipeline(t *testing.T) {
 			}, func(ctx *specs.Context, r brokenRow) {
 				_, err := configyaml.LoadPipeline([]byte(r.yaml), loadedRoles(ctx))
 
+				// Printed so `go test -v` shows the operator's message.
+				ctx.Testing().Log(err)
 				ctx.Expect(err == nil).ToEqual(false)
 				ctx.Expect(err.Error()).ToEqual(r.want)
 			})

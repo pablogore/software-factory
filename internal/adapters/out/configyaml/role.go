@@ -85,8 +85,13 @@ func LoadRole(data []byte) (domain.Role, error) {
 // alwaysRerun reads always_rerun: off when the key is absent, otherwise it
 // must be the YAML boolean true or false.
 func alwaysRerun(n *yaml.Node) (bool, error) {
-	if n.Kind == 0 {
+	switch n.Kind {
+	case 0:
 		return false, nil
+	case yaml.SequenceNode:
+		return false, fmt.Errorf("%w: line %d: always_rerun is a list, want true or false", domain.ErrInvalidValue, n.Line)
+	case yaml.MappingNode:
+		return false, fmt.Errorf("%w: line %d: always_rerun is a map, want true or false", domain.ErrInvalidValue, n.Line)
 	}
 	var v bool
 	if n.Kind != yaml.ScalarNode || n.Tag != "!!bool" || n.Decode(&v) != nil {
@@ -96,31 +101,92 @@ func alwaysRerun(n *yaml.Node) (bool, error) {
 }
 
 // decodeStrict decodes data into v and fails on a key v doesn't declare, so a
-// typo is an error instead of a silently missing setting. Top-level keys are
-// checked first so their error names the key, not the Go type behind it.
+// typo is an error instead of a silently missing setting. Keys are checked on
+// the node tree first so their error names the key, not the Go type behind it.
 func decodeStrict(data []byte, v any) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return err
 	}
-	if len(doc.Content) == 1 {
-		if err := knownKeys(doc.Content[0], yamlKeys(v)...); err != nil {
-			return err
-		}
+	// The decoder reports an empty file as a bare EOF; a lone `---` holds only
+	// a null and would load as a role or pipeline with every field blank.
+	if len(doc.Content) == 0 || doc.Content[0].Tag == "!!null" {
+		return fmt.Errorf("%w: file is empty", domain.ErrInvalidValue)
+	}
+	if err := checkKeys(doc.Content[0], reflect.TypeOf(v).Elem()); err != nil {
+		return err
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	return dec.Decode(v)
 }
 
-// yamlKeys lists the yaml keys of the struct v points to, so the top-level
-// check can't drift from the fields decodeStrict decodes into.
-func yamlKeys(v any) []string {
-	t := reflect.TypeOf(v).Elem()
-	keys := make([]string, 0, t.NumField())
-	for i := range t.NumField() {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
-		keys = append(keys, name)
+var nodeType = reflect.TypeFor[yaml.Node]()
+
+// checkKeys walks n alongside the struct type t and fails on the first map key
+// t doesn't declare, at any depth. Fields kept as yaml.Node are checked by
+// their own parser.
+func checkKeys(n *yaml.Node, t reflect.Type) error {
+	// An alias decodes as the node it names, so that node is what gets checked.
+	if n.Kind == yaml.AliasNode {
+		n = n.Alias
 	}
-	return keys
+	switch {
+	case t == nodeType:
+		return nil
+	case t.Kind() == reflect.Slice && n.Kind == yaml.SequenceNode:
+		for _, item := range n.Content {
+			if err := checkKeys(item, t.Elem()); err != nil {
+				return err
+			}
+		}
+	case t.Kind() == reflect.Struct && n.Kind == yaml.MappingNode:
+		for i := 0; i < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			if k.Tag == "!!merge" {
+				if err := checkMerge(v, t); err != nil {
+					return err
+				}
+				continue
+			}
+			ft := fieldType(t, k.Value)
+			if ft == nil {
+				return fmt.Errorf("%w: line %d: unknown key %q", domain.ErrInvalidValue, k.Line, k.Value)
+			}
+			if err := checkKeys(v, ft); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkMerge checks the maps a merge key (`<<: *x` or `<<: [*x, *y]`) pulls
+// in against t, the struct they are merged into.
+func checkMerge(v *yaml.Node, t reflect.Type) error {
+	if v.Kind != yaml.SequenceNode {
+		return checkKeys(v, t)
+	}
+	for _, item := range v.Content {
+		if err := checkKeys(item, t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fieldType is the type of the field of struct type t with yaml key key, or
+// nil when t declares no such key.
+func fieldType(t reflect.Type, key string) reflect.Type {
+	for i := range t.NumField() {
+		if yamlKey(t.Field(i)) == key {
+			return t.Field(i).Type
+		}
+	}
+	return nil
+}
+
+func yamlKey(f reflect.StructField) string {
+	name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+	return name
 }

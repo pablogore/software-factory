@@ -29,6 +29,15 @@ type Stage struct {
 	MaxRounds int      `json:"max_rounds,omitempty"`
 }
 
+// Label names the pipeline in errors: "pipeline <name>", or just "pipeline"
+// when it has no name, so the message never shows a blank name.
+func (p Pipeline) Label() string {
+	if p.Name == "" {
+		return "pipeline"
+	}
+	return "pipeline " + p.Name
+}
+
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
 // the pipeline: exactly one build stage, stage names are unique and not
 // reserved, every review goes back to an earlier stage, lists roles and allows
@@ -45,7 +54,7 @@ func (p Pipeline) Validate(roles []Role) error {
 		}
 	}
 	if builds != 1 {
-		return fmt.Errorf("pipeline %s: %w: %d build stages, want exactly 1", p.Name, ErrInvalidValue, builds)
+		return fmt.Errorf("%s: %w: %d build stages, want exactly 1", p.Label(), ErrInvalidValue, builds)
 	}
 	seen := make(map[string]bool, len(p.Stages))
 	for _, st := range p.Stages {
