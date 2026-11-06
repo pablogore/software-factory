@@ -1,6 +1,7 @@
 package decide_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -53,6 +54,35 @@ type exitRow struct {
 	ev   domain.Event
 }
 
+// okRow is a person's OK on a job that waits for one cause: the events it
+// leads to, or the error it is refused with.
+type okRow struct {
+	name  string
+	cause domain.HumanCause
+	evs   []domain.Event
+	err   error
+}
+
+type causeOKRow struct {
+	name  string
+	cause domain.HumanCause
+	err   error
+}
+
+// waitingFor puts a slice job in needs-human for cause, the way the
+// causeRow that records it does.
+func waitingFor(ctx *specs.Context, cause domain.HumanCause) domain.Job {
+	rows := causeRows()
+	i := slices.IndexFunc(rows, func(r causeRow) bool { return r.cause == cause })
+	ctx.Expect(i).To(specs.Not(specs.Equal(-1)))
+	return stoppedFor(ctx, rows[i])
+}
+
+// okMoves reports whether a person's OK moves a job that waits for cause.
+func okMoves(cause domain.HumanCause) bool {
+	return cause == domain.CauseEscalated || cause == domain.CauseChanges || cause == domain.CauseSpecException
+}
+
 type applyExitRow struct {
 	name   string
 	ev     domain.Event
@@ -87,18 +117,20 @@ func TestNeedsHumanCause(t *testing.T) {
 					causes = append(causes, r.cause)
 				}
 
-				ctx.Expect(causes).ToEqual(domain.HumanCauses)
+				ctx.Expect(causes).ToEqual(domain.HumanCauses())
 			})
 		})
 
 		s.When("a person moves the job out of needs-human", func(s *specs.Spec) {
-			exits := []exitRow{
-				{"an OK", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}},
-				{"feedback", message(domain.AuthorPerson, true, 2)},
-				{"a stop", stop("pablogore", 2)},
-				{"a direction", direction(domain.AuthorPerson, true, 2)},
-			}
 			for _, r := range causeRows() {
+				exits := []exitRow{
+					{"feedback", message(domain.AuthorPerson, true, 2)},
+					{"a stop", stop("pablogore", 2)},
+					{"a direction", direction(domain.AuthorPerson, true, 2)},
+				}
+				if okMoves(r.cause) {
+					exits = append(exits, exitRow{"an OK", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}})
+				}
 				s.When("the job is there because "+r.name, func(s *specs.Spec) {
 					specs.Table(s, exits, func(x exitRow) string { return x.name + " clears the cause, the reason and both marks" }, func(ctx *specs.Context, x exitRow) {
 						job := stoppedFor(ctx, r)
@@ -140,17 +172,67 @@ func TestNeedsHumanCause(t *testing.T) {
 			})
 		})
 
-		// Pins today's behaviour: S2 makes an OK read the cause and replaces
-		// this case, since a BLOCKED build never passed gate and review.
-		s.When("a person gives an OK after a builder BLOCKED", func(s *specs.Spec) {
-			s.It("still requests the merge", func(ctx *specs.Context) {
-				job := blockedJob(ctx, 2)
-				ctx.Expect(job.Cause).ToEqual(domain.CauseBlocked)
+		s.When("a person gives an OK in needs-human", func(s *specs.Spec) {
+			ok := domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}
+			rows := []okRow{
+				{"after a builder BLOCKED it is refused, naming the cause", domain.CauseBlocked, nil, decide.ErrOKRefused},
+				{"after an approver ESCALATE it requests the merge", domain.CauseEscalated, []domain.Event{domain.MergeRequested{Job: jobID, At: at(2)}}, nil},
+				{"after CHANGES in the last round it sends the job back to build in the same round", domain.CauseChanges, []domain.Event{entered("build", 2)}, nil},
+				{"after a failed gate in the last round it is refused, naming the cause", domain.CauseGateFailed, nil, decide.ErrOKRefused},
+				{"after specgate's escalation it is refused, naming the cause", domain.CauseSpecEscalated, nil, decide.ErrOKRefused},
+				{"on a length exception it sends the job on to build", domain.CauseSpecException, []domain.Event{entered("build", 2)}, nil},
+			}
+			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
+				job := waitingFor(ctx, r.cause)
 
-				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, defaultPipeline())
+				evs, err := decide.Decide(job, ok, defaultPipeline())
 
+				if r.err != nil {
+					ctx.Expect(err).To(specs.MatchError(r.err))
+					// The cause, never the free-text reason, names why.
+					ctx.Expect(err.Error()).ToEqual(`OK refused: cause "` + string(r.cause) + `"`)
+					ctx.Expect(evs).To(specs.BeEmpty())
+					ctx.Expect(decide.Apply(job, evs).Stage).ToEqual(domain.StageNeedsHuman)
+					return
+				}
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.MergeRequested{Job: jobID, At: at(2)}})
+				ctx.Expect(evs).ToEqual(r.evs)
+				ctx.Expect(decide.Apply(job, evs).Round).ToEqual(job.Round)
+			})
+
+			s.It("has one case for each cause", func(ctx *specs.Context) {
+				var causes []domain.HumanCause
+				for _, r := range rows {
+					causes = append(causes, r.cause)
+				}
+
+				ctx.Expect(causes).ToEqual(domain.HumanCauses())
+			})
+
+			bad := []causeOKRow{
+				{"with no recorded cause it is refused and nothing moves", "", domain.ErrMissingField},
+				{"with an unknown cause it is refused and nothing moves", "approved", domain.ErrInvalidValue},
+				{"with a cause that only looks like escalated it is refused and nothing moves", "Escalated", domain.ErrInvalidValue},
+			}
+			specs.Table(s, bad, func(r causeOKRow) string { return r.name }, func(ctx *specs.Context, r causeOKRow) {
+				job := waitingFor(ctx, domain.CauseEscalated)
+				job.Cause = r.cause
+
+				evs, err := decide.Decide(job, ok, defaultPipeline())
+
+				ctx.Expect(err).To(specs.MatchError(r.err))
+				ctx.Expect(evs).To(specs.BeEmpty())
+				ctx.Expect(decide.Apply(job, evs)).ToEqual(job)
+			})
+
+			s.It("without who gave it is refused for the missing name before the cause", func(ctx *specs.Context) {
+				job := waitingFor(ctx, domain.CauseBlocked)
+
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: " ", At: at(2)}, defaultPipeline())
+
+				ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+				ctx.Expect(err).To(specs.Not(specs.MatchError(decide.ErrOKRefused)))
+				ctx.Expect(evs).To(specs.BeEmpty())
 			})
 		})
 	})

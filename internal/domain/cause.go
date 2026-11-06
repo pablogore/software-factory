@@ -15,10 +15,17 @@ const (
 	CauseSpecException HumanCause = "spec-exception" // the spec asks for a length exception
 )
 
-// HumanCauses lists every cause.
-var HumanCauses = []HumanCause{CauseBlocked, CauseEscalated, CauseChanges, CauseGateFailed, CauseSpecEscalated, CauseSpecException}
+// humanCauses is unexported because what a human OK may merge depends on
+// this set: no other package may add a cause to it.
+var humanCauses = []HumanCause{CauseBlocked, CauseEscalated, CauseChanges, CauseGateFailed, CauseSpecEscalated, CauseSpecException}
+
+// HumanCauses lists every cause. It returns a copy, so changing it changes
+// neither the set nor what Validate accepts.
+func HumanCauses() []HumanCause {
+	return append([]HumanCause(nil), humanCauses...)
+}
 
 // Validate returns an error when c is not one of HumanCauses.
 func (c HumanCause) Validate() error {
-	return oneOf("cause", c, HumanCauses...)
+	return oneOf("cause", c, humanCauses...)
 }

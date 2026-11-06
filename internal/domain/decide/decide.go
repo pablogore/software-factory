@@ -29,6 +29,13 @@ var ErrOtherJob = errors.New("event for another job")
 // Decide returns no events with it, so nothing changes.
 var ErrStopped = errors.New("job stopped")
 
+// ErrOKRefused means a person's OK in needs-human cannot act on the job's
+// cause: the work did not pass gate and review (builder BLOCKED, failed gate)
+// or has no spec to pass (specgate escalation), so an OK never merges it and
+// a person's feedback is the way out. The error names the cause. Decide
+// returns no events with it, so the job stays in needs-human.
+var ErrOKRefused = errors.New("OK refused")
+
 // Decide returns the events that follow ev for job in pipeline p. It never
 // reads a clock: every event it returns carries the time of ev.
 func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event, error) {
@@ -67,12 +74,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if strings.TrimSpace(e.By) == "" {
 			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
 		}
-		// An OK on a length exception passes specgate with the spec as it is.
-		if job.Stage == domain.StageNeedsHuman && job.SpecException {
-			return afterGate(job, ev, domain.StageNeedsHuman, domain.KindSpec, e.At, p)
-		}
 		if job.Stage == domain.StageNeedsHuman {
-			return []domain.Event{domain.MergeRequested{Job: job.ID, At: e.At}}, nil
+			return approved(job, e, p)
 		}
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
@@ -194,6 +197,30 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 // strangers change nothing, in every stage.
 func ignored(e domain.MessageReceived) bool {
 	return !e.Allowed || e.AuthorKind != domain.AuthorPerson
+}
+
+// approved decides a person's OK in needs-human from the job's recorded
+// cause, never from Reason or the marks: only an approver ESCALATE, which
+// comes after gate and review passed, merges. After CHANGES in the last round
+// the job goes back to build in the same round, and on a length exception
+// the spec passes specgate as it is. A missing or unknown cause fails closed.
+func approved(job domain.Job, e domain.HumanApproved, p domain.Pipeline) ([]domain.Event, error) {
+	if err := job.Cause.Validate(); err != nil {
+		return nil, fmt.Errorf("decide: OK in needs-human: %w", err)
+	}
+	switch job.Cause {
+	case domain.CauseEscalated:
+		return []domain.Event{domain.MergeRequested{Job: job.ID, At: e.At}}, nil
+	case domain.CauseChanges:
+		i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
+		if i < 0 {
+			return nil, fmt.Errorf("decide: pipeline %q has no build stage", p.Name)
+		}
+		return []domain.Event{domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At}}, nil
+	case domain.CauseSpecException:
+		return afterGate(job, e, domain.StageNeedsHuman, domain.KindSpec, e.At, p)
+	}
+	return nil, fmt.Errorf("%w: cause %q", ErrOKRefused, job.Cause)
 }
 
 // decideMessage handles an allowed person's message. Marked as a direction on

@@ -393,8 +393,9 @@ func TestDecide(t *testing.T) {
 				ctx.Expect(after.Round).ToEqual(3)
 			})
 
-			s.It("requests the merge on a person's approval", func(ctx *specs.Context) {
+			s.It("requests the merge on a person's approval after an approver ESCALATE", func(ctx *specs.Context) {
 				job := needsHuman()
+				job.Cause = domain.CauseEscalated
 
 				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)}, defaultPipeline())
 

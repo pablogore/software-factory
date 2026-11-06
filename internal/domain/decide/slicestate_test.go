@@ -177,7 +177,6 @@ func TestSliceState(t *testing.T) {
 
 			leaving := []step{
 				{"forgets the reason on a person's feedback", message(domain.AuthorPerson, true, 2), nil},
-				{"forgets the reason on a person's OK", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, nil},
 				{"forgets the reason on a stop", stop("pablogore", 2), nil},
 			}
 			specs.Table(s, leaving, func(r step) string { return r.name }, func(ctx *specs.Context, r step) {
@@ -189,6 +188,15 @@ func TestSliceState(t *testing.T) {
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Reason).ToEqual("")
 				ctx.Expect(after.SpecEscalated).To(specs.BeFalse())
+			})
+
+			s.It("keeps the reason when a person's OK is refused", func(ctx *specs.Context) {
+				job := specEscalated()
+
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, defaultPipeline())
+
+				ctx.Expect(err).To(specs.MatchError(decide.ErrOKRefused))
+				ctx.Expect(decide.Apply(job, evs)).ToEqual(specEscalated())
 			})
 
 			s.It("forgets a length exception if the job is ever asked a question", func(ctx *specs.Context) {
@@ -215,7 +223,7 @@ func TestSliceState(t *testing.T) {
 					})
 					ctx.Expect(job.SpecRejections).ToEqual(3)
 				}},
-				{"sends feedback to build on a job stopped by specgate, approved out of band, merged, reopened and escalated", func(ctx *specs.Context) {
+				{"sends feedback to build on a job stopped by specgate, merged out of band, reopened and escalated", func(ctx *specs.Context) {
 					job := newJob()
 					job.Stage = "spec"
 					step := walker(ctx, &job)
@@ -224,7 +232,11 @@ func TestSliceState(t *testing.T) {
 						step(specgateFailed(2*k + 1))
 					}
 					ctx.Expect(job.SpecEscalated).To(specs.BeTrue())
-					step(domain.HumanApproved{Job: jobID, By: "pablogore", At: at(10)})
+					// An OK cannot merge a job specgate stopped, so the merge
+					// happens outside Decide and is only folded in.
+					_, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(10)}, defaultPipeline())
+					ctx.Expect(err).To(specs.MatchError(decide.ErrOKRefused))
+					job = decide.Apply(job, []domain.Event{domain.MergeRequested{Job: jobID, At: at(10)}})
 					step(merged(11))
 					step(message(domain.AuthorPerson, true, 12))
 					ctx.Expect(job.Stage).ToEqual("build")
