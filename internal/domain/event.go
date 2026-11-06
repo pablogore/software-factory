@@ -51,9 +51,13 @@ func (SpecgatePassed) EventName() string { return "SpecgatePassed" }
 func (e SpecgatePassed) JobID() JobID { return e.Job }
 
 // SpecgateFailed records that the deterministic specgate rejected the spec.
+// Exception, set by specgate, says the spec is over the normal length but
+// gives a reason within the exception limits, so a person decides instead of
+// the spec being rewritten.
 type SpecgateFailed struct {
-	Job JobID     `json:"job"`
-	At  time.Time `json:"at"`
+	Job       JobID     `json:"job"`
+	Exception bool      `json:"exception,omitempty"`
+	At        time.Time `json:"at"`
 }
 
 // EventName implements Event.
@@ -158,10 +162,13 @@ func (RoundStarted) EventName() string { return "RoundStarted" }
 func (e RoundStarted) JobID() JobID { return e.Job }
 
 // NeedsHuman records that the job stops until a person acts, and why.
+// SpecException says it waits on a spec's length exception: a person's OK
+// lets the spec through and their feedback sends it back to spec.
 type NeedsHuman struct {
-	Job    JobID     `json:"job"`
-	Reason string    `json:"reason"`
-	At     time.Time `json:"at"`
+	Job           JobID     `json:"job"`
+	Reason        string    `json:"reason"`
+	SpecException bool      `json:"spec_exception,omitempty"`
+	At            time.Time `json:"at"`
 }
 
 // EventName implements Event.
@@ -242,8 +249,8 @@ func (MessageReceived) EventName() string { return "MessageReceived" }
 func (e MessageReceived) JobID() JobID { return e.Job }
 
 // ReworkRequested records that a person sent the job back to build, or to
-// spec after specgate's last rejection, with feedback; that stage gets Text
-// as input.
+// spec after specgate's last rejection or a length exception, with feedback;
+// that stage gets Text as input.
 type ReworkRequested struct {
 	Job  JobID     `json:"job"`
 	By   string    `json:"by"`

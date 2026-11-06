@@ -30,6 +30,7 @@ type Job struct {
 	Round          int            `json:"round"`                     // review round, from 1
 	SpecRejections int            `json:"spec_rejections,omitempty"` // times specgate rejected the spec
 	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer
+	SpecException  bool           `json:"spec_exception,omitempty"`  // in needs-human, waiting on a spec's length exception
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
 	Reviewers      []string       `json:"reviewers,omitempty"`       // review roles that run in this round; empty runs every role of the stage
