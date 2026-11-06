@@ -30,6 +30,21 @@ func defaultPipeline() domain.Pipeline {
 	}
 }
 
+// modesPipeline is defaultPipeline with every reviewer's mode declared:
+// security-deep is new in shadow, reviewer-ux in advisory, reviewer-code has
+// no mode and the rest block.
+func modesPipeline() domain.Pipeline {
+	p := defaultPipeline()
+	p.Roles = []domain.Role{
+		{Name: "reviewer-security", Kind: domain.KindReview, Mode: domain.ModeBlocking},
+		{Name: "reviewer-ux", Kind: domain.KindReview, Mode: domain.ModeAdvisory},
+		{Name: "reviewer-ui", Kind: domain.KindReview, Mode: domain.ModeBlocking},
+		{Name: "reviewer-code", Kind: domain.KindReview},
+		{Name: "security-deep", Kind: domain.KindReview, Mode: domain.ModeShadow},
+	}
+	return p
+}
+
 func newJob() domain.Job {
 	return domain.Job{ID: jobID, Title: "Decide happy path", Pipeline: "default", Stage: "intake", Round: 1}
 }
@@ -238,6 +253,54 @@ func TestDecide(t *testing.T) {
 					ctx.Expect(err).To(specs.MatchError(decide.ErrIllegalTransition))
 					ctx.Expect(evs).To(specs.BeEmpty())
 				}
+			})
+		})
+
+		s.When("reviewers in shadow or advisory mode ask for CHANGES", func(s *specs.Spec) {
+			roundTwo := func(role string) []domain.Event {
+				return []domain.Event{asked(role, 1), domain.RoundStarted{Job: jobID, Round: 2, At: at(1)}, entered("build", 1)}
+			}
+			rows := []reviewRow{
+				{"shadow CHANGES alone enters approve", 1, reviewers[:4], nil, changes("security-deep", 1),
+					[]domain.Event{asked("security-deep", 1), entered("approve", 1)}},
+				{"advisory CHANGES alone enters approve", 1, []string{"reviewer-security", "reviewer-ui", "reviewer-code", "security-deep"}, nil, changes("reviewer-ux", 1),
+					[]domain.Event{asked("reviewer-ux", 1), entered("approve", 1)}},
+				{"last PASS after shadow and advisory CHANGES enters approve", 1, []string{"reviewer-security", "reviewer-ui", "reviewer-code"}, []string{"reviewer-ux"}, changes("security-deep", 1),
+					[]domain.Event{asked("security-deep", 1), entered("approve", 1)}},
+				{"shadow and advisory CHANGES in round 3 of 3 enter approve, not needs-human", 3, []string{"reviewer-security", "reviewer-ui", "reviewer-code"}, []string{"security-deep"}, changes("reviewer-ux", 3),
+					[]domain.Event{asked("reviewer-ux", 3), entered("approve", 3)}},
+				{"mixed round with a blocking CHANGES goes back to build at round 2", 1, []string{"reviewer-ui", "reviewer-code"}, []string{"reviewer-ux", "security-deep"}, changes("reviewer-security", 1),
+					roundTwo("reviewer-security")},
+				{"mixed round in round 3 of 3 ends in needs-human naming only the blocking reviewer", 3, []string{"reviewer-ui", "reviewer-code"}, []string{"reviewer-ux", "security-deep"}, changes("reviewer-security", 1),
+					[]domain.Event{asked("reviewer-security", 1), domain.NeedsHuman{Job: jobID,
+						Reason: "CHANGES in the last round (3 of 3) from reviewer-security", At: at(1)}}},
+				{"CHANGES from a role with no mode goes back to build at round 2", 1, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}, nil, changes("reviewer-code", 1),
+					roundTwo("reviewer-code")},
+				{"CHANGES from a role with no mode in round 3 of 3 ends in needs-human", 3, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}, nil, changes("reviewer-code", 1),
+					[]domain.Event{asked("reviewer-code", 1), domain.NeedsHuman{Job: jobID,
+						Reason: "CHANGES in the last round (3 of 3) from reviewer-code", At: at(1)}}},
+			}
+			specs.Table(s, rows, func(r reviewRow) string { return r.name }, func(ctx *specs.Context, r reviewRow) {
+				job := newJob()
+				job.Stage, job.Round, job.Passed, job.Changes = "review", r.round, r.passed, r.changed
+
+				evs, err := decide.Decide(job, r.ev, modesPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual(r.want)
+			})
+
+			s.It("walks a round where only shadow and advisory reviewers ask for CHANGES into approve", func(ctx *specs.Context) {
+				job := walk(ctx, happyPath(), 5)
+				for _, ev := range []domain.Event{changes("security-deep", 20), changes("reviewer-ux", 21),
+					pass("reviewer-security", 22), pass("reviewer-ui", 23), pass("reviewer-code", 24)} {
+					evs, err := decide.Decide(job, ev, modesPipeline())
+					ctx.Expect(err).To(specs.BeNil())
+					job = decide.Apply(job, evs)
+				}
+
+				ctx.Expect(job.Stage).ToEqual("approve")
+				ctx.Expect(job.Round).ToEqual(1)
 			})
 		})
 

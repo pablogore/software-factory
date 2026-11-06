@@ -118,9 +118,9 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 }
 
 // reviewed records the role's verdict and, once every role of the stage has
-// answered, moves on: to the next stage when all passed, back to on_changes
-// for another round when any asked for CHANGES, or to needs-human when that
-// happens in the stage's last round.
+// answered, moves on: to the next stage when no blocking role asked for
+// CHANGES, back to on_changes for another round when one did, or to
+// needs-human when that happens in the stage's last round.
 func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p domain.Pipeline, i int) ([]domain.Event, error) {
 	if slices.Contains(job.Passed, e.Role) || slices.Contains(job.Changes, e.Role) {
 		return nil, illegal(job, e)
@@ -142,17 +142,26 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 			return evs, nil
 		}
 	}
-	if len(changes) == 0 {
+	blocking := slices.DeleteFunc(slices.Clone(changes), func(role string) bool { return !blocks(p, role) })
+	if len(blocking) == 0 {
 		return append(evs, next(job, p, i, e.At)...), nil
 	}
 	if job.Round >= stage.MaxRounds {
-		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, stage.MaxRounds, strings.Join(inOrder(stage.Roles, changes), ", "))
+		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, stage.MaxRounds, strings.Join(inOrder(stage.Roles, blocking), ", "))
 		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}), nil
 	}
 	return append(evs,
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: stage.OnChanges, At: e.At},
 	), nil
+}
+
+// blocks reports whether a CHANGES from role stops the job. Shadow and
+// advisory roles never do (04-roles.md); a role with no mode, or not among
+// the pipeline's roles, is blocking so pipelines built in code keep working.
+func blocks(p domain.Pipeline, role string) bool {
+	i := slices.IndexFunc(p.Roles, func(r domain.Role) bool { return r.Name == role })
+	return i < 0 || (p.Roles[i].Mode != domain.ModeShadow && p.Roles[i].Mode != domain.ModeAdvisory)
 }
 
 // escalated is the needs-human reason for an approver ESCALATE: a person
