@@ -39,6 +39,26 @@ type SpecgatePassed struct {
 // EventName implements Event.
 func (SpecgatePassed) EventName() string { return "SpecgatePassed" }
 
+// SpecgateFailed records that the deterministic specgate rejected the spec.
+type SpecgateFailed struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (SpecgateFailed) EventName() string { return "SpecgateFailed" }
+
+// SpecRejected records that the job counts one more specgate rejection;
+// Rejections is the total so far.
+type SpecRejected struct {
+	Job        JobID     `json:"job"`
+	Rejections int       `json:"rejections"`
+	At         time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (SpecRejected) EventName() string { return "SpecRejected" }
+
 // GatePassed records that the deterministic gate (checks) passed on the branch.
 type GatePassed struct {
 	Job JobID     `json:"job"`
