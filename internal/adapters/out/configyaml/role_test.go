@@ -79,7 +79,7 @@ func TestLoadRole(t *testing.T) {
 				{
 					"names the unknown top-level key",
 					"name: security-deep\nkind: review\nprompt: roles/security-deep.md\nmode: shadow\nmodel_: gpt-5.5\n",
-					"parse role: yaml: unmarshal errors:\n  line 5: field model_ not found in type configyaml.roleFile",
+					`parse role: invalid value: line 5: unknown key "model_"`,
 				},
 				{
 					"names the unknown key in a when condition",
