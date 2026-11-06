@@ -8,28 +8,34 @@ import (
 	"github.com/pablogore/software-factory/internal/domain/decide"
 )
 
-var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageNeedsHuman, domain.StageStopped}
+var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageStopped}
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
 // has not answered in any fuzzed job, a failing gate and specgate, a specgate
-// rejection count, a person's approval, messages from every kind of author and
-// stop requests with and without a name.
+// rejection count, a person's approval, messages from every kind of author,
+// stop requests with and without a name, a completed merge and every missing
+// or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
 		evs = append(evs, st.ev)
 	}
-	return append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)},
+	evs = append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)},
 		domain.SpecRejected{Job: jobID, Rejections: 1, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
-		stop("pablogore", 1), stop("", 1))
+		stop("pablogore", 1), stop("", 1), merged(1))
+	for _, r := range nilEvents() {
+		evs = append(evs, r.ev)
+	}
+	return evs
 }
 
 // FuzzDecide checks that the same input always gives the same output, that
 // Decide never changes the job it receives and that no round goes past the
-// review stage's max_rounds, and that a message not from an allowed person
-// changes nothing and is not an error.
+// review stage's max_rounds, that a message not from an allowed person
+// changes nothing and is not an error, and that a missing or nil event is an
+// error, never a panic.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(i), uint8(0), uint8(1))
@@ -59,6 +65,9 @@ func FuzzDecide(f *testing.F) {
 		}
 		if m, ok := ev.(domain.MessageReceived); ok && (!m.Allowed || m.AuthorKind != domain.AuthorPerson) && (err1 != nil || len(first) > 0) {
 			t.Fatalf("message from %s (allowed %v) gave %v, %v", m.AuthorKind, m.Allowed, first, err1)
+		}
+		if missing(ev) && err1 == nil {
+			t.Fatalf("missing event %#v accepted in stage %q", ev, job.Stage)
 		}
 		if after := decide.Apply(job, first); after.Round > 3 {
 			t.Fatalf("round %d past max_rounds 3", after.Round)
@@ -95,6 +104,20 @@ func FuzzStopped(f *testing.F) {
 			t.Fatalf("stopped job changed on %s: %+v, was %+v", ev.EventName(), job, before)
 		}
 	})
+}
+
+// missing reports whether ev is one of nilEvents: nil, a nil pointer or a
+// result event carrying a nil result.
+func missing(ev domain.Event) bool {
+	if r, ok := ev.(domain.ResultSubmitted); ok {
+		return nilPointer(r.Result)
+	}
+	return ev == nil || nilPointer(ev)
+}
+
+func nilPointer(v any) bool {
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
 }
 
 func errText(err error) string {

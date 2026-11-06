@@ -182,6 +182,18 @@ func (MergeRequested) EventName() string { return "MergeRequested" }
 // JobID implements Event.
 func (e MergeRequested) JobID() JobID { return e.Job }
 
+// MergeCompleted records that the merge the job asked for went through.
+type MergeCompleted struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (MergeCompleted) EventName() string { return "MergeCompleted" }
+
+// JobID implements Event.
+func (e MergeCompleted) JobID() JobID { return e.Job }
+
 // AuthorKind says who wrote a message: a person, a bot or CI.
 type AuthorKind string
 
