@@ -46,11 +46,11 @@ func fuzzEvents() []domain.Event {
 // review stage's max_rounds, that a message not from an allowed person
 // changes nothing and is not an error, that an allowed person's message
 // without a name is refused unless the job is stopped or rejected, that a job a decision moves records an
-// asker exactly when it lands in needs-info, that only a job in needs-human
-// waits on a length exception, that every needs-human it emits carries one
-// of HumanCauses with each mark set exactly when its cause is, that a job out
-// of needs-human keeps no cause, that a person's OK requests the merge only
-// after an approver ESCALATE, that an override not from an allowed person
+// asker exactly when it lands in needs-info, that every needs-human it emits
+// carries one of HumanCauses, that a job out of needs-human keeps no cause,
+// that an allowed person's feedback in needs-human with a missing or unknown
+// cause is refused, that a person's OK requests the merge only after an approver
+// ESCALATE, that an override not from an allowed person
 // changes nothing and is not an error, that one requests the merge only after
 // CHANGES and always with its history entry first, and that a missing or nil
 // event is an error, never a panic.
@@ -65,11 +65,10 @@ func FuzzDecide(f *testing.F) {
 		job.Round = 1 + int(round)%3
 		job.Passed = append([]string(nil), reviewers[:int(done)%len(reviewers)]...)
 		job.InfoFrom = fuzzAsker(job.Stage, done)
-		job.SpecException = job.Stage == domain.StageNeedsHuman && done%2 == 1
 		job.Cause = fuzzCause(job.Stage, round)
 		before := newJob()
 		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
-		before.InfoFrom, before.SpecException, before.Cause = job.InfoFrom, job.SpecException, job.Cause
+		before.InfoFrom, before.Cause = job.InfoFrom, job.Cause
 		evs := fuzzEvents()
 		ev := evs[int(event)%len(evs)]
 
@@ -102,14 +101,14 @@ func FuzzDecide(f *testing.F) {
 		if len(first) > 0 && (after.Stage == domain.StageNeedsInfo) != (after.InfoFrom != "") {
 			t.Fatalf("stage %q with asker %q after %s", after.Stage, after.InfoFrom, ev.EventName())
 		}
-		if after.SpecException && after.Stage != domain.StageNeedsHuman {
-			t.Fatalf("stage %q waiting on a length exception after %s", after.Stage, ev.EventName())
-		}
 		for _, out := range first {
-			if nh, ok := out.(domain.NeedsHuman); ok && (nh.Cause.Validate() != nil ||
-				nh.SpecException != (nh.Cause == domain.CauseSpecException) || nh.SpecEscalated != (nh.Cause == domain.CauseSpecEscalated)) {
-				t.Fatalf("needs-human with cause %q, exception %v, escalated %v after %s", nh.Cause, nh.SpecException, nh.SpecEscalated, ev.EventName())
+			if nh, ok := out.(domain.NeedsHuman); ok && nh.Cause.Validate() != nil {
+				t.Fatalf("needs-human with cause %q after %s", nh.Cause, ev.EventName())
 			}
+		}
+		if m, ok := ev.(domain.MessageReceived); ok && m.Allowed && m.AuthorKind == domain.AuthorPerson && job.Stage == domain.StageNeedsHuman &&
+			!m.Direction && job.Cause.Validate() != nil && (err1 == nil || len(first) > 0) {
+			t.Fatalf("feedback with cause %q gave %v, %v", job.Cause, first, err1)
 		}
 		if _, ok := ev.(domain.HumanApproved); ok && job.Cause != domain.CauseEscalated && slices.ContainsFunc(first, func(out domain.Event) bool {
 			_, merge := out.(domain.MergeRequested)

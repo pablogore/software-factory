@@ -19,7 +19,7 @@ func signed(m domain.MessageReceived, by string) domain.MessageReceived {
 // its first wait.
 func needsHumanJob() domain.Job {
 	job := newJob()
-	job.Stage, job.Round, job.Reason, job.WaitSeq = domain.StageNeedsHuman, 2, "approver escalated", 1
+	job.Stage, job.Round, job.Reason, job.Cause, job.WaitSeq = domain.StageNeedsHuman, 2, "approver escalated", domain.CauseEscalated, 1
 	return job
 }
 

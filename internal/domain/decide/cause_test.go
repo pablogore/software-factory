@@ -106,9 +106,6 @@ func TestNeedsHumanCause(t *testing.T) {
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
 				ctx.Expect(after.Cause).ToEqual(r.cause)
 				ctx.Expect(after.Reason).ToEqual(nh.Reason)
-				// The marks stay alongside the cause until S4 folds them in.
-				ctx.Expect(after.SpecException).ToEqual(r.cause == domain.CauseSpecException)
-				ctx.Expect(after.SpecEscalated).ToEqual(r.cause == domain.CauseSpecEscalated)
 			})
 
 			s.It("has one way in for each cause", func(ctx *specs.Context) {
@@ -135,7 +132,7 @@ func TestNeedsHumanCause(t *testing.T) {
 					exits = append(exits, exitRow{"an override", override(domain.AuthorPerson, true, 2)})
 				}
 				s.When("the job is there because "+r.name, func(s *specs.Spec) {
-					specs.Table(s, exits, func(x exitRow) string { return x.name + " clears the cause, the reason and both marks" }, func(ctx *specs.Context, x exitRow) {
+					specs.Table(s, exits, func(x exitRow) string { return x.name + " clears the cause and the reason" }, func(ctx *specs.Context, x exitRow) {
 						job := stoppedFor(ctx, r)
 
 						evs, err := decide.Decide(job, x.ev, defaultPipeline())
@@ -145,8 +142,6 @@ func TestNeedsHumanCause(t *testing.T) {
 						ctx.Expect(after.Stage).To(specs.Not(specs.Equal(domain.StageNeedsHuman)))
 						ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 						ctx.Expect(after.Reason).ToEqual("")
-						ctx.Expect(after.SpecException).To(specs.BeFalse())
-						ctx.Expect(after.SpecEscalated).To(specs.BeFalse())
 					})
 				})
 			}
@@ -164,14 +159,11 @@ func TestNeedsHumanCause(t *testing.T) {
 			specs.Table(s, rows, func(r applyExitRow) string { return r.name }, func(ctx *specs.Context, r applyExitRow) {
 				job := newJob()
 				job.Stage, job.Reason, job.Cause = domain.StageNeedsHuman, "spec asks for a length exception", domain.CauseSpecException
-				job.SpecException, job.SpecEscalated = true, true
 
 				after := decide.Apply(job, []domain.Event{r.ev})
 
 				ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 				ctx.Expect(after.Reason).ToEqual(r.reason)
-				ctx.Expect(after.SpecException).To(specs.BeFalse())
-				ctx.Expect(after.SpecEscalated).To(specs.BeFalse())
 			})
 		})
 
@@ -236,6 +228,64 @@ func TestNeedsHumanCause(t *testing.T) {
 				ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 				ctx.Expect(err).To(specs.Not(specs.MatchError(decide.ErrOKRefused)))
 				ctx.Expect(evs).To(specs.BeEmpty())
+			})
+		})
+
+		s.When("a person gives feedback in needs-human", func(s *specs.Spec) {
+			rework := domain.ReworkRequested{Job: jobID, By: "pablogore", Text: "rename the flag", At: at(2)}
+			toBuild := []domain.Event{rework, entered("build", 2)}
+			rows := []okRow{
+				{"after a builder BLOCKED it sends the job back to build", domain.CauseBlocked, toBuild, nil},
+				{"after an approver ESCALATE it sends the job back to build", domain.CauseEscalated, toBuild, nil},
+				{"after CHANGES in the last round it sends the job back to build", domain.CauseChanges, toBuild, nil},
+				{"after a failed gate in the last round it sends the job back to build", domain.CauseGateFailed, toBuild, nil},
+				{"after specgate's escalation it rewrites the spec with the rejection count reset", domain.CauseSpecEscalated,
+					[]domain.Event{rework, rejected(0, 2), entered("spec", 2)}, nil},
+				{"on a length exception it rewrites the spec with the count kept", domain.CauseSpecException, []domain.Event{rework, entered("spec", 2)}, nil},
+			}
+			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
+				job := waitingFor(ctx, r.cause)
+
+				evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 2), defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual(r.evs)
+				ctx.Expect(decide.Apply(job, evs).Round).ToEqual(job.Round)
+			})
+
+			s.It("has one case for each cause", func(ctx *specs.Context) {
+				var causes []domain.HumanCause
+				for _, r := range rows {
+					causes = append(causes, r.cause)
+				}
+
+				ctx.Expect(causes).ToEqual(domain.HumanCauses())
+			})
+
+			bad := []causeOKRow{
+				{"with no recorded cause it is refused and nothing moves", "", domain.ErrMissingField},
+				{"with an unknown cause it is refused and nothing moves", "approved", domain.ErrInvalidValue},
+				{"with a cause that only looks like spec-escalated it is refused and nothing moves", "Spec-Escalated", domain.ErrInvalidValue},
+			}
+			specs.Table(s, bad, func(r causeOKRow) string { return r.name }, func(ctx *specs.Context, r causeOKRow) {
+				job := waitingFor(ctx, domain.CauseSpecEscalated)
+				job.Cause = r.cause
+
+				evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 2), defaultPipeline())
+
+				ctx.Expect(err).To(specs.MatchError(r.err))
+				ctx.Expect(evs).To(specs.BeEmpty())
+				ctx.Expect(decide.Apply(job, evs)).ToEqual(job)
+			})
+
+			s.It("routes on the cause, not on the reason a person reads", func(ctx *specs.Context) {
+				job := waitingFor(ctx, domain.CauseBlocked)
+				job.Reason = "spec rejected by specgate 3 times"
+
+				evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 2), defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual(toBuild)
 			})
 		})
 	})
