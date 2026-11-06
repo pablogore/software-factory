@@ -3,6 +3,7 @@ package decide_test
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,7 +45,8 @@ func fuzzEvents() []domain.Event {
 // asker exactly when it lands in needs-info, that only a job in needs-human
 // waits on a length exception, that every needs-human it emits carries one
 // of HumanCauses with each mark set exactly when its cause is, that a job out
-// of needs-human keeps no cause, and that a missing or nil event is an error,
+// of needs-human keeps no cause, that a person's OK requests the merge only
+// after an approver ESCALATE, and that a missing or nil event is an error,
 // never a panic.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
@@ -58,9 +60,10 @@ func FuzzDecide(f *testing.F) {
 		job.Passed = append([]string(nil), reviewers[:int(done)%len(reviewers)]...)
 		job.InfoFrom = fuzzAsker(job.Stage, done)
 		job.SpecException = job.Stage == domain.StageNeedsHuman && done%2 == 1
+		job.Cause = fuzzCause(job.Stage, round)
 		before := newJob()
 		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
-		before.InfoFrom, before.SpecException = job.InfoFrom, job.SpecException
+		before.InfoFrom, before.SpecException, before.Cause = job.InfoFrom, job.SpecException, job.Cause
 		evs := fuzzEvents()
 		ev := evs[int(event)%len(evs)]
 
@@ -102,10 +105,26 @@ func FuzzDecide(f *testing.F) {
 				t.Fatalf("needs-human with cause %q, exception %v, escalated %v after %s", nh.Cause, nh.SpecException, nh.SpecEscalated, ev.EventName())
 			}
 		}
+		if _, ok := ev.(domain.HumanApproved); ok && job.Cause != domain.CauseEscalated && slices.ContainsFunc(first, func(out domain.Event) bool {
+			_, merge := out.(domain.MergeRequested)
+			return merge
+		}) {
+			t.Fatalf("OK with cause %q requested the merge", job.Cause)
+		}
 		if after.Cause != "" && after.Stage != domain.StageNeedsHuman {
 			t.Fatalf("stage %q keeps cause %q after %s", after.Stage, after.Cause, ev.EventName())
 		}
 	})
+}
+
+// fuzzCause gives a job in needs-human one of HumanCauses, none or an
+// unknown one; a job anywhere else has none.
+func fuzzCause(stage string, round uint8) domain.HumanCause {
+	if stage != domain.StageNeedsHuman {
+		return ""
+	}
+	causes := append(domain.HumanCauses(), "", "approved")
+	return causes[int(round)%len(causes)]
 }
 
 // FuzzStopped checks that a stopped job never moves: whatever the event,

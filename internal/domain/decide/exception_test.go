@@ -21,7 +21,7 @@ func waitingException(minute int) domain.NeedsHuman {
 // exception and waits for a person.
 func waitingJob() domain.Job {
 	job := atSpecgate(1)
-	job.Stage, job.SpecException = domain.StageNeedsHuman, true
+	job.Stage, job.SpecException, job.Cause = domain.StageNeedsHuman, true, domain.CauseSpecException
 	return job
 }
 
@@ -172,9 +172,9 @@ func TestDecideSpecException(t *testing.T) {
 			ctx.Expect(job.Round).ToEqual(1)
 		})
 
-		s.It("still requests the merge on a person's OK in needs-human for another reason", func(ctx *specs.Context) {
+		s.It("still requests the merge on a person's OK after an approver ESCALATE", func(ctx *specs.Context) {
 			job := atSpecgate(1)
-			job.Stage = domain.StageNeedsHuman
+			job.Stage, job.Cause = domain.StageNeedsHuman, domain.CauseEscalated
 
 			evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, defaultPipeline())
 
