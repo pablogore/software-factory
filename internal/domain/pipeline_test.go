@@ -20,6 +20,8 @@ func validPipeline() domain.Pipeline {
 	}
 }
 
+func ptr(n int) *int { return &n }
+
 type pipelineRow struct {
 	name     string
 	edit     func(*domain.Pipeline)
@@ -33,6 +35,12 @@ func TestPipeline(t *testing.T) {
 	specs.Describe(t, "Pipeline.Validate", func(s *specs.Spec) {
 		s.It("accepts one build and a review that goes back to it", func(ctx *specs.Context) {
 			ctx.Expect(validPipeline().Validate(roles)).To(specs.BeNil())
+		})
+
+		s.It("accepts every limit set to 1", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Limits = domain.Limits{SpecRejections: ptr(1), HumanReworks: ptr(1), TriageRetries: ptr(1), MaxRounds: ptr(1)}
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
 
 		s.When("a flow rule is broken", func(s *specs.Spec) {
@@ -90,6 +98,18 @@ func TestPipeline(t *testing.T) {
 				{"names a rejected stage of kind spec", func(p *domain.Pipeline) {
 					p.Stages = append(p.Stages, domain.Stage{Name: "rejected", Kind: domain.KindSpec})
 				}, domain.ErrInvalidValue, "stage rejected: invalid value: stage name is reserved"},
+				{"names spec_rejections 0", func(p *domain.Pipeline) {
+					p.Limits.SpecRejections = ptr(0)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: spec_rejections 0, want at least 1"},
+				{"names negative human_reworks", func(p *domain.Pipeline) {
+					p.Limits.HumanReworks = ptr(-1)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: human_reworks -1, want at least 1"},
+				{"names triage_retries 0", func(p *domain.Pipeline) {
+					p.Limits.TriageRetries = ptr(0)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: triage_retries 0, want at least 1"},
+				{"names max_rounds 0 in limits", func(p *domain.Pipeline) {
+					p.Limits.MaxRounds = ptr(0)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: max_rounds 0, want at least 1"},
 			}
 			specs.Table(s, rows, func(r pipelineRow) string {
 				return r.name
@@ -102,6 +122,20 @@ func TestPipeline(t *testing.T) {
 				ctx.Expect(err).To(specs.MatchError(r.sentinel))
 				ctx.Expect(err.Error()).ToEqual(r.want)
 			})
+		})
+	})
+}
+
+func TestPipelineSpecRejections(t *testing.T) {
+	specs.Describe(t, "Pipeline.SpecRejections", func(s *specs.Spec) {
+		s.It("is 3 when limits does not set it", func(ctx *specs.Context) {
+			ctx.Expect(validPipeline().SpecRejections()).ToEqual(3)
+		})
+
+		s.It("is limits.spec_rejections when set", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Limits.SpecRejections = ptr(5)
+			ctx.Expect(p.SpecRejections()).ToEqual(5)
 		})
 	})
 }

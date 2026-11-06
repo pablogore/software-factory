@@ -533,15 +533,11 @@ func afterGate(job domain.Job, ev domain.Event, gate string, kind domain.Kind, a
 	return next(job, p, i, at), nil
 }
 
-// maxSpecRejections is how many specgate rejections a job takes before a
-// person must look at it, fixed as in the current factory.
-const maxSpecRejections = 3
-
 // specgateFailed counts the rejection and sends the job back to the spec
-// stage to be rewritten, or to needs-human on the last allowed rejection so
-// a spec that keeps failing never loops. A spec asking for a length exception
-// is not a rejection: it waits for a person without counting. The review
-// round does not change.
+// stage to be rewritten, or to needs-human on the last rejection the
+// pipeline allows (limits.spec_rejections) so a spec that keeps failing never
+// loops. A spec asking for a length exception is not a rejection: it waits for
+// a person without counting. The review round does not change.
 func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) ([]domain.Event, error) {
 	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindSpec })
 	if job.Stage != domain.StageSpecgate || i < 0 {
@@ -552,7 +548,7 @@ func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) 
 	}
 	n := job.SpecRejections + 1
 	evs := []domain.Event{domain.SpecRejected{Job: job.ID, Rejections: n, At: e.At}}
-	if n >= maxSpecRejections {
+	if n >= p.SpecRejections() {
 		reason := fmt.Sprintf("spec rejected by specgate %d times", n)
 		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseSpecEscalated, At: e.At}), nil
 	}

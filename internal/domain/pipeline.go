@@ -17,6 +17,48 @@ type Pipeline struct {
 	Name   string  `json:"name"`
 	Stages []Stage `json:"stages"`
 	Roles  []Role  `json:"roles,omitempty"`
+	Limits Limits  `json:"limits,omitzero"`
+}
+
+// DefaultSpecRejections is how many specgate rejections a job takes before a
+// person must look at it when the pipeline doesn't set spec_rejections, as in
+// the current factory.
+const DefaultSpecRejections = 3
+
+// Limits are the pipeline's retry limits. A nil value is not set and takes
+// its default; a nil HumanReworks, set or not, is unlimited.
+type Limits struct {
+	SpecRejections *int `json:"spec_rejections,omitempty"`
+	HumanReworks   *int `json:"human_reworks,omitempty"`
+	TriageRetries  *int `json:"triage_retries,omitempty"`
+	MaxRounds      *int `json:"max_rounds,omitempty"`
+}
+
+// Validate checks that every limit that is set is at least 1, naming the key.
+func (l Limits) Validate() error {
+	for _, v := range []struct {
+		key string
+		n   *int
+	}{
+		{"spec_rejections", l.SpecRejections},
+		{"human_reworks", l.HumanReworks},
+		{"triage_retries", l.TriageRetries},
+		{"max_rounds", l.MaxRounds},
+	} {
+		if v.n != nil && *v.n < 1 {
+			return fmt.Errorf("limits: %w: %s %d, want at least 1", ErrInvalidValue, v.key, *v.n)
+		}
+	}
+	return nil
+}
+
+// SpecRejections is how many specgate rejections send a job to a person:
+// limits.spec_rejections, or DefaultSpecRejections when it is not set.
+func (p Pipeline) SpecRejections() int {
+	if p.Limits.SpecRejections == nil {
+		return DefaultSpecRejections
+	}
+	return *p.Limits.SpecRejections
 }
 
 // Stage is one step of a pipeline. Its roles run in parallel; a review stage
@@ -41,8 +83,12 @@ func (p Pipeline) Label() string {
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
 // the pipeline: exactly one build stage, stage names are unique and not
 // reserved, every review goes back to an earlier stage, lists roles and allows
-// at least one round, and every role a stage lists exists.
+// at least one round, every role a stage lists exists, and every limit set is
+// at least 1.
 func (p Pipeline) Validate(roles []Role) error {
+	if err := p.Limits.Validate(); err != nil {
+		return fmt.Errorf("%s: %w", p.Label(), err)
+	}
 	known := make(map[string]bool, len(roles))
 	for _, r := range roles {
 		known[r.Name] = true
