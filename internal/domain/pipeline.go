@@ -164,7 +164,8 @@ func (p Pipeline) Label() string {
 // reserved, stages run build, then review, then exactly one approve, then only
 // tasks, every review goes back to an earlier stage, lists roles and allows at
 // least one round and at most the max_rounds cap when it sets max_rounds, every
-// role a stage lists exists, and every limit set is between 1 and its cap.
+// role a stage lists is well formed, listed once in the stage and exists, and
+// every limit set is between 1 and its cap.
 func (p Pipeline) Validate(roles []Role) error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", p.Label(), err)
@@ -222,7 +223,14 @@ func (p Pipeline) Validate(roles []Role) error {
 				return fmt.Errorf("stage %s: %w: parallel", st.Name, ErrMissingField)
 			}
 		}
-		for _, role := range st.Roles {
+		for i, role := range st.Roles {
+			if err := ValidateRoleName(role); err != nil {
+				return fmt.Errorf("stage %s: %w", st.Name, err)
+			}
+			// Each listed role runs once; a repeat would count one reviewer twice.
+			if slices.Contains(st.Roles[:i], role) {
+				return fmt.Errorf("stage %s: %w: role %q is listed twice", st.Name, ErrInvalidValue, role)
+			}
 			if !known[role] {
 				return fmt.Errorf("stage %s: %w: role %q is not loaded", st.Name, ErrInvalidValue, role)
 			}

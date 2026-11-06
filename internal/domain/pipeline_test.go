@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -89,6 +90,27 @@ func TestPipeline(t *testing.T) {
 				{"names the stage and the unknown role", func(p *domain.Pipeline) {
 					p.Stages[2].Roles = []string{"reviewer-code", "reviewer-perf"}
 				}, domain.ErrInvalidValue, `stage review: invalid value: role "reviewer-perf" is not loaded`},
+				{"names the stage and the role listed twice", func(p *domain.Pipeline) {
+					p.Stages[2].Roles = []string{"reviewer-code", "scribe", "reviewer-code"}
+				}, domain.ErrInvalidValue, `stage review: invalid value: role "reviewer-code" is listed twice`},
+				{"names the stage and an uppercase role", func(p *domain.Pipeline) {
+					p.Stages[2].Roles = []string{"Reviewer-code"}
+				}, domain.ErrInvalidValue, `stage review: invalid value: role name "Reviewer-code", want only lowercase letters, digits and hyphens`},
+				{"names a look-alike role before saying it is not loaded", func(p *domain.Pipeline) {
+					p.Stages[2].Roles = []string{"reviewer-cod\u0435"}
+				}, domain.ErrInvalidValue, `stage review: invalid value: role name "reviewer-cod\u0435", want only lowercase letters, digits and hyphens`},
+				{"names a role with a trailing space that would repeat one listed", func(p *domain.Pipeline) {
+					p.Stages[2].Roles = []string{"reviewer-code", "reviewer-code "}
+				}, domain.ErrInvalidValue, `stage review: invalid value: role name "reviewer-code ", want only lowercase letters, digits and hyphens`},
+				{"names the stage and an empty role", func(p *domain.Pipeline) {
+					p.Stages[1].Roles = []string{""}
+				}, domain.ErrInvalidValue, "stage build: invalid value: role name is empty"},
+				{"names the stage and a role starting with a hyphen", func(p *domain.Pipeline) {
+					p.Stages[1].Roles = []string{"-builder"}
+				}, domain.ErrInvalidValue, `stage build: invalid value: role name "-builder" starts or ends with a hyphen`},
+				{"names the stage and a role over 64 characters", func(p *domain.Pipeline) {
+					p.Stages[1].Roles = []string{strings.Repeat("b", 65)}
+				}, domain.ErrInvalidValue, `stage build: invalid value: role name "` + strings.Repeat("b", 65) + `" is 65 characters, want at most 64`},
 				{"rejects an unknown kind", func(p *domain.Pipeline) {
 					p.Stages[0] = domain.Stage{Name: "deploy", Kind: "deploy"}
 				}, domain.ErrInvalidValue, `stage deploy: invalid value: kind "deploy"`},
