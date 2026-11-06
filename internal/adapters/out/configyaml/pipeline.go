@@ -15,6 +15,7 @@ import (
 type pipelineFile struct {
 	Name   string      `yaml:"name"`
 	Stages []yaml.Node `yaml:"stages"`
+	Limits yaml.Node   `yaml:"limits"`
 }
 
 type stageBody struct {
@@ -39,6 +40,11 @@ func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 		}
 		p.Stages = append(p.Stages, st)
 	}
+	limits, err := parseLimits(&f.Limits)
+	if err != nil {
+		return domain.Pipeline{}, fmt.Errorf("%s: limits: %w", p.Label(), err)
+	}
+	p.Limits = limits
 	if err := p.Validate(roles); err != nil {
 		return domain.Pipeline{}, err
 	}
@@ -96,6 +102,56 @@ func parseStage(n *yaml.Node) (domain.Stage, error) {
 	default:
 		return domain.Stage{}, fmt.Errorf("%w: line %d: want a stage name or a one-key map", domain.ErrInvalidValue, n.Line)
 	}
+}
+
+// limitKeys are the keys a limits block may set.
+var limitKeys = []string{"spec_rejections", "human_reworks", "triage_retries", "max_rounds"}
+
+// parseLimits reads the limits block. A value must be a YAML integer, and
+// human_reworks may also be "unlimited"; Limits.Validate checks the range.
+// Each value is decoded on its own so a bad one is named by its key.
+func parseLimits(n *yaml.Node) (domain.Limits, error) {
+	var l domain.Limits
+	if n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	if n.Kind == 0 || n.Tag == "!!null" {
+		return l, nil
+	}
+	if n.Kind != yaml.MappingNode {
+		return l, fmt.Errorf("%w: line %d: want a map of limits", domain.ErrInvalidValue, n.Line)
+	}
+	if err := knownKeys(n, limitKeys...); err != nil {
+		return l, err
+	}
+	for i := 0; i < len(n.Content); i += 2 {
+		key, v := n.Content[i].Value, n.Content[i+1]
+		if v.Kind == yaml.AliasNode {
+			v = v.Alias
+		}
+		if key == "human_reworks" && v.Kind == yaml.ScalarNode && v.Tag == "!!str" && v.Value == "unlimited" {
+			continue
+		}
+		var x int
+		if v.Kind != yaml.ScalarNode || v.Tag != "!!int" || v.Decode(&x) != nil {
+			want := "want a whole number of 1 or more"
+			if key == "human_reworks" {
+				want += " or unlimited"
+			}
+			return l, fmt.Errorf("%w: line %d: %s %q, %s", domain.ErrInvalidValue, v.Line, key, v.Value, want)
+		}
+		switch key {
+		case "spec_rejections":
+			l.SpecRejections = &x
+		case "human_reworks":
+			l.HumanReworks = &x
+		case "triage_retries":
+			l.TriageRetries = &x
+		case "max_rounds":
+			l.MaxRounds = &x
+		}
+	}
+	return l, nil
 }
 
 // knownKeys fails on a map key not in keys. Node.Decode can't decode strictly,

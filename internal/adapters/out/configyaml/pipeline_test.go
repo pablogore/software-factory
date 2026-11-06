@@ -55,6 +55,31 @@ func TestLoadPipeline(t *testing.T) {
 			})
 		})
 
+		s.It("loads a limits block", func(ctx *specs.Context) {
+			data := "name: p\nstages: [build]\nlimits:\n  spec_rejections: 1\n  human_reworks: 2\n  triage_retries: 1\n  max_rounds: 4\n"
+
+			p, err := configyaml.LoadPipeline([]byte(data), nil)
+
+			ctx.Expect(err).To(specs.BeNil())
+			one, two, four := 1, 2, 4
+			ctx.Expect(p.Limits).ToEqual(domain.Limits{SpecRejections: &one, HumanReworks: &two, TriageRetries: &one, MaxRounds: &four})
+			ctx.Expect(p.SpecRejections()).ToEqual(1)
+		})
+
+		s.It("loads human_reworks unlimited as no limit", func(ctx *specs.Context) {
+			p, err := configyaml.LoadPipeline([]byte("name: p\nstages: [build]\nlimits:\n  human_reworks: unlimited\n"), nil)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.Limits).ToEqual(domain.Limits{})
+		})
+
+		s.It("takes 3 spec rejections with an empty limits block", func(ctx *specs.Context) {
+			p, err := configyaml.LoadPipeline([]byte("name: p\nstages: [build]\nlimits:\n"), nil)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.SpecRejections()).ToEqual(3)
+		})
+
 		s.When("the flow is broken", func(s *specs.Spec) {
 			rows := []brokenRow{
 				{
@@ -136,6 +161,46 @@ func TestLoadPipeline(t *testing.T) {
 					"names the review stage with no parallel key",
 					"name: p\nstages:\n  - build\n  - review:\n      on_changes: build\n      max_rounds: 3\n",
 					"stage review: missing field: parallel",
+				},
+				{
+					"names an unknown key in limits",
+					"name: p\nstages: [build]\nlimits:\n  spec_rejectionz: 2\n",
+					`pipeline p: limits: invalid value: line 4: unknown key "spec_rejectionz"`,
+				},
+				{
+					"names spec_rejections 0",
+					"name: p\nstages: [build]\nlimits:\n  spec_rejections: 0\n",
+					"pipeline p: limits: invalid value: spec_rejections 0, want at least 1",
+				},
+				{
+					"names negative max_rounds in limits",
+					"name: p\nstages: [build]\nlimits:\n  max_rounds: -1\n",
+					"pipeline p: limits: invalid value: max_rounds -1, want at least 1",
+				},
+				{
+					"names a spec_rejections that is not a whole number",
+					"name: p\nstages: [build]\nlimits:\n  spec_rejections: 2.5\n",
+					`pipeline p: limits: invalid value: line 4: spec_rejections "2.5", want a whole number of 1 or more`,
+				},
+				{
+					"names a triage_retries that is text",
+					"name: p\nstages: [build]\nlimits:\n  triage_retries: two\n",
+					`pipeline p: limits: invalid value: line 4: triage_retries "two", want a whole number of 1 or more`,
+				},
+				{
+					"names a human_reworks that is neither a number nor unlimited",
+					"name: p\nstages: [build]\nlimits:\n  human_reworks: forever\n",
+					`pipeline p: limits: invalid value: line 4: human_reworks "forever", want a whole number of 1 or more or unlimited`,
+				},
+				{
+					"names human_reworks 0",
+					"name: p\nstages: [build]\nlimits:\n  human_reworks: 0\n",
+					"pipeline p: limits: invalid value: human_reworks 0, want at least 1",
+				},
+				{
+					"rejects limits that are not a map",
+					"name: p\nstages: [build]\nlimits: 3\n",
+					"pipeline p: limits: invalid value: line 3: want a map of limits",
 				},
 				{
 					"names a bare stage called merge",
