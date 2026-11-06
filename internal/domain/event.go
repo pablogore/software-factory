@@ -7,6 +7,8 @@ import "time"
 // bus (07-arquitectura.md). Time always travels inside the event.
 type Event interface {
 	EventName() string
+	// JobID is the job the event is addressed to.
+	JobID() JobID
 }
 
 // ResultSubmitted records that a role handed back a validated result.
@@ -20,6 +22,9 @@ type ResultSubmitted struct {
 // EventName implements Event.
 func (ResultSubmitted) EventName() string { return "ResultSubmitted" }
 
+// JobID implements Event.
+func (e ResultSubmitted) JobID() JobID { return e.Job }
+
 // HumanApproved records that an allowed person approved the job.
 type HumanApproved struct {
 	Job JobID     `json:"job"`
@@ -30,6 +35,9 @@ type HumanApproved struct {
 // EventName implements Event.
 func (HumanApproved) EventName() string { return "HumanApproved" }
 
+// JobID implements Event.
+func (e HumanApproved) JobID() JobID { return e.Job }
+
 // SpecgatePassed records that the deterministic specgate accepted the spec.
 type SpecgatePassed struct {
 	Job JobID     `json:"job"`
@@ -38,6 +46,9 @@ type SpecgatePassed struct {
 
 // EventName implements Event.
 func (SpecgatePassed) EventName() string { return "SpecgatePassed" }
+
+// JobID implements Event.
+func (e SpecgatePassed) JobID() JobID { return e.Job }
 
 // GatePassed records that the deterministic gate (checks) passed on the branch.
 type GatePassed struct {
@@ -48,6 +59,9 @@ type GatePassed struct {
 // EventName implements Event.
 func (GatePassed) EventName() string { return "GatePassed" }
 
+// JobID implements Event.
+func (e GatePassed) JobID() JobID { return e.Job }
+
 // GateFailed records that the deterministic gate (checks) failed on the branch.
 type GateFailed struct {
 	Job JobID     `json:"job"`
@@ -56,6 +70,9 @@ type GateFailed struct {
 
 // EventName implements Event.
 func (GateFailed) EventName() string { return "GateFailed" }
+
+// JobID implements Event.
+func (e GateFailed) JobID() JobID { return e.Job }
 
 // StageEntered records that the job moved to a pipeline stage or to one of
 // the gates (StageSpecgate, StageGate).
@@ -68,6 +85,9 @@ type StageEntered struct {
 // EventName implements Event.
 func (StageEntered) EventName() string { return "StageEntered" }
 
+// JobID implements Event.
+func (e StageEntered) JobID() JobID { return e.Job }
+
 // ReviewPassed records that one review role of the current stage passed.
 type ReviewPassed struct {
 	Job  JobID     `json:"job"`
@@ -77,6 +97,9 @@ type ReviewPassed struct {
 
 // EventName implements Event.
 func (ReviewPassed) EventName() string { return "ReviewPassed" }
+
+// JobID implements Event.
+func (e ReviewPassed) JobID() JobID { return e.Job }
 
 // ChangesRequested records that one review role of the current stage asked
 // for CHANGES.
@@ -90,6 +113,9 @@ type ChangesRequested struct {
 // EventName implements Event.
 func (ChangesRequested) EventName() string { return "ChangesRequested" }
 
+// JobID implements Event.
+func (e ChangesRequested) JobID() JobID { return e.Job }
+
 // RoundStarted records that the job starts another review round after CHANGES.
 // Reviewers are the review roles that run in it; the others keep their pass.
 type RoundStarted struct {
@@ -102,6 +128,9 @@ type RoundStarted struct {
 // EventName implements Event.
 func (RoundStarted) EventName() string { return "RoundStarted" }
 
+// JobID implements Event.
+func (e RoundStarted) JobID() JobID { return e.Job }
+
 // NeedsHuman records that the job stops until a person acts, and why.
 type NeedsHuman struct {
 	Job    JobID     `json:"job"`
@@ -112,6 +141,9 @@ type NeedsHuman struct {
 // EventName implements Event.
 func (NeedsHuman) EventName() string { return "NeedsHuman" }
 
+// JobID implements Event.
+func (e NeedsHuman) JobID() JobID { return e.Job }
+
 // MergeRequested records that the job finished its pipeline and asks to merge.
 type MergeRequested struct {
 	Job JobID     `json:"job"`
@@ -120,6 +152,9 @@ type MergeRequested struct {
 
 // EventName implements Event.
 func (MergeRequested) EventName() string { return "MergeRequested" }
+
+// JobID implements Event.
+func (e MergeRequested) JobID() JobID { return e.Job }
 
 // AuthorKind says who wrote a message: a person, a bot or CI.
 type AuthorKind string
@@ -148,6 +183,9 @@ type MessageReceived struct {
 // EventName implements Event.
 func (MessageReceived) EventName() string { return "MessageReceived" }
 
+// JobID implements Event.
+func (e MessageReceived) JobID() JobID { return e.Job }
+
 // ReworkRequested records that a person sent the job back to build with
 // feedback; the build stage gets Text as input.
 type ReworkRequested struct {
@@ -159,3 +197,33 @@ type ReworkRequested struct {
 
 // EventName implements Event.
 func (ReworkRequested) EventName() string { return "ReworkRequested" }
+
+// JobID implements Event.
+func (e ReworkRequested) JobID() JobID { return e.Job }
+
+// StopRequested asks to stop the job for good. Like HumanApproved, the event
+// source vouches that an allowed person sent it; By names that person.
+type StopRequested struct {
+	Job JobID     `json:"job"`
+	By  string    `json:"by"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (StopRequested) EventName() string { return "StopRequested" }
+
+// JobID implements Event.
+func (e StopRequested) JobID() JobID { return e.Job }
+
+// JobStopped records who stopped the job and when; nothing moves it afterwards.
+type JobStopped struct {
+	Job JobID     `json:"job"`
+	By  string    `json:"by"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (JobStopped) EventName() string { return "JobStopped" }
+
+// JobID implements Event.
+func (e JobStopped) JobID() JobID { return e.Job }

@@ -1,13 +1,14 @@
 package domain
 
 // Stages a job can be in that are not pipeline stages: the deterministic gates
-// after a spec and after a build, the end of the pipeline and the wait for a
-// person (02-diagramas.md).
+// after a spec and after a build, the end of the pipeline, the wait for a
+// person (02-diagramas.md) and the stop a person asked for, which is final.
 const (
 	StageSpecgate   = "specgate"
 	StageGate       = "gate"
 	StageMerge      = "merge"
 	StageNeedsHuman = "needs-human"
+	StageStopped    = "stopped"
 )
 
 // JobID identifies a job inside factoryd.

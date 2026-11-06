@@ -19,10 +19,35 @@ var ErrIllegalTransition = errors.New("illegal transition")
 // message outside needs-human) is not decided yet; E01.4 and E01.5 add it.
 var ErrUnsupported = errors.New("unsupported result")
 
+// ErrOtherJob means the event is addressed to a different job than the one
+// it was decided for. Decide returns no events with it, so nothing changes.
+var ErrOtherJob = errors.New("event for another job")
+
+// ErrStopped means a person stopped the job, so no event moves it any more.
+// Decide returns no events with it, so nothing changes.
+var ErrStopped = errors.New("job stopped")
+
 // Decide returns the events that follow ev for job in pipeline p. It never
 // reads a clock: every event it returns carries the time of ev.
 func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event, error) {
+	if ev == nil {
+		return nil, illegal(job, ev)
+	}
+	if ev.JobID() != job.ID {
+		return nil, fmt.Errorf("%w: %s for job %q decided for job %q", ErrOtherJob, ev.EventName(), ev.JobID(), job.ID)
+	}
+	if m, ok := ev.(domain.MessageReceived); ok && ignored(m) {
+		return nil, nil
+	}
+	if job.Stage == domain.StageStopped {
+		return nil, fmt.Errorf("%w: %s", ErrStopped, ev.EventName())
+	}
 	switch e := ev.(type) {
+	case domain.StopRequested:
+		if strings.TrimSpace(e.By) == "" {
+			return nil, fmt.Errorf("decide: stop request without who asked: %w", domain.ErrMissingField)
+		}
+		return []domain.Event{domain.JobStopped{Job: job.ID, By: e.By, At: e.At}}, nil
 	case domain.ResultSubmitted:
 		return decideResult(job, e, p)
 	case domain.SpecgatePassed:
@@ -58,6 +83,8 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, nil, nil, nil
 		case domain.MergeRequested:
 			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, nil, nil, nil
+		case domain.JobStopped:
+			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageStopped, nil, nil, nil
 		}
 	}
 	return job
@@ -98,14 +125,17 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 	return nil, fmt.Errorf("%w: %s result from %q in stage %q", ErrUnsupported, stage.Kind, e.Role, job.Stage)
 }
 
-// decideMessage ignores, without error, a message the event source did not
-// mark as coming from an allowed person: bots, CI and strangers change nothing.
-// In needs-human an allowed person's message is rework feedback: the job goes
-// back to the build stage in the same round, with the text as input.
+// ignored reports whether Decide drops a message without error: the event
+// source did not mark it as coming from an allowed person, so bots, CI and
+// strangers change nothing, in every stage.
+func ignored(e domain.MessageReceived) bool {
+	return !e.Allowed || e.AuthorKind != domain.AuthorPerson
+}
+
+// decideMessage handles an allowed person's message. In needs-human it is
+// rework feedback: the job goes back to the build stage in the same round,
+// with the text as input.
 func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
-	if !e.Allowed || e.AuthorKind != domain.AuthorPerson {
-		return nil, nil
-	}
 	if job.Stage != domain.StageNeedsHuman {
 		return nil, fmt.Errorf("%w: message from %q in stage %q", ErrUnsupported, e.Author, job.Stage)
 	}
