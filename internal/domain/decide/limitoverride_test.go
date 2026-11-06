@@ -224,6 +224,9 @@ func TestLimitOverride(t *testing.T) {
 						ov.By = ""
 						return ov
 					}, nil})
+					rows = append(rows, limitEventRow{"ignores one on " + j.name + " from " + sd.name + " with an invisible name", j.job, func(job domain.Job) domain.LimitOverrideRequested {
+						return signedLimit(limitOverride(sd.kind, sd.allowed, "human_reworks", "9", job.WaitSeq, 2), "\u200b")
+					}, nil})
 				}
 			}
 			specs.Table(s, rows, func(r limitEventRow) string { return r.name }, func(ctx *specs.Context, r limitEventRow) {
@@ -250,6 +253,23 @@ func TestLimitOverride(t *testing.T) {
 					ov.By = " \t"
 					return ov
 				}, domain.ErrMissingField},
+				{"refuses one with a requester of only zero-width characters", needsHumanJob, func(job domain.Job) domain.LimitOverrideRequested {
+					return signedLimit(current(job), "\u200b\u2060")
+				}, domain.ErrMissingField},
+				{"refuses one with a requester of only format characters", needsHumanJob, func(job domain.Job) domain.LimitOverrideRequested {
+					return signedLimit(current(job), "\ufeff\u200f")
+				}, domain.ErrMissingField},
+				{"refuses one with a requester of only punctuation", needsHumanJob, func(job domain.Job) domain.LimitOverrideRequested {
+					return signedLimit(current(job), "-_-")
+				}, domain.ErrMissingField},
+				{"refuses one with an invisible requester on a stopped job", stoppedJob, func(job domain.Job) domain.LimitOverrideRequested {
+					return signedLimit(current(job), "\u200b")
+				}, decide.ErrStopped},
+				{"refuses one with an invisible requester for another job", needsHumanJob, func(job domain.Job) domain.LimitOverrideRequested {
+					ov := signedLimit(current(job), "\u200b")
+					ov.Job = "999-other"
+					return ov
+				}, decide.ErrOtherJob},
 				{"refuses one that names no wait", needsHumanJob, func(job domain.Job) domain.LimitOverrideRequested {
 					ov := current(job)
 					ov.WaitSeq = 0
