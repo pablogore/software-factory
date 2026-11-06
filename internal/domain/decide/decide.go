@@ -3,6 +3,7 @@ package decide
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -16,7 +17,8 @@ var ErrIllegalTransition = errors.New("illegal transition")
 
 // ErrUnsupported means the result or message is legal in this stage but its
 // outcome (NEEDS_INFO, REJECT, BLOCKED, task results, a person's
-// message outside needs-human) is not decided yet; E01.4 and E01.5 add it.
+// message outside needs-human and done) is not decided yet; E01.4 and E01.5
+// add it.
 var ErrUnsupported = errors.New("unsupported result")
 
 // ErrOtherJob means the event is addressed to a different job than the one
@@ -30,8 +32,8 @@ var ErrStopped = errors.New("job stopped")
 // Decide returns the events that follow ev for job in pipeline p. It never
 // reads a clock: every event it returns carries the time of ev.
 func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event, error) {
-	if ev == nil {
-		return nil, illegal(job, ev)
+	if isNil(ev) {
+		return nil, fmt.Errorf("%w: no event in stage %q", ErrIllegalTransition, job.Stage)
 	}
 	if ev.JobID() != job.ID {
 		return nil, fmt.Errorf("%w: %s for job %q decided for job %q", ErrOtherJob, ev.EventName(), ev.JobID(), job.ID)
@@ -61,6 +63,10 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	case domain.HumanApproved:
 		if job.Stage == domain.StageNeedsHuman {
 			return []domain.Event{domain.MergeRequested{Job: job.ID, At: e.At}}, nil
+		}
+	case domain.MergeCompleted:
+		if job.Stage == domain.StageMerge {
+			return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}, nil
 		}
 	case domain.MessageReceived:
 		return decideMessage(job, e, p)
@@ -96,7 +102,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 
 func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) ([]domain.Event, error) {
 	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage })
-	if i < 0 || e.Result == nil {
+	if i < 0 || isNil(e.Result) {
 		return nil, illegal(job, e)
 	}
 	stage := p.Stages[i]
@@ -137,10 +143,11 @@ func ignored(e domain.MessageReceived) bool {
 }
 
 // decideMessage handles an allowed person's message. In needs-human it is
-// rework feedback: the job goes back to the build stage in the same round,
-// with the text as input.
+// rework feedback, and in done it reopens the merged job: either way the job
+// goes back to the build stage in the same round, with the text as input, so
+// a reopened job past its last round still needs a person after CHANGES.
 func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
-	if job.Stage != domain.StageNeedsHuman {
+	if job.Stage != domain.StageNeedsHuman && job.Stage != domain.StageDone {
 		return nil, fmt.Errorf("%w: message from %q in stage %q", ErrUnsupported, e.Author, job.Stage)
 	}
 	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
@@ -302,9 +309,16 @@ func next(job domain.Job, p domain.Pipeline, i int, at time.Time) []domain.Event
 	return []domain.Event{domain.MergeRequested{Job: job.ID, At: at}}
 }
 
-func illegal(job domain.Job, ev domain.Event) error {
-	if ev == nil {
-		return fmt.Errorf("%w: no event in stage %q", ErrIllegalTransition, job.Stage)
+// isNil reports whether v is a nil interface or holds a nil pointer: calling
+// a value method through a nil pointer panics, so Decide refuses both.
+func isNil(v any) bool {
+	if v == nil {
+		return true
 	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
+}
+
+func illegal(job domain.Job, ev domain.Event) error {
 	return fmt.Errorf("%w: %s in stage %q", ErrIllegalTransition, ev.EventName(), job.Stage)
 }

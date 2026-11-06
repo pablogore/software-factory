@@ -8,7 +8,7 @@ import (
 // ReservedStageNames are the stages a job is in outside its pipeline, plus its
 // terminal states. A pipeline stage with one of these names would be mistaken
 // for them.
-var ReservedStageNames = []string{"stopped", StageMerge, StageNeedsHuman, "needs-info", "done", "rejected"}
+var ReservedStageNames = []string{"stopped", StageMerge, StageNeedsHuman, "needs-info", StageDone, "rejected"}
 
 // Pipeline is the flow a job follows: an ordered list of stages (04-roles.md).
 // Roles are the roles its stages list, as loaded; decide reads a reviewer's
