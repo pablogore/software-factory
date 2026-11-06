@@ -22,8 +22,9 @@ type Stage struct {
 }
 
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
-// the pipeline: exactly one build stage, every review goes back to an earlier
-// stage, and every role a stage lists exists.
+// the pipeline: exactly one build stage, stage names are unique, every review
+// goes back to an earlier stage, lists roles and allows at least one round, and
+// every role a stage lists exists.
 func (p Pipeline) Validate(roles []Role) error {
 	known := make(map[string]bool, len(roles))
 	for _, r := range roles {
@@ -43,6 +44,10 @@ func (p Pipeline) Validate(roles []Role) error {
 		if err := st.Kind.Validate(); err != nil {
 			return fmt.Errorf("stage %s: %w", st.Name, err)
 		}
+		// A repeated name makes on_changes ambiguous.
+		if seen[st.Name] {
+			return fmt.Errorf("stage %s: %w: stage name is repeated", st.Name, ErrInvalidValue)
+		}
 		if st.Kind == KindReview {
 			// on_changes must point back, so the flow stays a DAG plus its review loops.
 			if st.OnChanges == "" {
@@ -51,11 +56,17 @@ func (p Pipeline) Validate(roles []Role) error {
 			if !seen[st.OnChanges] {
 				return fmt.Errorf("stage %s: %w: on_changes %q is not an earlier stage", st.Name, ErrInvalidValue, st.OnChanges)
 			}
+			if len(st.Roles) == 0 {
+				return fmt.Errorf("stage %s: %w: parallel", st.Name, ErrMissingField)
+			}
 		}
 		for _, role := range st.Roles {
 			if !known[role] {
 				return fmt.Errorf("stage %s: %w: role %q is not loaded", st.Name, ErrInvalidValue, role)
 			}
+		}
+		if st.Kind == KindReview && st.MaxRounds < 1 {
+			return fmt.Errorf("stage %s: %w: max_rounds %d, want at least 1", st.Name, ErrInvalidValue, st.MaxRounds)
 		}
 		seen[st.Name] = true
 	}

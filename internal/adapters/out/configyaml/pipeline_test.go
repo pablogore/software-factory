@@ -88,7 +88,37 @@ func TestLoadPipeline(t *testing.T) {
 				{
 					"names an unknown top-level key",
 					"name: p\nstage: [build]\n",
-					"parse pipeline: yaml: unmarshal errors:\n  line 2: field stage not found in type configyaml.pipelineFile",
+					`parse pipeline: invalid value: line 2: unknown key "stage"`,
+				},
+				{
+					"names the review stage with max_rounds 0",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n      max_rounds: 0\n",
+					"stage review: invalid value: max_rounds 0, want at least 1",
+				},
+				{
+					"names the review stage with no max_rounds",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n",
+					"stage review: invalid value: max_rounds 0, want at least 1",
+				},
+				{
+					"names the review stage with negative max_rounds",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n      max_rounds: -2\n",
+					"stage review: invalid value: max_rounds -2, want at least 1",
+				},
+				{
+					"names the repeated stage",
+					"name: p\nstages: [intake, intake, build]\n",
+					"stage intake: invalid value: stage name is repeated",
+				},
+				{
+					"names the review stage that lists no roles",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: []\n      on_changes: build\n      max_rounds: 3\n",
+					"stage review: missing field: parallel",
+				},
+				{
+					"names the review stage with no parallel key",
+					"name: p\nstages:\n  - build\n  - review:\n      on_changes: build\n      max_rounds: 3\n",
+					"stage review: missing field: parallel",
 				},
 			}
 			specs.Table(s, rows, func(r brokenRow) string {

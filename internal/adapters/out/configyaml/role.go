@@ -3,6 +3,8 @@ package configyaml
 import (
 	"bytes"
 	"fmt"
+	"reflect"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
@@ -73,9 +75,31 @@ func LoadRole(data []byte) (domain.Role, error) {
 }
 
 // decodeStrict decodes data into v and fails on a key v doesn't declare, so a
-// typo is an error instead of a silently missing setting.
+// typo is an error instead of a silently missing setting. Top-level keys are
+// checked first so their error names the key, not the Go type behind it.
 func decodeStrict(data []byte, v any) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return err
+	}
+	if len(doc.Content) == 1 {
+		if err := knownKeys(doc.Content[0], yamlKeys(v)...); err != nil {
+			return err
+		}
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	return dec.Decode(v)
+}
+
+// yamlKeys lists the yaml keys of the struct v points to, so the top-level
+// check can't drift from the fields decodeStrict decodes into.
+func yamlKeys(v any) []string {
+	t := reflect.TypeOf(v).Elem()
+	keys := make([]string, 0, t.NumField())
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		keys = append(keys, name)
+	}
+	return keys
 }
