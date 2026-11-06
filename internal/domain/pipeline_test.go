@@ -67,6 +67,25 @@ func TestPipeline(t *testing.T) {
 				{"names a review that lists no roles", func(p *domain.Pipeline) {
 					p.Stages[2].Roles = nil
 				}, domain.ErrMissingField, "stage review: missing field: parallel"},
+				{"names a stopped stage of kind intake", func(p *domain.Pipeline) {
+					p.Stages[0].Name = "stopped"
+				}, domain.ErrInvalidValue, "stage stopped: invalid value: stage name is reserved"},
+				{"names a merge stage of kind approve", func(p *domain.Pipeline) {
+					p.Stages[3].Name = "merge"
+				}, domain.ErrInvalidValue, "stage merge: invalid value: stage name is reserved"},
+				{"names a needs-human stage of kind review", func(p *domain.Pipeline) {
+					p.Stages[2].Name = "needs-human"
+				}, domain.ErrInvalidValue, "stage needs-human: invalid value: stage name is reserved"},
+				{"names a needs-info stage of kind task", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "needs-info", Kind: domain.KindTask})
+				}, domain.ErrInvalidValue, "stage needs-info: invalid value: stage name is reserved"},
+				{"names a done stage of kind build", func(p *domain.Pipeline) {
+					p.Stages[1].Name = "done"
+					p.Stages[2].OnChanges = "done"
+				}, domain.ErrInvalidValue, "stage done: invalid value: stage name is reserved"},
+				{"names a rejected stage of kind spec", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "rejected", Kind: domain.KindSpec})
+				}, domain.ErrInvalidValue, "stage rejected: invalid value: stage name is reserved"},
 			}
 			specs.Table(s, rows, func(r pipelineRow) string {
 				return r.name
