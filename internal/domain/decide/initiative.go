@@ -3,7 +3,6 @@ package decide
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/pablogore/software-factory/internal/domain"
 )
@@ -29,7 +28,7 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 	}
 	switch e := ev.(type) {
 	case domain.MessageReceived:
-		if strings.TrimSpace(e.Author) == "" {
+		if domain.Blank(e.Author) {
 			return nil, fmt.Errorf("decide: message without who sent it: %w", domain.ErrMissingField)
 		}
 		// A person's answer is the only way out of needs-human: the replan
@@ -45,7 +44,7 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 			return replanned(in, e)
 		}
 	case domain.HumanApproved:
-		if strings.TrimSpace(e.By) == "" {
+		if domain.Blank(e.By) {
 			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
 		}
 		if in.Stage == domain.InitiativeCheckpoint {
