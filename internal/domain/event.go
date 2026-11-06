@@ -48,6 +48,15 @@ type GatePassed struct {
 // EventName implements Event.
 func (GatePassed) EventName() string { return "GatePassed" }
 
+// GateFailed records that the deterministic gate (checks) failed on the branch.
+type GateFailed struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (GateFailed) EventName() string { return "GateFailed" }
+
 // StageEntered records that the job moved to a pipeline stage or to one of
 // the gates (StageSpecgate, StageGate).
 type StageEntered struct {

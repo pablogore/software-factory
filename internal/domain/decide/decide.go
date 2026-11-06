@@ -29,6 +29,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return afterGate(job, ev, domain.StageSpecgate, domain.KindSpec, e.At, p)
 	case domain.GatePassed:
 		return afterGate(job, ev, domain.StageGate, domain.KindBuild, e.At, p)
+	case domain.GateFailed:
+		return gateFailed(job, e, p)
 	case domain.HumanApproved:
 		if job.Stage == domain.StageNeedsHuman {
 			return []domain.Event{domain.MergeRequested{Job: job.ID, At: e.At}}, nil
@@ -212,6 +214,29 @@ func afterGate(job domain.Job, ev domain.Event, gate string, kind domain.Kind, a
 		return nil, illegal(job, ev)
 	}
 	return next(job, p, i, at), nil
+}
+
+// gateFailed sends the job back to build for another round, or to needs-human
+// when it fails in the last one. A failing gate uses up a round, as in the
+// current factory, so the limit is the review stage's max_rounds; the new
+// round keeps job.Reviewers because none of them got to run.
+func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domain.Event, error) {
+	b := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
+	if job.Stage != domain.StageGate || b < 0 {
+		return nil, illegal(job, e)
+	}
+	r := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindReview })
+	if r < 0 {
+		return nil, fmt.Errorf("decide: pipeline %q has no review stage", p.Name)
+	}
+	if limit := p.Stages[r].MaxRounds; job.Round >= limit {
+		reason := fmt.Sprintf("gate failed in the last round (%d of %d)", job.Round, limit)
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}}, nil
+	}
+	return []domain.Event{
+		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: slices.Clone(job.Reviewers), At: e.At},
+		domain.StageEntered{Job: job.ID, Stage: p.Stages[b].Name, At: e.At},
+	}, nil
 }
 
 // next enters the stage after stage i, or requests the merge after the last.
