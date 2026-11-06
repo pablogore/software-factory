@@ -14,7 +14,7 @@ const overrideReason = "the CHANGES are style only; merging for the release"
 
 // override is a person's override as the event source marks it.
 func override(kind domain.AuthorKind, allowed bool, minute int) domain.OverrideRequested {
-	return domain.OverrideRequested{Job: jobID, By: "pablogore", AuthorKind: kind, Allowed: allowed, Reason: overrideReason, At: at(minute)}
+	return domain.OverrideRequested{Job: jobID, By: "pablogore", AuthorKind: kind, Allowed: allowed, Reason: overrideReason, WaitSeq: 1, At: at(minute)}
 }
 
 // overrideMerges is what an accepted override returns: the history entry,
@@ -130,7 +130,7 @@ func TestOverride(t *testing.T) {
 			s.It("leaves an OK after CHANGES sending the job back to build", func(ctx *specs.Context) {
 				job := waitingFor(ctx, domain.CauseChanges)
 
-				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, defaultPipeline())
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}, defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(evs).ToEqual([]domain.Event{entered("build", 2)})

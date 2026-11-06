@@ -34,6 +34,7 @@ type Job struct {
 	SpecEscalated  bool           `json:"spec_escalated,omitempty"`  // in needs-human, stopped by specgate's last rejection
 	Reason         string         `json:"reason,omitempty"`          // in needs-human, why the job is there; rejected by intake, intake's reason
 	Cause          HumanCause     `json:"cause,omitempty"`           // in needs-human, which of HumanCauses put the job there
+	WaitSeq        int            `json:"wait_seq"`                  // entries into needs-human, needs-info or done so far; a person's action names the one it answers
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
 	Reviewers      []string       `json:"reviewers,omitempty"`       // review roles that run in this round; empty runs every role of the stage

@@ -43,6 +43,12 @@ var ErrOKRefused = errors.New("OK refused")
 // returns no events with it, so the job stays in needs-human.
 var ErrOverrideRefused = errors.New("override refused")
 
+// ErrStaleWait means a person's OK, override or message names a wait other
+// than the job's current one, so it answers an earlier wait (a replay) and
+// must not act on this one. The error names the expected WaitSeq, never the
+// stage. Decide returns no events with it, so nothing changes.
+var ErrStaleWait = errors.New("action for another wait")
+
 // Decide returns the events that follow ev for job in pipeline p. It never
 // reads a clock: every event it returns carries the time of ev.
 func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event, error) {
@@ -88,6 +94,9 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if strings.TrimSpace(e.By) == "" {
 			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
 		}
+		if err := fresh(job, ev, e.WaitSeq); err != nil {
+			return nil, err
+		}
 		if job.Stage == domain.StageNeedsHuman {
 			return approved(job, e, p)
 		}
@@ -98,6 +107,9 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		}
 		if blank(e.Reason) {
 			return nil, fmt.Errorf("decide: override without a reason: %w", domain.ErrMissingField)
+		}
+		if err := fresh(job, ev, e.WaitSeq); err != nil {
+			return nil, err
 		}
 		if job.Stage == domain.StageNeedsHuman {
 			return overridden(job, e)
@@ -116,6 +128,13 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if strings.TrimSpace(e.Author) == "" {
 			return nil, fmt.Errorf("decide: message without who sent it: %w", domain.ErrMissingField)
 		}
+		// A direction that drops a slice outside a wait answers no wait: the
+		// drop ends the job, so no later wait can replay it.
+		if !drops(job, e) || waiting(job.Stage) {
+			if err := fresh(job, ev, e.WaitSeq); err != nil {
+				return nil, err
+			}
+		}
 		return decideMessage(job, e, p)
 	}
 	return nil, illegal(job, ev)
@@ -129,9 +148,13 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.StageEntered:
 			job.Stage, job.InfoFrom, job.Passed, job.Changes = e.Stage, "", nil, nil
 			job = leftNeedsHuman(job)
+			if waiting(e.Stage) {
+				job.WaitSeq++
+			}
 		case domain.NeedsInfo:
 			job.Stage, job.InfoFrom, job.Passed, job.Changes = domain.StageNeedsInfo, e.From, nil, nil
 			job = leftNeedsHuman(job)
+			job.WaitSeq++
 		case domain.ReviewPassed:
 			job.Passed = append(slices.Clip(job.Passed), e.Role)
 		case domain.ChangesRequested:
@@ -143,6 +166,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.NeedsHuman:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
 			job.SpecException, job.SpecEscalated, job.Reason, job.Cause = e.SpecException, e.SpecEscalated, e.Reason, e.Cause
+			job.WaitSeq++
 		case domain.MergeRequested:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", nil, nil, nil
 			job = leftNeedsHuman(job)
@@ -224,6 +248,32 @@ func ignored(allowed bool, kind domain.AuthorKind) bool {
 	return !allowed || kind != domain.AuthorPerson
 }
 
+// waiting reports whether stage waits on a person: needs-human, needs-info
+// or done, the stages a person's OK, override or message answers.
+func waiting(stage string) bool {
+	return stage == domain.StageNeedsHuman || stage == domain.StageNeedsInfo || stage == domain.StageDone
+}
+
+// fresh refuses a person's action unless seq names the job's current wait,
+// so an OK, override or message given for an earlier wait, delivered again,
+// never acts on a later one. It runs before the stage is looked at, so a
+// stale or missing seq tells the sender nothing about the stage.
+func fresh(job domain.Job, ev domain.Event, seq int) error {
+	if seq == 0 {
+		return fmt.Errorf("decide: %s without the wait it answers: %w", ev.EventName(), domain.ErrMissingField)
+	}
+	if seq != job.WaitSeq {
+		return fmt.Errorf("%w: %s for wait %d, expected wait %d", ErrStaleWait, ev.EventName(), seq, job.WaitSeq)
+	}
+	return nil
+}
+
+// drops reports whether a person's message is a direction that drops the
+// unmerged slice job.
+func drops(job domain.Job, e domain.MessageReceived) bool {
+	return e.Direction && job.Initiative != "" && job.Stage != domain.StageMerge && job.Stage != domain.StageDone
+}
+
 // blank reports whether a required text field is empty or only spaces.
 func blank(s string) bool {
 	return strings.TrimSpace(s) == ""
@@ -280,7 +330,7 @@ func overridden(job domain.Job, e domain.OverrideRequested) ([]domain.Event, err
 // the same round, with the text as input, so a reopened job past its last
 // round still needs a person after CHANGES.
 func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
-	if e.Direction && job.Initiative != "" && job.Stage != domain.StageMerge && job.Stage != domain.StageDone {
+	if drops(job, e) {
 		return dropped(job, e), nil
 	}
 	if job.Stage == domain.StageNeedsInfo {

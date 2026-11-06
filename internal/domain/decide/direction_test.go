@@ -18,10 +18,11 @@ func direction(kind domain.AuthorKind, allowed bool, minute int) domain.MessageR
 	return m
 }
 
-// unmergedSlice is the initiative's first slice job, not merged, in stage.
+// unmergedSlice is the initiative's first slice job, not merged, in stage,
+// with one wait so far: the current one, or one it has left.
 func unmergedSlice(stage string) domain.Job {
 	job := sliceJob()
-	job.Stage = stage
+	job.Stage, job.WaitSeq = stage, 1
 	if stage == domain.StageNeedsInfo {
 		job.InfoFrom = "spec"
 	}
@@ -82,7 +83,7 @@ func TestDirection(t *testing.T) {
 					in = replan(ctx, in, continued(2), []domain.Event{
 						domain.CheckpointReached{Job: jobID, Initiative: initiativeID, At: at(2)},
 					})
-					in = replan(ctx, in, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(3)}, []domain.Event{nextSlice(3)})
+					in = replan(ctx, in, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(3)}, []domain.Event{nextSlice(3)})
 
 					ctx.Expect(in.Stage).ToEqual(domain.InitiativeActive)
 					ctx.Expect(job.Stage).ToEqual(domain.StageRejected)
@@ -123,7 +124,7 @@ func TestDirection(t *testing.T) {
 		})
 
 		s.When("the slice was dropped", func(s *specs.Spec) {
-			approval := domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}
+			approval := domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}
 			rows := []eventRow{
 				{"refuses the build starting again", result("builder", 2, domain.BuildResult{Status: domain.BuildReady})},
 				{"refuses a passing gate", domain.GatePassed{Job: jobID, At: at(2)}},
@@ -225,7 +226,7 @@ func TestDirection(t *testing.T) {
 
 			s.It("treats it as ordinary feedback on a job outside any initiative", func(ctx *specs.Context) {
 				job := newJob()
-				job.Stage = domain.StageNeedsHuman
+				job.Stage, job.WaitSeq = domain.StageNeedsHuman, 1
 
 				evs, err := decide.Decide(job, direction(domain.AuthorPerson, true, 1), defaultPipeline())
 

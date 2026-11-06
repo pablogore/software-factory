@@ -129,7 +129,7 @@ func TestNeedsHumanCause(t *testing.T) {
 					{"a direction", direction(domain.AuthorPerson, true, 2)},
 				}
 				if okMoves(r.cause) {
-					exits = append(exits, exitRow{"an OK", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}})
+					exits = append(exits, exitRow{"an OK", domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}})
 				}
 				if r.cause == domain.CauseChanges {
 					exits = append(exits, exitRow{"an override", override(domain.AuthorPerson, true, 2)})
@@ -176,7 +176,7 @@ func TestNeedsHumanCause(t *testing.T) {
 		})
 
 		s.When("a person gives an OK in needs-human", func(s *specs.Spec) {
-			ok := domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}
+			ok := domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}
 			rows := []okRow{
 				{"after a builder BLOCKED it is refused, naming the cause", domain.CauseBlocked, nil, decide.ErrOKRefused},
 				{"after an approver ESCALATE it requests the merge", domain.CauseEscalated, []domain.Event{domain.MergeRequested{Job: jobID, At: at(2)}}, nil},
@@ -231,7 +231,7 @@ func TestNeedsHumanCause(t *testing.T) {
 			s.It("without who gave it is refused for the missing name before the cause", func(ctx *specs.Context) {
 				job := waitingFor(ctx, domain.CauseBlocked)
 
-				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: " ", At: at(2)}, defaultPipeline())
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: " ", WaitSeq: 1, At: at(2)}, defaultPipeline())
 
 				ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 				ctx.Expect(err).To(specs.Not(specs.MatchError(decide.ErrOKRefused)))

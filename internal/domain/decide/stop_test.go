@@ -112,7 +112,7 @@ func TestStop(t *testing.T) {
 				{"a gate OK changes nothing", domain.GatePassed{Job: jobID, At: at(1)}},
 				{"a failing gate changes nothing", domain.GateFailed{Job: jobID, At: at(1)}},
 				{"a failing specgate changes nothing", domain.SpecgateFailed{Job: jobID, At: at(1)}},
-				{"a person's approval changes nothing", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)}},
+				{"a person's approval changes nothing", domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(1)}},
 				{"an allowed person's message changes nothing", message(domain.AuthorPerson, true, 1)},
 				{"a stage entered changes nothing", entered("build", 1)},
 			}
@@ -158,7 +158,7 @@ func TestStop(t *testing.T) {
 				{"rejects a failing gate in gate", domain.StageGate, domain.GateFailed{Job: other, At: at(1)}},
 				{"rejects a specgate OK in specgate", domain.StageSpecgate, domain.SpecgatePassed{Job: other, At: at(1)}},
 				{"rejects a failing specgate in specgate", domain.StageSpecgate, domain.SpecgateFailed{Job: other, At: at(1)}},
-				{"rejects a person's approval in needs-human", domain.StageNeedsHuman, domain.HumanApproved{Job: other, By: "pablogore", At: at(1)}},
+				{"rejects a person's approval in needs-human", domain.StageNeedsHuman, domain.HumanApproved{Job: other, By: "pablogore", WaitSeq: 1, At: at(1)}},
 				{"rejects an allowed person's message in needs-human", domain.StageNeedsHuman, person},
 				{"rejects a bot's message in needs-human", domain.StageNeedsHuman, bot},
 			}

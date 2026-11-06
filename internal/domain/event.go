@@ -25,11 +25,13 @@ func (ResultSubmitted) EventName() string { return "ResultSubmitted" }
 // JobID implements Event.
 func (e ResultSubmitted) JobID() JobID { return e.Job }
 
-// HumanApproved records that an allowed person approved the job.
+// HumanApproved records that an allowed person approved the job. WaitSeq is
+// the job's WaitSeq when the OK was given: it acts only on that wait.
 type HumanApproved struct {
-	Job JobID     `json:"job"`
-	By  string    `json:"by"`
-	At  time.Time `json:"at"`
+	Job     JobID     `json:"job"`
+	By      string    `json:"by"`
+	WaitSeq int       `json:"wait_seq"`
+	At      time.Time `json:"at"`
 }
 
 // EventName implements Event.
@@ -250,7 +252,8 @@ const (
 // source decides Allowed (the provider's allowlist, 03-integraciones.md),
 // AuthorKind and Direction, a change of course for the job's initiative;
 // decide.Decide trusts all three and only acts on an allowed person. The text
-// alone never makes a message a direction.
+// alone never makes a message a direction. WaitSeq is the job's WaitSeq when
+// the message was sent: it acts only on that wait.
 type MessageReceived struct {
 	Job        JobID      `json:"job"`
 	Provider   string     `json:"provider"`
@@ -260,6 +263,7 @@ type MessageReceived struct {
 	Allowed    bool       `json:"allowed"`
 	Direction  bool       `json:"direction"`
 	Text       string     `json:"text"`
+	WaitSeq    int        `json:"wait_seq"`
 	At         time.Time  `json:"at"`
 }
 
@@ -305,13 +309,15 @@ func (e InfoAnswered) JobID() JobID { return e.Job }
 // rejected. Like MessageReceived, the event source decides Allowed and
 // AuthorKind, and decide.Decide only acts on an allowed person; By names
 // that person. Reason is their own words, data only: Decide never parses it
-// or routes on it.
+// or routes on it. WaitSeq is the job's WaitSeq when the override was asked:
+// it acts only on that wait.
 type OverrideRequested struct {
 	Job        JobID      `json:"job"`
 	By         string     `json:"by"`
 	AuthorKind AuthorKind `json:"author_kind"`
 	Allowed    bool       `json:"allowed"`
 	Reason     string     `json:"reason"`
+	WaitSeq    int        `json:"wait_seq"`
 	At         time.Time  `json:"at"`
 }
 

@@ -135,7 +135,7 @@ func TestSliceState(t *testing.T) {
 						domain.CheckpointReached{Job: jobID, Initiative: initiativeID, At: at(2)},
 					})
 
-					in = replan(ctx, in, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(3)}, []domain.Event{nextSlice(3)})
+					in = replan(ctx, in, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(3)}, []domain.Event{nextSlice(3)})
 
 					ctx.Expect(in.Stage).ToEqual(domain.InitiativeActive)
 					ctx.Expect(in.Job).ToEqual(domain.JobID(""))
@@ -193,7 +193,7 @@ func TestSliceState(t *testing.T) {
 			s.It("keeps the reason when a person's OK is refused", func(ctx *specs.Context) {
 				job := specEscalated()
 
-				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, defaultPipeline())
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}, defaultPipeline())
 
 				ctx.Expect(err).To(specs.MatchError(decide.ErrOKRefused))
 				ctx.Expect(decide.Apply(job, evs)).ToEqual(specEscalated())
@@ -234,11 +234,11 @@ func TestSliceState(t *testing.T) {
 					ctx.Expect(job.SpecEscalated).To(specs.BeTrue())
 					// An OK cannot merge a job specgate stopped, so the merge
 					// happens outside Decide and is only folded in.
-					_, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(10)}, defaultPipeline())
+					_, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(10)}, defaultPipeline())
 					ctx.Expect(err).To(specs.MatchError(decide.ErrOKRefused))
 					job = decide.Apply(job, []domain.Event{domain.MergeRequested{Job: jobID, At: at(10)}})
 					step(merged(11))
-					step(message(domain.AuthorPerson, true, 12))
+					step(answering(message(domain.AuthorPerson, true, 12), 2))
 					ctx.Expect(job.Stage).ToEqual("build")
 					step(result("builder", 13, domain.BuildResult{Status: domain.BuildReady}))
 					step(domain.GatePassed{Job: jobID, At: at(14)})
@@ -249,7 +249,7 @@ func TestSliceState(t *testing.T) {
 					ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
 					ctx.Expect(job.SpecRejections).ToEqual(3)
 
-					step(message(domain.AuthorPerson, true, 17))
+					step(answering(message(domain.AuthorPerson, true, 17), 3))
 
 					ctx.Expect(job.Stage).ToEqual("build")
 					ctx.Expect(job.SpecRejections).ToEqual(3)
@@ -349,7 +349,7 @@ func TestSliceState(t *testing.T) {
 				{"refuses a name of only spaces at the initiative's checkpoint", " \t", onInitiative},
 			}
 			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
-				evs, err := r.run(domain.HumanApproved{Job: jobID, By: r.by, At: at(2)})
+				evs, err := r.run(domain.HumanApproved{Job: jobID, By: r.by, WaitSeq: 1, At: at(2)})
 
 				ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 				ctx.Expect(evs).To(specs.BeEmpty())

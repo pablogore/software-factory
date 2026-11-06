@@ -83,7 +83,13 @@ func passed(role string, minute int) domain.ReviewPassed {
 
 func message(kind domain.AuthorKind, allowed bool, minute int) domain.MessageReceived {
 	return domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: "pablogore",
-		AuthorKind: kind, Allowed: allowed, Text: "rename the flag", At: at(minute)}
+		AuthorKind: kind, Allowed: allowed, Text: "rename the flag", WaitSeq: 1, At: at(minute)}
+}
+
+// answering is m sent for the job's wait seq instead of its first.
+func answering(m domain.MessageReceived, seq int) domain.MessageReceived {
+	m.WaitSeq = seq
+	return m
 }
 
 type step struct {
@@ -193,15 +199,17 @@ func TestDecide(t *testing.T) {
 				{"review from a role outside the stage", "review", pass("reviewer-docs", 1)},
 				{"review PASS from a role that already passed", "review", pass("reviewer-ux", 1)},
 				{"approve result after merge requested", domain.StageMerge, result("approver", 1, domain.ApproveResult{Decision: domain.ApproveApprove})},
-				{"human approval while in approve", "approve", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)}},
+				{"human approval while in approve", "approve", domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(1)}},
 				{"result in a stage the pipeline lacks", "deploy", result("intake", 1, domain.IntakeResult{Decision: domain.IntakeAccept})},
 			}
 			specs.Table(s, rows, func(r illegalRow) string { return r.name }, func(ctx *specs.Context, r illegalRow) {
+				// One wait behind it, so a person's action is fresh and only the
+				// stage refuses it.
 				job := newJob()
-				job.Stage = r.stage
+				job.Stage, job.WaitSeq = r.stage, 1
 				job.Passed = []string{"reviewer-ux"}
 				before := newJob()
-				before.Stage = r.stage
+				before.Stage, before.WaitSeq = r.stage, 1
 				before.Passed = []string{"reviewer-ux"}
 
 				evs, err := decide.Decide(job, r.ev, defaultPipeline())
@@ -374,7 +382,7 @@ func TestDecide(t *testing.T) {
 		s.When("a job waits in needs-human", func(s *specs.Spec) {
 			needsHuman := func() domain.Job {
 				job := newJob()
-				job.Stage, job.Round = domain.StageNeedsHuman, 3
+				job.Stage, job.Round, job.WaitSeq = domain.StageNeedsHuman, 3, 1
 				return job
 			}
 
@@ -397,7 +405,7 @@ func TestDecide(t *testing.T) {
 				job := needsHuman()
 				job.Cause = domain.CauseEscalated
 
-				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)}, defaultPipeline())
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(1)}, defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(evs).ToEqual([]domain.Event{domain.MergeRequested{Job: jobID, At: at(1)}})
@@ -465,7 +473,7 @@ func TestDecide(t *testing.T) {
 
 		s.It("leaves an allowed person's message outside needs-human unsupported", func(ctx *specs.Context) {
 			job := newJob()
-			job.Stage = "review"
+			job.Stage, job.WaitSeq = "review", 1
 
 			evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 1), defaultPipeline())
 
