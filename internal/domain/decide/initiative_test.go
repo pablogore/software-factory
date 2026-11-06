@@ -129,7 +129,11 @@ func TestInitiative(t *testing.T) {
 				}
 			}},
 			{"a closed initiative stays closed: a later replan or a person's OK starts no slice", func(ctx *specs.Context) {
-				_, in := mergeSlice(ctx, threeSlices(domain.CheckpointAuto))
+				// It waited once before, so the OK names that wait and only
+				// the closed stage refuses it.
+				start := threeSlices(domain.CheckpointAuto)
+				start.WaitSeq = 1
+				_, in := mergeSlice(ctx, start)
 				closed := replan(ctx, in, doneReplan(2), []domain.Event{
 					domain.InitiativeEnded{Job: jobID, Initiative: initiativeID, At: at(2)},
 				})
@@ -198,9 +202,16 @@ func TestInitiative(t *testing.T) {
 		})
 
 		s.When("the event does not fit", func(s *specs.Spec) {
+			// Each has had one wait, so a person's OK names it and only the
+			// stage refuses it.
 			replanning := func() domain.Initiative {
 				in := threeSlices(domain.CheckpointEverySlice)
-				in.Stage = domain.InitiativeReplan
+				in.Stage, in.WaitSeq = domain.InitiativeReplan, 1
+				return in
+			}
+			running := func() domain.Initiative {
+				in := threeSlices(domain.CheckpointEverySlice)
+				in.WaitSeq = 1
 				return in
 			}
 			waiting := func() domain.Initiative {
@@ -229,7 +240,7 @@ func TestInitiative(t *testing.T) {
 				{"refuses a replan while a slice runs", threeSlices(domain.CheckpointAuto), continued(2), decide.ErrIllegalTransition},
 				{"refuses a second replan at the checkpoint", waiting(), continued(2), decide.ErrIllegalTransition},
 				{"refuses a person's OK before the replan", replanning(), approval, decide.ErrIllegalTransition},
-				{"refuses a person's OK while a slice runs", threeSlices(domain.CheckpointEverySlice), approval, decide.ErrIllegalTransition},
+				{"refuses a person's OK while a slice runs", running(), approval, decide.ErrIllegalTransition},
 				{"refuses a missing event", replanning(), nil, decide.ErrIllegalTransition},
 				{"refuses a replan DONE while a slice runs", threeSlices(domain.CheckpointAuto), doneReplan(2), decide.ErrIllegalTransition},
 				{"refuses a replan NEEDS-HUMAN at the checkpoint", waiting(), needsHumanReplan(2, "why"), decide.ErrIllegalTransition},

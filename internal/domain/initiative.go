@@ -32,13 +32,16 @@ const (
 // job it last heard of: the one running while it is active, or whose merge
 // is being replanned or waits at the checkpoint; it is empty from the request
 // for the next slice until that slice starts. Reason is why it needs a
-// person, as the replan wrote it.
+// person, as the replan wrote it. WaitSeq counts its entries into a wait for
+// a person, the checkpoint or needs-human; a person's answer or OK names the
+// one it answers.
 type Initiative struct {
 	ID         InitiativeID `json:"id"`
 	Checkpoint Checkpoint   `json:"checkpoint,omitempty"`
 	Stage      string       `json:"stage"`
 	Job        JobID        `json:"job,omitempty"`
 	Reason     string       `json:"reason,omitempty"`
+	WaitSeq    int          `json:"wait_seq"`
 }
 
 // ReplanStatus is what the replan decided after a slice merged.

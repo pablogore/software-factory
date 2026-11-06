@@ -37,10 +37,11 @@ func answered(minute int) domain.InitiativeAnswered {
 	return domain.InitiativeAnswered{Job: jobID, Initiative: initiativeID, By: "pablogore", Text: answer, At: at(minute)}
 }
 
-// stuckAt is a needs-human initiative built by hand, for tables.
+// stuckAt is a needs-human initiative built by hand, for tables, in its
+// first wait.
 func stuckAt() domain.Initiative {
 	in := threeSlices(domain.CheckpointEverySlice)
-	in.Stage, in.Reason = domain.InitiativeNeedsHuman, question
+	in.Stage, in.Reason, in.WaitSeq = domain.InitiativeNeedsHuman, question, 1
 	return in
 }
 
@@ -143,9 +144,11 @@ func TestInitiativeAnswer(t *testing.T) {
 				ev   domain.Event
 				want error
 			}
+			// Each has had one wait, so the answer names it and only the stage
+			// refuses it.
 			in := func(stage string) domain.Initiative {
 				in := threeSlices(domain.CheckpointEverySlice)
-				in.Stage = stage
+				in.Stage, in.WaitSeq = stage, 1
 				return in
 			}
 			fromOtherSlice := reply(domain.AuthorPerson, true, 3)
@@ -222,7 +225,7 @@ func FuzzInitiativeNeedsHuman(f *testing.F) {
 		before := in
 		kinds := []domain.AuthorKind{domain.AuthorPerson, domain.AuthorBot, domain.AuthorCI, ""}
 		m := domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: by,
-			AuthorKind: kinds[int(event)%len(kinds)], Allowed: allowed, Direction: marked, Text: text, At: at(1)}
+			AuthorKind: kinds[int(event)%len(kinds)], Allowed: allowed, Direction: marked, Text: text, WaitSeq: in.WaitSeq, At: at(1)}
 		evs := append(fuzzEvents(), m, continued(1), doneReplan(1), needsHumanReplan(1, "why"), replanAsked(jobID, 1))
 		ev := evs[int(event)%len(evs)]
 
