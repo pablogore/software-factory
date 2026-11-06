@@ -114,3 +114,38 @@ sequenceDiagram
   F->>G: commit, push y PR desde el outbox
   F->>F: avanza el job a review
 ```
+
+### 4. Iniciativas y replan
+Las specs son cortas (1 a 4 criterios). Cuando un issue pide más, el spec-writer lo convierte en una **iniciativa** y lo parte en **slices**: cada slice es un job con su propio PR. Después de cada merge corre el **replan**: el spec-writer lee el issue, lo construido, las notas de los revisores y los comentarios `[direction]`, actualiza `slices.md` y decide:
+
+| Decisión | Qué significa | Qué pasa |
+|---|---|---|
+| CONTINUE | Falta trabajo; el próximo slice ya está definido | `every-slice`: espera `checkpoint-ok`. `auto`: arranca solo. |
+| DONE | El issue está cumplido | Se cierran la iniciativa y el issue. |
+| NEEDS-HUMAN | Hay una decisión que no puede tomar | Pregunta; la respuesta vuelve al replan. |
+
+No hay que confundirlo con el **rework** (un ESCALATE o los cambios pedidos vuelven al builder del mismo PR) ni con el **triage** (el tech-lead destraba un job contra una pared). El tope de #103 (más de 5 slices o USD 8 por issue) evita que el replan agregue slices sin fin.
+
+```mermaid
+flowchart TD
+  I["Issue grande<br/>más de 4 criterios"] --> SW["spec-writer<br/>lo convierte en iniciativa<br/>y escribe slices.md: S1, S2, S3…"]
+  SW --> J["Job del slice<br/>spec, build, gate, revisores, approver"]
+  J -->|ESCALATE| NHJ["needs-human del job"]
+  NHJ -->|tu feedback: rework| J
+  J -->|APPROVE| M["Merge del PR del slice"]
+  M --> RP["REPLAN<br/>el spec-writer vuelve a correr"]
+  IN1["Issue y visión"] -.-> RP
+  IN2["Lo construido y<br/>las notas de los revisores"] -.-> RP
+  IN3["Tus comentarios<br/>[direction] en el PR"] -.-> RP
+  RP --> AJ["Actualiza slices.md<br/>marca el slice hecho<br/>y define o ajusta el próximo"]
+  AJ --> D{"¿Qué decide?"}
+  T["Tope #103<br/>más de 5 slices o USD 8"] -.->|frena| D
+  D -->|DONE| FIN["Cierra la iniciativa y el issue"]
+  D -->|NEEDS-HUMAN| NHR["needs-human de la iniciativa"]
+  NHR -->|tu respuesta| RP
+  D -->|CONTINUE| CK{"checkpoint"}
+  CK -->|every-slice| OK["Espera tu checkpoint-ok"]
+  CK -->|auto| NX["Crea el job del próximo slice"]
+  OK --> NX
+  NX --> J
+```
