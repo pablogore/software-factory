@@ -24,7 +24,7 @@ func defaultPipeline() domain.Pipeline {
 			{Name: "intake", Kind: domain.KindIntake, Roles: []string{"intake"}},
 			{Name: "spec", Kind: domain.KindSpec, Roles: []string{"spec-writer"}},
 			{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder"}},
-			{Name: "review", Kind: domain.KindReview, Roles: reviewers, OnChanges: "build", MaxRounds: 3},
+			{Name: "review", Kind: domain.KindReview, Roles: reviewers, OnChanges: "build", MaxRounds: new(3)},
 			{Name: "approve", Kind: domain.KindApprove, Roles: []string{"approver"}},
 		},
 	}

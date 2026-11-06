@@ -14,7 +14,7 @@ func validPipeline() domain.Pipeline {
 		Stages: []domain.Stage{
 			{Name: "intake", Kind: domain.KindIntake},
 			{Name: "build", Kind: domain.KindBuild},
-			{Name: "review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "build", MaxRounds: 3},
+			{Name: "review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "build", MaxRounds: ptr(3)},
 			{Name: "approve", Kind: domain.KindApprove},
 		},
 	}
@@ -43,6 +43,12 @@ func TestPipeline(t *testing.T) {
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
 
+		s.It("accepts a review that leaves out max_rounds", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Stages[2].MaxRounds = nil
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+		})
+
 		s.When("a flow rule is broken", func(s *specs.Spec) {
 			rows := []pipelineRow{
 				{"rejects no build stage", func(p *domain.Pipeline) {
@@ -68,10 +74,10 @@ func TestPipeline(t *testing.T) {
 					p.Stages[0] = domain.Stage{Name: "deploy", Kind: "deploy"}
 				}, domain.ErrInvalidValue, `stage deploy: invalid value: kind "deploy"`},
 				{"names a review with max_rounds 0", func(p *domain.Pipeline) {
-					p.Stages[2].MaxRounds = 0
+					p.Stages[2].MaxRounds = ptr(0)
 				}, domain.ErrInvalidValue, "stage review: invalid value: max_rounds 0, want at least 1"},
 				{"names a review with negative max_rounds", func(p *domain.Pipeline) {
-					p.Stages[2].MaxRounds = -1
+					p.Stages[2].MaxRounds = ptr(-1)
 				}, domain.ErrInvalidValue, "stage review: invalid value: max_rounds -1, want at least 1"},
 				{"names the repeated stage", func(p *domain.Pipeline) {
 					p.Stages = append(p.Stages, domain.Stage{Name: "intake", Kind: domain.KindIntake})
@@ -153,6 +159,30 @@ func TestPipelineHumanReworks(t *testing.T) {
 			n, capped := p.HumanReworks()
 			ctx.Expect(n).ToEqual(2)
 			ctx.Expect(capped).ToEqual(true)
+		})
+	})
+}
+
+type maxRoundsRow struct {
+	name   string
+	stage  *int
+	limits *int
+	want   int
+}
+
+func TestPipelineMaxRounds(t *testing.T) {
+	specs.Describe(t, "Pipeline.MaxRounds", func(s *specs.Spec) {
+		rows := []maxRoundsRow{
+			{"is 3 when neither the stage nor limits sets it", nil, nil, 3},
+			{"is limits.max_rounds when the stage does not set it", nil, ptr(2), 2},
+			{"is the stage's max_rounds when limits does not set it", ptr(4), nil, 4},
+			{"is the stage's max_rounds over a different limits.max_rounds", ptr(4), ptr(2), 4},
+		}
+		specs.Table(s, rows, func(r maxRoundsRow) string { return r.name }, func(ctx *specs.Context, r maxRoundsRow) {
+			p := validPipeline()
+			p.Stages[2].MaxRounds = r.stage
+			p.Limits.MaxRounds = r.limits
+			ctx.Expect(p.MaxRounds(p.Stages[2])).ToEqual(r.want)
 		})
 	})
 }
