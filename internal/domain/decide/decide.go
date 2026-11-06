@@ -88,7 +88,7 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	}
 	switch e := ev.(type) {
 	case domain.StopRequested:
-		if strings.TrimSpace(e.By) == "" {
+		if domain.Blank(e.By) {
 			return nil, fmt.Errorf("decide: stop request without who asked: %w", domain.ErrMissingField)
 		}
 		return []domain.Event{domain.JobStopped{Job: job.ID, By: e.By, At: e.At}}, nil
@@ -103,7 +103,7 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	case domain.GateFailed:
 		return gateFailed(job, e, p)
 	case domain.HumanApproved:
-		if strings.TrimSpace(e.By) == "" {
+		if domain.Blank(e.By) {
 			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
 		}
 		if err := fresh(job, ev, e.WaitSeq); err != nil {
@@ -147,7 +147,7 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	case domain.MessageReceived:
 		// Checked after the stopped and rejected refusals, so the missing
 		// name never tells a person more about the job than any other event.
-		if strings.TrimSpace(e.Author) == "" {
+		if domain.Blank(e.Author) {
 			return nil, fmt.Errorf("decide: message without who sent it: %w", domain.ErrMissingField)
 		}
 		// A direction that drops a slice outside a wait answers no wait: the
