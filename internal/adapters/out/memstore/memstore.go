@@ -36,6 +36,9 @@ func New() *Store {
 
 // Create implements ports.JobStore.
 func (s *Store) Create(_ context.Context, job domain.Job) error {
+	if err := job.Validate(); err != nil {
+		return fmt.Errorf("memstore: create: %w", err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[job.ID]; ok {
@@ -54,6 +57,10 @@ func (s *Store) Create(_ context.Context, job domain.Job) error {
 func (s *Store) Load(_ context.Context, id domain.JobID) (domain.Job, ports.Version, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.load(id)
+}
+
+func (s *Store) load(id domain.JobID) (domain.Job, ports.Version, error) {
 	data, ok := s.jobs[id]
 	if !ok {
 		return domain.Job{}, 0, fmt.Errorf("memstore: %q: %w", id, ports.ErrJobNotFound)
@@ -62,36 +69,81 @@ func (s *Store) Load(_ context.Context, id domain.JobID) (domain.Job, ports.Vers
 	if err := json.Unmarshal(data, &job); err != nil {
 		return domain.Job{}, 0, fmt.Errorf("memstore: decode job %q: %w", id, err)
 	}
+	if err := job.Validate(); err != nil {
+		return domain.Job{}, 0, fmt.Errorf("memstore: load: %w", err)
+	}
 	return job, s.versions[id], nil
 }
 
-// Apply implements ports.JobStore. Everything is encoded before anything is
-// kept, so a failure keeps nothing.
-func (s *Store) Apply(_ context.Context, job domain.Job, v ports.Version, evs []domain.Event) (ports.Version, error) {
+// Apply implements ports.JobStore. Like the SQLite store it decides on the
+// job as saved, never one the caller hands in, and everything is encoded
+// before anything is kept, so a failure keeps nothing.
+func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event) ([]domain.Event, ports.Version, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.jobs[job.ID]; !ok {
-		return 0, fmt.Errorf("memstore: %q: %w", job.ID, ports.ErrJobNotFound)
+	if _, ok := s.jobs[id]; !ok {
+		return nil, 0, fmt.Errorf("memstore: %q: %w", id, ports.ErrJobNotFound)
 	}
-	if cur := s.versions[job.ID]; cur != v {
-		return 0, fmt.Errorf("memstore: %q loaded at version %d, now %d: %w", job.ID, v, cur, ports.ErrVersionConflict)
+	if cur := s.versions[id]; cur != v {
+		return nil, 0, fmt.Errorf("memstore: %q loaded at version %d, now %d: %w", id, v, cur, ports.ErrVersionConflict)
 	}
-	data, err := json.Marshal(decide.Apply(job, evs))
+	job, _, err := s.load(id)
 	if err != nil {
-		return 0, fmt.Errorf("memstore: encode job %q: %w", job.ID, err)
+		return nil, 0, err
+	}
+	evs, err := decide.Decide(job, ev, p)
+	if err != nil {
+		return nil, 0, fmt.Errorf("memstore: job %q: %w", id, err)
+	}
+	if len(evs) == 0 {
+		return nil, v, nil
+	}
+	next := decide.Apply(job, evs)
+	if err := next.Validate(); err != nil {
+		return nil, 0, fmt.Errorf("memstore: save: %w", err)
+	}
+	data, err := json.Marshal(next)
+	if err != nil {
+		return nil, 0, fmt.Errorf("memstore: encode job %q: %w", id, err)
 	}
 	envs := make([]eventjson.Envelope, 0, len(evs))
 	for _, ev := range evs {
 		env, err := eventjson.Encode(ev)
 		if err != nil {
-			return 0, fmt.Errorf("memstore: job %q: %w", job.ID, err)
+			return nil, 0, fmt.Errorf("memstore: job %q: %w", id, err)
 		}
 		envs = append(envs, env)
 	}
+	s.jobs[id] = data
+	s.versions[id] = v + 1
+	s.events[id] = append(s.events[id], envs...)
+	return evs, v + 1, nil
+}
+
+// Plant saves job and evs as they are, past Decide and Validate, so a test
+// can hold what no Apply would save: a job breaking an invariant, or events
+// of any type to read back. It keeps the job's version, or starts it at 1.
+func (s *Store) Plant(_ context.Context, job domain.Job, evs ...domain.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("memstore: encode job %q: %w", job.ID, err)
+	}
+	envs := make([]eventjson.Envelope, 0, len(evs))
+	for _, ev := range evs {
+		env, err := eventjson.Encode(ev)
+		if err != nil {
+			return fmt.Errorf("memstore: job %q: %w", job.ID, err)
+		}
+		envs = append(envs, env)
+	}
+	if _, ok := s.versions[job.ID]; !ok {
+		s.versions[job.ID] = 1
+	}
 	s.jobs[job.ID] = data
-	s.versions[job.ID] = v + 1
 	s.events[job.ID] = append(s.events[job.ID], envs...)
-	return v + 1, nil
+	return nil
 }
 
 // History implements ports.EventLog.

@@ -22,19 +22,18 @@ import (
 // first save wins and the late one gets ErrVersionConflict.
 func conflictContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 	bg := context.Background()
-	winner := []domain.Event{domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)}}
-	loser := []domain.Event{domain.NeedsInfo{Job: jobID, From: "build", At: at(2)}}
+	winner, loser := built(domain.BuildReady, 1), built(domain.BuildBlocked, 2)
 
 	s.When("two writers load the same job and both save", func(s *specs.Spec) {
 		s.It("the first saves and the second gets a version conflict", func(ctx *specs.Context) {
 			st := newStore(ctx)
-			a, va := created(ctx, st)
-			b, vb, err := st.Load(bg, jobID)
+			_, va := created(ctx, st)
+			_, vb, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, err = st.Apply(bg, a, va, winner)
+			_, _, err = st.Apply(bg, jobID, va, pipeline(), winner)
 			ctx.Expect(err).To(specs.BeNil())
-			_, err = st.Apply(bg, b, vb, loser)
+			_, _, err = st.Apply(bg, jobID, vb, pipeline(), loser)
 
 			ctx.Expect(err).To(specs.MatchError(ports.ErrVersionConflict))
 		})
@@ -42,62 +41,66 @@ func conflictContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 		s.It("the loser leaves the state, version and history as the winner left them", func(ctx *specs.Context) {
 			st := newStore(ctx)
 			a, va := created(ctx, st)
-			b, vb, err := st.Load(bg, jobID)
+			_, vb, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			won, err := st.Apply(bg, a, va, winner)
+			evs, won, err := st.Apply(bg, jobID, va, pipeline(), winner)
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, err = st.Apply(bg, b, vb, loser)
+			_, _, err = st.Apply(bg, jobID, vb, pipeline(), loser)
 
 			ctx.Expect(err).To(specs.MatchError(ports.ErrVersionConflict))
 			got, v, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(got).ToEqual(decide.Apply(a, winner))
+			ctx.Expect(got).ToEqual(decide.Apply(a, evs))
 			ctx.Expect(v).ToEqual(won)
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(hist).ToEqual([]ports.Record{record(winner[0], at(1))})
+			ctx.Expect(hist).ToEqual([]ports.Record{record(evs[0], at(1))})
 		})
 
-		s.It("conflicts even when the winner's events leave the state unchanged", func(ctx *specs.Context) {
+		s.It("conflicts even when the loser applies the same event as the winner", func(ctx *specs.Context) {
 			st := newStore(ctx)
-			a, va := created(ctx, st)
-			b, vb, err := st.Load(bg, jobID)
+			_, va := created(ctx, st)
+			_, vb, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			same := []domain.Event{domain.GatePassed{Job: jobID, At: at(1)}}
-			ctx.Expect(decide.Apply(a, same)).ToEqual(a)
 
-			_, err = st.Apply(bg, a, va, same)
+			evs, _, err := st.Apply(bg, jobID, va, pipeline(), winner)
 			ctx.Expect(err).To(specs.BeNil())
-			_, err = st.Apply(bg, b, vb, same)
+			_, _, err = st.Apply(bg, jobID, vb, pipeline(), winner)
 
 			ctx.Expect(err).To(specs.MatchError(ports.ErrVersionConflict))
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(hist).ToEqual([]ports.Record{record(same[0], at(1))})
+			ctx.Expect(hist).ToEqual([]ports.Record{record(evs[0], at(1))})
 		})
 
-		s.It("the loser loads the job again and its next save succeeds", func(ctx *specs.Context) {
+		s.It("the loser loads the job again and its next save is decided on the winner's state", func(ctx *specs.Context) {
 			st := newStore(ctx)
 			a, va := created(ctx, st)
-			b, vb, err := st.Load(bg, jobID)
+			_, vb, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			_, err = st.Apply(bg, a, va, winner)
+			first, _, err := st.Apply(bg, jobID, va, pipeline(), winner)
 			ctx.Expect(err).To(specs.BeNil())
-			_, err = st.Apply(bg, b, vb, loser)
+			_, _, err = st.Apply(bg, jobID, vb, pipeline(), loser)
 			ctx.Expect(err).To(specs.MatchError(ports.ErrVersionConflict))
 
-			b, vb, err = st.Load(bg, jobID)
+			b, vb, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			_, err = st.Apply(bg, b, vb, loser)
+			gate := domain.GateFailed{Job: jobID, At: at(2)}
+			second, _, err := st.Apply(bg, jobID, vb, pipeline(), gate)
 
 			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(second).ToEqual(decided(ctx, b, gate))
 			got, _, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(got).ToEqual(decide.Apply(decide.Apply(a, winner), loser))
+			ctx.Expect(got).ToEqual(decide.Apply(decide.Apply(a, first), second))
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(hist).ToEqual([]ports.Record{record(winner[0], at(1)), record(loser[0], at(2))})
+			want := []ports.Record{record(first[0], at(1))}
+			for _, ev := range second {
+				want = append(want, record(ev, at(2)))
+			}
+			ctx.Expect(hist).ToEqual(want)
 		})
 	})
 }
@@ -139,10 +142,11 @@ func TestStoreConflictAcrossStores(t *testing.T) {
 				job := newJob()
 				job.ID = domain.JobID(fmt.Sprintf("job-%d", round))
 				ctx.Expect(stores[0].Create(bg, job)).To(specs.BeNil())
-				evs := [2][]domain.Event{
-					{domain.StageEntered{Job: job.ID, Stage: domain.StageGate, At: at(1)}},
-					{domain.NeedsInfo{Job: job.ID, From: "build", At: at(2)}},
+				triggers := [2]domain.Event{
+					domain.ResultSubmitted{Job: job.ID, Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at(1)},
+					domain.ResultSubmitted{Job: job.ID, Role: "builder", Result: domain.BuildResult{Status: domain.BuildBlocked}, At: at(2)},
 				}
+				var evs [2][]domain.Event
 				var loaded [2]domain.Job
 				var versions [2]ports.Version
 				for i, st := range stores {
@@ -157,7 +161,7 @@ func TestStoreConflictAcrossStores(t *testing.T) {
 				for i, st := range stores {
 					done.Go(func() {
 						start.Wait()
-						_, errs[i] = st.Apply(bg, loaded[i], versions[i], evs[i])
+						evs[i], _, errs[i] = st.Apply(bg, job.ID, versions[i], pipeline(), triggers[i])
 					})
 				}
 				start.Done()

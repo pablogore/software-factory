@@ -59,6 +59,9 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // Create implements ports.JobStore.
 func (s *Store) Create(ctx context.Context, job domain.Job) error {
+	if err := job.Validate(); err != nil {
+		return fmt.Errorf("sqlite: create: %w", err)
+	}
 	state, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("sqlite: encode job %q: %w", job.ID, err)
@@ -75,11 +78,20 @@ func (s *Store) Create(ctx context.Context, job domain.Job) error {
 	return nil
 }
 
+// querier is what Load needs from either the database or a transaction.
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 // Load implements ports.JobStore.
 func (s *Store) Load(ctx context.Context, id domain.JobID) (domain.Job, ports.Version, error) {
+	return load(ctx, s.db, id)
+}
+
+func load(ctx context.Context, q querier, id domain.JobID) (domain.Job, ports.Version, error) {
 	var state string
 	var v ports.Version
-	err := s.db.QueryRowContext(ctx, `SELECT state, version FROM jobs WHERE id = ?`, string(id)).Scan(&state, &v)
+	err := q.QueryRowContext(ctx, `SELECT state, version FROM jobs WHERE id = ?`, string(id)).Scan(&state, &v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Job{}, 0, fmt.Errorf("sqlite: %q: %w", id, ports.ErrJobNotFound)
 	}
@@ -90,62 +102,92 @@ func (s *Store) Load(ctx context.Context, id domain.JobID) (domain.Job, ports.Ve
 	if err := json.Unmarshal([]byte(state), &job); err != nil {
 		return domain.Job{}, 0, fmt.Errorf("sqlite: decode job %q: %w", id, err)
 	}
+	if err := job.Validate(); err != nil {
+		return domain.Job{}, 0, fmt.Errorf("sqlite: load: %w", err)
+	}
 	return job, v, nil
 }
 
-// Apply implements ports.JobStore: the new state and every event go in one
-// transaction, rolled back on the first failure.
-func (s *Store) Apply(ctx context.Context, job domain.Job, v ports.Version, evs []domain.Event) (_ ports.Version, err error) {
+// Apply implements ports.JobStore: the job is read, decided and saved with
+// Decide's events in one transaction, rolled back on the first failure.
+func (s *Store) Apply(ctx context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event) (_ []domain.Event, _ ports.Version, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("sqlite: begin apply %q: %w", job.ID, err)
+		return nil, 0, fmt.Errorf("sqlite: begin apply %q: %w", id, err)
 	}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, tx.Rollback())
 		}
 	}()
-	if err := update(ctx, tx, decide.Apply(job, evs), v); err != nil {
-		return 0, err
+	if err := claim(ctx, tx, id, v); err != nil {
+		return nil, 0, err
+	}
+	// Read inside the transaction, after the claim: Decide sees the job as
+	// saved at v, never a state the caller hands in.
+	job, _, err := load(ctx, tx, id)
+	if err != nil {
+		return nil, 0, err
+	}
+	evs, err := decide.Decide(job, ev, p)
+	if err != nil {
+		return nil, 0, fmt.Errorf("sqlite: job %q: %w", id, err)
+	}
+	if len(evs) == 0 {
+		return nil, v, tx.Rollback()
+	}
+	if err := save(ctx, tx, decide.Apply(job, evs)); err != nil {
+		return nil, 0, err
 	}
 	for _, ev := range evs {
-		if err := insert(ctx, tx, job.ID, ev); err != nil {
-			return 0, err
+		if err := insert(ctx, tx, id, ev); err != nil {
+			return nil, 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("sqlite: commit apply %q: %w", job.ID, err)
+		return nil, 0, fmt.Errorf("sqlite: commit apply %q: %w", id, err)
 	}
-	return v + 1, nil
+	return evs, v + 1, nil
 }
 
-// update saves job only if its row is still at version v. The write comes
-// first in the transaction, so SQLite's own write lock orders two writers
-// and the late one sees the version the first one left.
-func update(ctx context.Context, tx *sql.Tx, job domain.Job, v ports.Version) error {
-	state, err := json.Marshal(job)
+// claim moves the job's row from version v to v+1, or fails with
+// ErrVersionConflict. The write comes first in the transaction, so SQLite's
+// own write lock orders two writers and the late one sees the version the
+// first one left.
+func claim(ctx context.Context, tx *sql.Tx, id domain.JobID, v ports.Version) error {
+	res, err := tx.ExecContext(ctx, `UPDATE jobs SET version = version + 1 WHERE id = ? AND version = ?`, string(id), int64(v))
 	if err != nil {
-		return fmt.Errorf("sqlite: encode job %q: %w", job.ID, err)
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE jobs SET state = ?, version = version + 1 WHERE id = ? AND version = ?`,
-		string(state), string(job.ID), int64(v))
-	if err != nil {
-		return fmt.Errorf("sqlite: save job %q: %w", job.ID, err)
+		return fmt.Errorf("sqlite: save job %q: %w", id, err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("sqlite: save job %q: %w", job.ID, err)
+		return fmt.Errorf("sqlite: save job %q: %w", id, err)
 	} else if n == 1 {
 		return nil
 	}
 	var cur ports.Version
-	err = tx.QueryRowContext(ctx, `SELECT version FROM jobs WHERE id = ?`, string(job.ID)).Scan(&cur)
+	err = tx.QueryRowContext(ctx, `SELECT version FROM jobs WHERE id = ?`, string(id)).Scan(&cur)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("sqlite: %q: %w", job.ID, ports.ErrJobNotFound)
+		return fmt.Errorf("sqlite: %q: %w", id, ports.ErrJobNotFound)
 	}
 	if err != nil {
+		return fmt.Errorf("sqlite: save job %q: %w", id, err)
+	}
+	return fmt.Errorf("sqlite: %q loaded at version %d, now %d: %w", id, v, cur, ports.ErrVersionConflict)
+}
+
+// save writes the job's new state, which must keep its invariants.
+func save(ctx context.Context, tx *sql.Tx, job domain.Job) error {
+	if err := job.Validate(); err != nil {
+		return fmt.Errorf("sqlite: save: %w", err)
+	}
+	state, err := json.Marshal(job)
+	if err != nil {
+		return fmt.Errorf("sqlite: encode job %q: %w", job.ID, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET state = ? WHERE id = ?`, string(state), string(job.ID)); err != nil {
 		return fmt.Errorf("sqlite: save job %q: %w", job.ID, err)
 	}
-	return fmt.Errorf("sqlite: %q loaded at version %d, now %d: %w", job.ID, v, cur, ports.ErrVersionConflict)
+	return nil
 }
 
 func insert(ctx context.Context, tx *sql.Tx, id domain.JobID, ev domain.Event) error {
@@ -163,7 +205,7 @@ func insert(ctx context.Context, tx *sql.Tx, id domain.JobID, ev domain.Event) e
 
 // History implements ports.EventLog.
 func (s *Store) History(ctx context.Context, id domain.JobID) ([]ports.Record, error) {
-	if _, _, err := s.Load(ctx, id); err != nil {
+	if err := exists(ctx, s.db, id); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT name, at, data FROM events WHERE job_id = ? ORDER BY seq`, string(id))
@@ -192,4 +234,18 @@ func (s *Store) History(ctx context.Context, id domain.JobID) ([]ports.Record, e
 		return nil, fmt.Errorf("sqlite: history of %q: %w", id, err)
 	}
 	return recs, nil
+}
+
+// exists reports a missing job as ErrJobNotFound. History reads no state, so
+// a job that fails Validate still shows the events that led there.
+func exists(ctx context.Context, q querier, id domain.JobID) error {
+	var one int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM jobs WHERE id = ?`, string(id)).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sqlite: %q: %w", id, ports.ErrJobNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("sqlite: history of %q: %w", id, err)
+	}
+	return nil
 }

@@ -18,10 +18,13 @@ import (
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
-// store is what the contract exercises: both ports, as one adapter offers them.
+// store is what the contract exercises: both ports, as one adapter offers
+// them, and Plant, which writes what no Apply would so the contract can read
+// it back.
 type store interface {
 	ports.JobStore
 	ports.EventLog
+	Plant(ctx context.Context, job domain.Job, evs ...domain.Event) error
 }
 
 // otherEvent is not a domain event, so no store may save it.
@@ -43,6 +46,33 @@ func newJob() domain.Job {
 		Round:    1,
 		Origin:   domain.Origin{Provider: "github", Thread: "29", Author: "pablogore"},
 	}
+}
+
+// pipeline is the flow the contract decides in: newJob starts in its build
+// stage.
+func pipeline() domain.Pipeline {
+	return domain.Pipeline{
+		Name: "default",
+		Stages: []domain.Stage{
+			{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder"}},
+			{Name: "review", Kind: domain.KindReview, Roles: []string{"reviewer-code", "reviewer-security"}, OnChanges: "build"},
+			{Name: "approve", Kind: domain.KindApprove, Roles: []string{"approver"}},
+		},
+	}
+}
+
+// built is the builder's result for the job: ready enters the gate, blocked
+// sends it to needs-human.
+func built(status domain.BuildStatus, minute int) domain.ResultSubmitted {
+	return domain.ResultSubmitted{Job: jobID, Role: "builder", Result: domain.BuildResult{Status: status, Summary: "done"}, At: at(minute)}
+}
+
+// decided is what Decide returns for ev on job in pipeline, the events a
+// store must save.
+func decided(ctx *specs.Context, job domain.Job, ev domain.Event) []domain.Event {
+	evs, err := decide.Decide(job, ev, pipeline())
+	ctx.Expect(err).To(specs.BeNil())
+	return evs
 }
 
 // created saves newJob in st and returns it as loaded, with its version.
@@ -170,46 +200,84 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 
 			_, _, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
-			_, err = st.Apply(bg, newJob(), 1, []domain.Event{domain.GatePassed{Job: jobID, At: at(1)}})
+			_, _, err = st.Apply(bg, jobID, 1, pipeline(), built(domain.BuildReady, 1))
 			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
 			_, err = st.History(bg, jobID)
 			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
 		})
 	})
 
-	s.When("Decide's events are applied", func(s *specs.Spec) {
-		s.It("saves the folded state and lists every event in saved order with its date", func(ctx *specs.Context) {
+	s.When("an event is applied", func(s *specs.Spec) {
+		s.It("saves the state folded from Decide's events and lists them in saved order with their dates", func(ctx *specs.Context) {
 			st := newStore(ctx)
-			job := newJob()
-			ctx.Expect(st.Create(bg, job)).To(specs.BeNil())
-			first := []domain.Event{domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)}}
-			second := []domain.Event{
-				domain.StageEntered{Job: jobID, Stage: "review", At: at(2)},
-				domain.ReviewPassed{Job: jobID, Role: "reviewer-code", At: at(3)},
-			}
+			job, v := created(ctx, st)
+			review := domain.ResultSubmitted{Job: jobID, Role: "reviewer-code", Result: domain.ReviewResult{Verdict: domain.ReviewPass}, At: at(3)}
 
-			job, v, err := st.Load(bg, jobID)
+			evs, v, err := st.Apply(bg, jobID, v, pipeline(), built(domain.BuildReady, 1))
 			ctx.Expect(err).To(specs.BeNil())
-
-			v, err = st.Apply(bg, job, v, first)
+			ctx.Expect(evs).ToEqual([]domain.Event{domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)}})
+			_, v, err = st.Apply(bg, jobID, v, pipeline(), domain.GatePassed{Job: jobID, At: at(2)})
 			ctx.Expect(err).To(specs.BeNil())
-			job = decide.Apply(job, first)
-			_, err = st.Apply(bg, job, v, second)
+			_, v, err = st.Apply(bg, jobID, v, pipeline(), review)
 			ctx.Expect(err).To(specs.BeNil())
 
-			got, _, err := st.Load(bg, jobID)
+			got, gotV, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(got).ToEqual(decide.Apply(job, second))
+			ctx.Expect(gotV).ToEqual(v)
 			ctx.Expect(got.Stage).ToEqual("review")
 			ctx.Expect(got.Passed).ToEqual([]string{"reviewer-code"})
+			want := decide.Apply(job, []domain.Event{
+				domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)},
+				domain.StageEntered{Job: jobID, Stage: "review", At: at(2)},
+				domain.ReviewPassed{Job: jobID, Role: "reviewer-code", At: at(3)},
+			})
+			ctx.Expect(got).ToEqual(want)
 
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(hist).ToEqual([]ports.Record{
-				record(first[0], at(1)),
-				record(second[0], at(2)),
-				record(second[1], at(3)),
+				record(domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)}, at(1)),
+				record(domain.StageEntered{Job: jobID, Stage: "review", At: at(2)}, at(2)),
+				record(domain.ReviewPassed{Job: jobID, Role: "reviewer-code", At: at(3)}, at(3)),
 			})
+		})
+
+		s.It("saves every event Decide returns together, as MergeOverridden and MergeRequested on an override", func(ctx *specs.Context) {
+			st := newStore(ctx)
+			_, v := created(ctx, st)
+			waiting := newJob()
+			waiting.Stage, waiting.WaitSeq, waiting.Cause, waiting.Reason = domain.StageNeedsHuman, 1, domain.CauseChanges, "changes"
+			ctx.Expect(st.Plant(bg, waiting)).To(specs.BeNil())
+			override := domain.OverrideRequested{Job: jobID, By: "ana", AuthorKind: domain.AuthorPerson, Allowed: true, Reason: "ship it", WaitSeq: 1, At: at(1)}
+			want := decided(ctx, waiting, override)
+			ctx.Expect(want).To(specs.HaveLen(2))
+
+			evs, _, err := st.Apply(bg, jobID, v, pipeline(), override)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(evs).ToEqual(want)
+			hist, err := st.History(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(hist).ToEqual([]ports.Record{record(want[0], at(1)), record(want[1], at(1))})
+		})
+
+		s.It("an event Decide ignores saves nothing and keeps the version", func(ctx *specs.Context) {
+			st := newStore(ctx)
+			job, v := created(ctx, st)
+			bot := domain.MessageReceived{Job: jobID, Provider: "github", Thread: "29", Author: "ci", AuthorKind: domain.AuthorBot, Text: "hi", WaitSeq: 1, At: at(1)}
+
+			evs, got, err := st.Apply(bg, jobID, v, pipeline(), bot)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(evs).To(specs.BeEmpty())
+			ctx.Expect(got).ToEqual(v)
+			loaded, gotV, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(loaded).ToEqual(job)
+			ctx.Expect(gotV).ToEqual(v)
+			hist, err := st.History(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(hist).To(specs.BeEmpty())
 		})
 
 		s.It("keeps each job's history apart", func(ctx *specs.Context) {
@@ -218,12 +286,10 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			other.ID = "job-2"
 			ctx.Expect(st.Create(bg, newJob())).To(specs.BeNil())
 			ctx.Expect(st.Create(bg, other)).To(specs.BeNil())
-			ev := domain.GatePassed{Job: other.ID, At: at(1)}
-
 			_, v, err := st.Load(bg, other.ID)
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, err = st.Apply(bg, other, v, []domain.Event{ev})
+			_, _, err = st.Apply(bg, other.ID, v, pipeline(), domain.ResultSubmitted{Job: other.ID, Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at(1)})
 			ctx.Expect(err).To(specs.BeNil())
 
 			hist, err := st.History(bg, jobID)
@@ -231,59 +297,38 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			ctx.Expect(hist).To(specs.BeEmpty())
 			hist, err = st.History(bg, other.ID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(hist).ToEqual([]ports.Record{record(ev, at(1))})
+			ctx.Expect(hist).ToEqual([]ports.Record{record(domain.StageEntered{Job: other.ID, Stage: domain.StageGate, At: at(1)}, at(1))})
 		})
 	})
 
-	s.When("a failed save leaves nothing behind", func(s *specs.Spec) {
-		s.It("an unknown event after valid ones saves neither the state nor any event", func(ctx *specs.Context) {
+	s.When("Decide refuses the event", func(s *specs.Spec) {
+		rows := []refusedRow{
+			{"an unknown event type", otherEvent{Job: jobID}, decide.ErrIllegalTransition},
+			{"a nil event", nil, decide.ErrIllegalTransition},
+			{"a ResultSubmitted without a result", domain.ResultSubmitted{Job: jobID, Role: "builder", At: at(2)}, decide.ErrIllegalTransition},
+			{"an event Decide only returns, never takes", domain.StageEntered{Job: jobID, Stage: domain.StageMerge, At: at(2)}, decide.ErrIllegalTransition},
+			{"an event for another job", domain.ResultSubmitted{Job: "job-2", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at(2)}, decide.ErrOtherJob},
+		}
+		specs.Table(s, rows, func(r refusedRow) string {
+			return r.name + " is refused and saves neither the state nor any event"
+		}, func(ctx *specs.Context, r refusedRow) {
 			st := newStore(ctx)
-			job := newJob()
-			ctx.Expect(st.Create(bg, job)).To(specs.BeNil())
-			before := domain.GatePassed{Job: jobID, At: at(1)}
-			_, v, err := st.Load(bg, jobID)
+			_, v := created(ctx, st)
+			_, v, err := st.Apply(bg, jobID, v, pipeline(), built(domain.BuildReady, 1))
 			ctx.Expect(err).To(specs.BeNil())
-			v, err = st.Apply(bg, job, v, []domain.Event{before})
+			before, _, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, err = st.Apply(bg, job, v, []domain.Event{
-				domain.StageEntered{Job: jobID, Stage: domain.StageNeedsHuman, At: at(2)},
-				domain.NeedsHuman{Job: jobID, Reason: "stuck", Cause: domain.HumanCauses()[0], At: at(2)},
-				otherEvent{Job: jobID},
-			})
+			_, _, err = st.Apply(bg, jobID, v, pipeline(), r.ev)
 
-			ctx.Expect(err).To(specs.MatchError(ports.ErrUnknownEvent))
+			ctx.Expect(err).To(specs.MatchError(r.sentinel))
 			got, gotV, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(got).ToEqual(job)
+			ctx.Expect(got).ToEqual(before)
 			ctx.Expect(gotV).ToEqual(v)
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(hist).ToEqual([]ports.Record{record(before, at(1))})
-		})
-
-		s.It("a nil event is refused the same way", func(ctx *specs.Context) {
-			st := newStore(ctx)
-			job, v := created(ctx, st)
-
-			_, err := st.Apply(bg, job, v, []domain.Event{domain.GatePassed{Job: jobID, At: at(1)}, nil})
-
-			ctx.Expect(err).To(specs.MatchError(ports.ErrUnknownEvent))
-			hist, err := st.History(bg, jobID)
-			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(hist).To(specs.BeEmpty())
-		})
-
-		s.It("a ResultSubmitted without a result saves nothing", func(ctx *specs.Context) {
-			st := newStore(ctx)
-			job, v := created(ctx, st)
-
-			_, err := st.Apply(bg, job, v, []domain.Event{domain.ResultSubmitted{Job: jobID, Role: "builder", At: at(1)}})
-
-			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
-			hist, err := st.History(bg, jobID)
-			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(hist).To(specs.BeEmpty())
+			ctx.Expect(hist).ToEqual([]ports.Record{record(domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)}, at(1))})
 		})
 	})
 
@@ -300,18 +345,24 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			ctx.Expect(slices.Compact(got)).ToEqual(want)
 		})
 
+		// Apply saves only what Decide returns, and Decide returns few of
+		// these types, so the events are planted: what is read back is what
+		// the store's encoding holds.
 		specs.Table(s, samples(), func(r sample) string {
 			return "reads " + r.name + " back as the same type and value"
 		}, func(ctx *specs.Context, r sample) {
 			st := newStore(ctx)
-			job, v := created(ctx, st)
-
-			_, err := st.Apply(bg, job, v, []domain.Event{r.ev})
-			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(st.Plant(bg, newJob(), r.ev)).To(specs.BeNil())
 
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(hist).ToEqual([]ports.Record{record(r.ev, at(1))})
 		})
 	})
+}
+
+type refusedRow struct {
+	name     string
+	ev       domain.Event
+	sentinel error
 }
