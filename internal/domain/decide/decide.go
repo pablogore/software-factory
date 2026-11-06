@@ -66,7 +66,11 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		}
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
-			return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}, nil
+			evs := []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}
+			if job.Initiative != "" {
+				evs = append(evs, domain.ReplanRequested{Job: job.ID, Initiative: job.Initiative, At: e.At})
+			}
+			return evs, nil
 		}
 	case domain.MessageReceived:
 		return decideMessage(job, e, p)
