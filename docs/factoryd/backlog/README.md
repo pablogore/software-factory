@@ -52,3 +52,14 @@ Cuando termine E01, encolar la épica siguiente (o pedirle al product-owner que 
 
 ## Issues de la fábrica actual
 Los cambios para la fábrica que vive en `main` llevan la etiqueta `legacy-factory` y no `factory`, para que la fábrica no los construya en esta rama: #124 (intake lee la rama base) y #125 (slices independientes en paralelo).
+
+## Roadmap vs. comprometido
+La etiqueta `roadmap` marca ideas a futuro que no cuentan como backlog comprometido: las épicas E12 (#110) y E13 (#117) con sus historias, y #128–#130. El avance se mide sobre las historias `factoryd` sin `roadmap`.
+
+Para medirlo:
+```bash
+gh issue list -l factoryd --state all --limit 200 --json number,state,labels \
+  --jq '[.[] | select(([.labels[].name] | index("epic") or index("roadmap")) | not)] | group_by(.state) | map({(.[0].state): length}) | add'
+```
+
+Regla para los replans: una nota menor de un revisor queda como "conocida" en el replan o como criterio de una historia existente; se abre un issue nuevo solo si es un bug real o un agujero de seguridad.
