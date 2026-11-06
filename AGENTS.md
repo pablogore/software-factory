@@ -32,7 +32,12 @@ Hexagonal + vertical slices. See `docs/factoryd/07-arquitectura.md`.
 - `decide.Decide` is pure: no IO, no `time.Now()`; time comes from a `Clock` port.
 
 ## Code conventions
-- Standard library first. New dependencies (other than go-specs for tests) must be justified in the PR description; prefer pure-Go (no cgo) libraries, e.g. `modernc.org/sqlite`.
+- Standard library first. Approved dependencies, usable without escalating:
+  - `github.com/getsyntegrity/go-specs` (tests only, pinned);
+  - `go.yaml.in/yaml/v3` (only in config adapters such as `internal/adapters/out/configyaml`);
+  - `modernc.org/sqlite` (only in `internal/adapters/out/sqlite`; pure Go, no cgo).
+
+  Any other new dependency must be justified in the PR description and goes to a person; prefer pure-Go (no cgo) libraries.
 - Errors: wrap with `%w`, compare with `errors.Is/As`. No panics outside `main`.
 - `context.Context` is the first parameter of anything that does IO or may block.
 - Unit tests use **go-specs** (`github.com/getsyntegrity/go-specs`), pinned to an exact version (it is pre-1.0: never upgrade it in a feature PR). Do not add testify, gomega or other assertion libraries.
