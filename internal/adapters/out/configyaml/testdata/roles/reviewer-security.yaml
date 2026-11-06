@@ -1,0 +1,4 @@
+name: reviewer-security
+kind: review
+prompt: roles/reviewer-security.md
+mode: blocking

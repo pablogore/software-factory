@@ -1,0 +1,4 @@
+name: reviewer-code
+kind: review
+prompt: roles/reviewer-code.md
+mode: blocking

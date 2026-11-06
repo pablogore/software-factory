@@ -1,0 +1,4 @@
+name: reviewer-ui
+kind: review
+prompt: roles/reviewer-ui.md
+mode: blocking

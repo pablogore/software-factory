@@ -1,0 +1,16 @@
+name: security-deep
+kind: review
+description: Deep review of auth, sessions, permissions and dependencies
+prompt: roles/security-deep.md
+agent: codex
+model: gpt-5.5
+when:
+  any:
+    - paths: ["src/auth/**", "src/api/**", "**/middleware/**"]
+    - labels: [security, auth, payments]
+    - deps_changed: true
+    - diff_lines: ">= 200"
+mode: shadow
+tools: [context_pack, record_finding, submit_result]
+permissions: read-only
+budget: { attempts: 1, minutes: 15, usd: 2 }
