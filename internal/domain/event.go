@@ -109,3 +109,42 @@ type MergeRequested struct {
 
 // EventName implements Event.
 func (MergeRequested) EventName() string { return "MergeRequested" }
+
+// AuthorKind says who wrote a message: a person, a bot or CI.
+type AuthorKind string
+
+// Author kinds the event sources tell apart.
+const (
+	AuthorPerson AuthorKind = "person"
+	AuthorBot    AuthorKind = "bot"
+	AuthorCI     AuthorKind = "ci"
+)
+
+// MessageReceived records a message on one of the job's threads. The event
+// source decides Allowed (the provider's allowlist, 03-integraciones.md) and
+// AuthorKind; decide.Decide trusts both and only acts on an allowed person.
+type MessageReceived struct {
+	Job        JobID      `json:"job"`
+	Provider   string     `json:"provider"`
+	Thread     string     `json:"thread"`
+	Author     string     `json:"author"`
+	AuthorKind AuthorKind `json:"author_kind"`
+	Allowed    bool       `json:"allowed"`
+	Text       string     `json:"text"`
+	At         time.Time  `json:"at"`
+}
+
+// EventName implements Event.
+func (MessageReceived) EventName() string { return "MessageReceived" }
+
+// ReworkRequested records that a person sent the job back to build with
+// feedback; the build stage gets Text as input.
+type ReworkRequested struct {
+	Job  JobID     `json:"job"`
+	By   string    `json:"by"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (ReworkRequested) EventName() string { return "ReworkRequested" }
