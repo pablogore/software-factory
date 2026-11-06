@@ -15,6 +15,8 @@ var ErrOtherInitiative = errors.New("event for another initiative")
 
 // Initiative returns the events that follow ev for initiative in.
 // Like Decide it is pure: every event it returns carries the time of ev.
+// As in Decide, a message not from an allowed person changes nothing and is
+// not an error.
 func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 	if isNil(ev) {
 		return nil, fmt.Errorf("%w: no event in initiative stage %q", ErrIllegalTransition, in.Stage)
@@ -22,7 +24,16 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 	if ev.JobID() != in.Job {
 		return nil, fmt.Errorf("%w: %s for job %q, initiative %q waits on job %q", ErrOtherInitiative, ev.EventName(), ev.JobID(), in.ID, in.Job)
 	}
+	if m, ok := ev.(domain.MessageReceived); ok && ignored(m) {
+		return nil, nil
+	}
 	switch e := ev.(type) {
+	case domain.MessageReceived:
+		// A person's answer is the only way out of needs-human: the replan
+		// runs again with it.
+		if in.Stage == domain.InitiativeNeedsHuman {
+			return []domain.Event{domain.InitiativeAnswered{Job: in.Job, Initiative: in.ID, By: e.Author, Text: e.Text, At: e.At}}, nil
+		}
 	case domain.ReplanSubmitted:
 		if e.Initiative != in.ID {
 			return nil, fmt.Errorf("%w: %s for initiative %q decided for %q", ErrOtherInitiative, ev.EventName(), e.Initiative, in.ID)
@@ -68,7 +79,9 @@ func replanned(in domain.Initiative, e domain.ReplanSubmitted) ([]domain.Event, 
 // does anything after it closed: a closed initiative never reopens. A replan
 // request is refused, leaving it as it is, unless the initiative is active
 // and the request comes from the slice it runs, so another or a stale slice
-// job never pulls it out of a checkpoint or needs-human.
+// job never pulls it out of a checkpoint or needs-human. Only a person's
+// answer to the slice it stopped on takes it from needs-human back to the
+// replan.
 func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative {
 	for _, ev := range evs {
 		if in.Stage == domain.InitiativeClosed {
@@ -98,6 +111,10 @@ func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative
 		case domain.InitiativeNeedsHumanRaised:
 			if e.Initiative == in.ID {
 				in.Stage, in.Reason = domain.InitiativeNeedsHuman, e.Reason
+			}
+		case domain.InitiativeAnswered:
+			if e.Initiative == in.ID && in.Stage == domain.InitiativeNeedsHuman && e.Job == in.Job {
+				in.Stage, in.Reason = domain.InitiativeReplan, ""
 			}
 		}
 	}

@@ -18,7 +18,8 @@ const (
 
 // Stages of an initiative: a slice job running, the replan after a slice
 // merged, the wait for a person's OK before the next slice, closed for good
-// after a replan DONE, and stopped for a person after a replan NEEDS-HUMAN.
+// after a replan DONE, and stopped for a person after a replan NEEDS-HUMAN
+// until that person's answer sends it back to the replan.
 const (
 	InitiativeActive     = "active"
 	InitiativeReplan     = "replan"
@@ -168,3 +169,20 @@ func (InitiativeNeedsHumanRaised) EventName() string { return "InitiativeNeedsHu
 
 // JobID implements Event.
 func (e InitiativeNeedsHumanRaised) JobID() JobID { return e.Job }
+
+// InitiativeAnswered records that By, an allowed person, answered the
+// initiative stopped in needs-human after Job's replan: the replan runs again
+// with Text as its input.
+type InitiativeAnswered struct {
+	Job        JobID        `json:"job"`
+	Initiative InitiativeID `json:"initiative"`
+	By         string       `json:"by"`
+	Text       string       `json:"text"`
+	At         time.Time    `json:"at"`
+}
+
+// EventName implements Event.
+func (InitiativeAnswered) EventName() string { return "InitiativeAnswered" }
+
+// JobID implements Event.
+func (e InitiativeAnswered) JobID() JobID { return e.Job }
