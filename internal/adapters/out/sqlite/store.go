@@ -22,8 +22,9 @@ import (
 
 const schema = `
 CREATE TABLE IF NOT EXISTS jobs (
-	id    TEXT PRIMARY KEY,
-	state TEXT NOT NULL
+	id      TEXT PRIMARY KEY,
+	state   TEXT NOT NULL,
+	version INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
 	seq    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +63,7 @@ func (s *Store) Create(ctx context.Context, job domain.Job) error {
 	if err != nil {
 		return fmt.Errorf("sqlite: encode job %q: %w", job.ID, err)
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id, state) VALUES (?, ?) ON CONFLICT (id) DO NOTHING`, string(job.ID), string(state))
+	res, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id, state, version) VALUES (?, ?, 1) ON CONFLICT (id) DO NOTHING`, string(job.ID), string(state))
 	if err != nil {
 		return fmt.Errorf("sqlite: create job %q: %w", job.ID, err)
 	}
@@ -75,63 +76,76 @@ func (s *Store) Create(ctx context.Context, job domain.Job) error {
 }
 
 // Load implements ports.JobStore.
-func (s *Store) Load(ctx context.Context, id domain.JobID) (domain.Job, error) {
+func (s *Store) Load(ctx context.Context, id domain.JobID) (domain.Job, ports.Version, error) {
 	var state string
-	err := s.db.QueryRowContext(ctx, `SELECT state FROM jobs WHERE id = ?`, string(id)).Scan(&state)
+	var v ports.Version
+	err := s.db.QueryRowContext(ctx, `SELECT state, version FROM jobs WHERE id = ?`, string(id)).Scan(&state, &v)
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Job{}, fmt.Errorf("sqlite: %q: %w", id, ports.ErrJobNotFound)
+		return domain.Job{}, 0, fmt.Errorf("sqlite: %q: %w", id, ports.ErrJobNotFound)
 	}
 	if err != nil {
-		return domain.Job{}, fmt.Errorf("sqlite: load job %q: %w", id, err)
+		return domain.Job{}, 0, fmt.Errorf("sqlite: load job %q: %w", id, err)
 	}
 	var job domain.Job
 	if err := json.Unmarshal([]byte(state), &job); err != nil {
-		return domain.Job{}, fmt.Errorf("sqlite: decode job %q: %w", id, err)
+		return domain.Job{}, 0, fmt.Errorf("sqlite: decode job %q: %w", id, err)
 	}
-	return job, nil
+	return job, v, nil
 }
 
 // Apply implements ports.JobStore: the new state and every event go in one
 // transaction, rolled back on the first failure.
-func (s *Store) Apply(ctx context.Context, job domain.Job, evs []domain.Event) (err error) {
+func (s *Store) Apply(ctx context.Context, job domain.Job, v ports.Version, evs []domain.Event) (_ ports.Version, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("sqlite: begin apply %q: %w", job.ID, err)
+		return 0, fmt.Errorf("sqlite: begin apply %q: %w", job.ID, err)
 	}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, tx.Rollback())
 		}
 	}()
-	if err := update(ctx, tx, decide.Apply(job, evs)); err != nil {
-		return err
+	if err := update(ctx, tx, decide.Apply(job, evs), v); err != nil {
+		return 0, err
 	}
 	for _, ev := range evs {
 		if err := insert(ctx, tx, job.ID, ev); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sqlite: commit apply %q: %w", job.ID, err)
+		return 0, fmt.Errorf("sqlite: commit apply %q: %w", job.ID, err)
 	}
-	return nil
+	return v + 1, nil
 }
 
-func update(ctx context.Context, tx *sql.Tx, job domain.Job) error {
+// update saves job only if its row is still at version v. The write comes
+// first in the transaction, so SQLite's own write lock orders two writers
+// and the late one sees the version the first one left.
+func update(ctx context.Context, tx *sql.Tx, job domain.Job, v ports.Version) error {
 	state, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("sqlite: encode job %q: %w", job.ID, err)
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE jobs SET state = ? WHERE id = ?`, string(state), string(job.ID))
+	res, err := tx.ExecContext(ctx, `UPDATE jobs SET state = ?, version = version + 1 WHERE id = ? AND version = ?`,
+		string(state), string(job.ID), int64(v))
 	if err != nil {
 		return fmt.Errorf("sqlite: save job %q: %w", job.ID, err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
 		return fmt.Errorf("sqlite: save job %q: %w", job.ID, err)
-	} else if n == 0 {
+	} else if n == 1 {
+		return nil
+	}
+	var cur ports.Version
+	err = tx.QueryRowContext(ctx, `SELECT version FROM jobs WHERE id = ?`, string(job.ID)).Scan(&cur)
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("sqlite: %q: %w", job.ID, ports.ErrJobNotFound)
 	}
-	return nil
+	if err != nil {
+		return fmt.Errorf("sqlite: save job %q: %w", job.ID, err)
+	}
+	return fmt.Errorf("sqlite: %q loaded at version %d, now %d: %w", job.ID, v, cur, ports.ErrVersionConflict)
 }
 
 func insert(ctx context.Context, tx *sql.Tx, id domain.JobID, ev domain.Event) error {
@@ -149,7 +163,7 @@ func insert(ctx context.Context, tx *sql.Tx, id domain.JobID, ev domain.Event) e
 
 // History implements ports.EventLog.
 func (s *Store) History(ctx context.Context, id domain.JobID) ([]ports.Record, error) {
-	if _, err := s.Load(ctx, id); err != nil {
+	if _, _, err := s.Load(ctx, id); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT name, at, data FROM events WHERE job_id = ? ORDER BY seq`, string(id))

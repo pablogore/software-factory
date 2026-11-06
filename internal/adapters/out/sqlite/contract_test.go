@@ -45,6 +45,14 @@ func newJob() domain.Job {
 	}
 }
 
+// created saves newJob in st and returns it as loaded, with its version.
+func created(ctx *specs.Context, st store) (domain.Job, ports.Version) {
+	ctx.Expect(st.Create(context.Background(), newJob())).To(specs.BeNil())
+	job, v, err := st.Load(context.Background(), jobID)
+	ctx.Expect(err).To(specs.BeNil())
+	return job, v
+}
+
 type sample struct {
 	name string
 	ev   domain.Event
@@ -139,7 +147,7 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			st := newStore(ctx)
 			ctx.Expect(st.Create(bg, newJob())).To(specs.BeNil())
 
-			got, err := st.Load(bg, jobID)
+			got, _, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).ToEqual(newJob())
 
@@ -160,9 +168,10 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 		s.It("load, apply and history fail with job not found", func(ctx *specs.Context) {
 			st := newStore(ctx)
 
-			_, err := st.Load(bg, jobID)
+			_, _, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
-			ctx.Expect(st.Apply(bg, newJob(), []domain.Event{domain.GatePassed{Job: jobID, At: at(1)}})).To(specs.MatchError(ports.ErrJobNotFound))
+			_, err = st.Apply(bg, newJob(), 1, []domain.Event{domain.GatePassed{Job: jobID, At: at(1)}})
+			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
 			_, err = st.History(bg, jobID)
 			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
 		})
@@ -179,11 +188,16 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 				domain.ReviewPassed{Job: jobID, Role: "reviewer-code", At: at(3)},
 			}
 
-			ctx.Expect(st.Apply(bg, job, first)).To(specs.BeNil())
-			job = decide.Apply(job, first)
-			ctx.Expect(st.Apply(bg, job, second)).To(specs.BeNil())
+			job, v, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
 
-			got, err := st.Load(bg, jobID)
+			v, err = st.Apply(bg, job, v, first)
+			ctx.Expect(err).To(specs.BeNil())
+			job = decide.Apply(job, first)
+			_, err = st.Apply(bg, job, v, second)
+			ctx.Expect(err).To(specs.BeNil())
+
+			got, _, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).ToEqual(decide.Apply(job, second))
 			ctx.Expect(got.Stage).ToEqual("review")
@@ -206,7 +220,11 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			ctx.Expect(st.Create(bg, other)).To(specs.BeNil())
 			ev := domain.GatePassed{Job: other.ID, At: at(1)}
 
-			ctx.Expect(st.Apply(bg, other, []domain.Event{ev})).To(specs.BeNil())
+			_, v, err := st.Load(bg, other.ID)
+			ctx.Expect(err).To(specs.BeNil())
+
+			_, err = st.Apply(bg, other, v, []domain.Event{ev})
+			ctx.Expect(err).To(specs.BeNil())
 
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
@@ -223,18 +241,22 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			job := newJob()
 			ctx.Expect(st.Create(bg, job)).To(specs.BeNil())
 			before := domain.GatePassed{Job: jobID, At: at(1)}
-			ctx.Expect(st.Apply(bg, job, []domain.Event{before})).To(specs.BeNil())
+			_, v, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			v, err = st.Apply(bg, job, v, []domain.Event{before})
+			ctx.Expect(err).To(specs.BeNil())
 
-			err := st.Apply(bg, job, []domain.Event{
+			_, err = st.Apply(bg, job, v, []domain.Event{
 				domain.StageEntered{Job: jobID, Stage: domain.StageNeedsHuman, At: at(2)},
 				domain.NeedsHuman{Job: jobID, Reason: "stuck", Cause: domain.HumanCauses()[0], At: at(2)},
 				otherEvent{Job: jobID},
 			})
 
 			ctx.Expect(err).To(specs.MatchError(ports.ErrUnknownEvent))
-			got, err := st.Load(bg, jobID)
+			got, gotV, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).ToEqual(job)
+			ctx.Expect(gotV).ToEqual(v)
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(hist).ToEqual([]ports.Record{record(before, at(1))})
@@ -242,9 +264,9 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 
 		s.It("a nil event is refused the same way", func(ctx *specs.Context) {
 			st := newStore(ctx)
-			ctx.Expect(st.Create(bg, newJob())).To(specs.BeNil())
+			job, v := created(ctx, st)
 
-			err := st.Apply(bg, newJob(), []domain.Event{domain.GatePassed{Job: jobID, At: at(1)}, nil})
+			_, err := st.Apply(bg, job, v, []domain.Event{domain.GatePassed{Job: jobID, At: at(1)}, nil})
 
 			ctx.Expect(err).To(specs.MatchError(ports.ErrUnknownEvent))
 			hist, err := st.History(bg, jobID)
@@ -254,9 +276,9 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 
 		s.It("a ResultSubmitted without a result saves nothing", func(ctx *specs.Context) {
 			st := newStore(ctx)
-			ctx.Expect(st.Create(bg, newJob())).To(specs.BeNil())
+			job, v := created(ctx, st)
 
-			err := st.Apply(bg, newJob(), []domain.Event{domain.ResultSubmitted{Job: jobID, Role: "builder", At: at(1)}})
+			_, err := st.Apply(bg, job, v, []domain.Event{domain.ResultSubmitted{Job: jobID, Role: "builder", At: at(1)}})
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 			hist, err := st.History(bg, jobID)
@@ -282,9 +304,10 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			return "reads " + r.name + " back as the same type and value"
 		}, func(ctx *specs.Context, r sample) {
 			st := newStore(ctx)
-			ctx.Expect(st.Create(bg, newJob())).To(specs.BeNil())
+			job, v := created(ctx, st)
 
-			ctx.Expect(st.Apply(bg, newJob(), []domain.Event{r.ev})).To(specs.BeNil())
+			_, err := st.Apply(bg, job, v, []domain.Event{r.ev})
+			ctx.Expect(err).To(specs.BeNil())
 
 			hist, err := st.History(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
