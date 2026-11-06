@@ -164,10 +164,13 @@ func (e RoundStarted) JobID() JobID { return e.Job }
 // NeedsHuman records that the job stops until a person acts, and why.
 // SpecException says it waits on a spec's length exception: a person's OK
 // lets the spec through and their feedback sends it back to spec.
+// SpecEscalated says specgate rejected the spec too often: a person's feedback
+// goes to a rewritten spec, whatever the rejection count says by then.
 type NeedsHuman struct {
 	Job           JobID     `json:"job"`
 	Reason        string    `json:"reason"`
 	SpecException bool      `json:"spec_exception,omitempty"`
+	SpecEscalated bool      `json:"spec_escalated,omitempty"`
 	At            time.Time `json:"at"`
 }
 

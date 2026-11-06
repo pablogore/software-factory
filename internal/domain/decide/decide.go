@@ -64,6 +64,9 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	case domain.GateFailed:
 		return gateFailed(job, e, p)
 	case domain.HumanApproved:
+		if strings.TrimSpace(e.By) == "" {
+			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
+		}
 		// An OK on a length exception passes specgate with the spec as it is.
 		if job.Stage == domain.StageNeedsHuman && job.SpecException {
 			return afterGate(job, ev, domain.StageNeedsHuman, domain.KindSpec, e.At, p)
@@ -91,9 +94,11 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 	for _, ev := range evs {
 		switch e := ev.(type) {
 		case domain.StageEntered:
-			job.Stage, job.InfoFrom, job.SpecException, job.Passed, job.Changes = e.Stage, "", false, nil, nil
+			job.Stage, job.InfoFrom, job.Passed, job.Changes = e.Stage, "", nil, nil
+			job = leftNeedsHuman(job)
 		case domain.NeedsInfo:
 			job.Stage, job.InfoFrom, job.Passed, job.Changes = domain.StageNeedsInfo, e.From, nil, nil
+			job = leftNeedsHuman(job)
 		case domain.ReviewPassed:
 			job.Passed = append(slices.Clip(job.Passed), e.Role)
 		case domain.ChangesRequested:
@@ -104,15 +109,25 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
-			job.SpecException = e.SpecException
+			job.SpecException, job.SpecEscalated, job.Reason = e.SpecException, e.SpecEscalated, e.Reason
 		case domain.MergeRequested:
-			job.Stage, job.InfoFrom, job.SpecException, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", false, nil, nil, nil
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", nil, nil, nil
+			job = leftNeedsHuman(job)
 		case domain.JobStopped:
-			job.Stage, job.InfoFrom, job.SpecException, job.Reviewers, job.Passed, job.Changes = domain.StageStopped, "", false, nil, nil, nil
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageStopped, "", nil, nil, nil
+			job = leftNeedsHuman(job)
 		case domain.SliceDropped:
-			job.Stage, job.InfoFrom, job.SpecException, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", false, nil, nil, nil
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", nil, nil, nil
+			job = leftNeedsHuman(job)
 		}
 	}
+	return job
+}
+
+// leftNeedsHuman forgets why the job was in needs-human, so a later stop for
+// a person never inherits an old cause.
+func leftNeedsHuman(job domain.Job) domain.Job {
+	job.SpecException, job.SpecEscalated, job.Reason = false, false, ""
 	return job
 }
 
@@ -164,8 +179,9 @@ func ignored(e domain.MessageReceived) bool {
 // decideMessage handles an allowed person's message. Marked as a direction on
 // an unmerged slice, it drops the slice. In needs-info it is the
 // answer, so the job goes back to the stage that asked. In needs-human on a
-// length exception or after specgate's last rejection it is feedback for the
-// spec, which is rewritten with it. Otherwise in needs-human it is rework feedback, and in done it
+// length exception or marked as stopped by specgate's last rejection (not
+// read from the count, which can be stale) it is feedback for the spec, which
+// is rewritten with it. Otherwise in needs-human it is rework feedback, and in done it
 // reopens the merged job: either way the job goes back to the build stage in
 // the same round, with the text as input, so a reopened job past its last
 // round still needs a person after CHANGES.
@@ -182,7 +198,7 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 	if job.Stage == domain.StageNeedsHuman && job.SpecException {
 		return respecified(job, e, p, false)
 	}
-	if job.Stage == domain.StageNeedsHuman && job.SpecRejections >= maxSpecRejections {
+	if job.Stage == domain.StageNeedsHuman && job.SpecEscalated {
 		return respecified(job, e, p, true)
 	}
 	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
@@ -353,7 +369,7 @@ func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) 
 	evs := []domain.Event{domain.SpecRejected{Job: job.ID, Rejections: n, At: e.At}}
 	if n >= maxSpecRejections {
 		reason := fmt.Sprintf("spec rejected by specgate %d times", n)
-		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}), nil
+		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, SpecEscalated: true, At: e.At}), nil
 	}
 	return append(evs, domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At}), nil
 }
