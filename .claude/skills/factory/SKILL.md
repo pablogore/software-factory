@@ -13,7 +13,8 @@ moves. When a script refuses, its message says why. Fix the cause or stop and
 tell the user; never work around it.
 
 ```
-/factory run          drain the queue: every open `factory` issue, `concurrency` at a time; also resumes
+/factory run          start the queue; STOP and ask when an issue finishes (see "Pause between issues"); also resumes
+/factory run --auto [--max-jobs N] [--max-usd N]   unattended: no pause between issues, only the caps / needs-human / needs-info
 /factory run <n>      run one issue now
 /factory <anything>   talk to the factory: ask about jobs, give feedback, file a feature
 ```
@@ -250,7 +251,7 @@ comments on the merged PR as `direction-<k>.md`), then spawn `spec-writer` with
 - `CONTINUE`: with `checkpoint: every-slice` (the default) the job waits at
   `checkpoint`; report the replan's `## Resumen` to the user and wait for their OK:
   `factory/bin/job checkpoint-ok <initiative>` creates the next slice job; go to **spec**.
-  With `checkpoint: auto` the next slice job is created at once. Change it per
+  With `checkpoint: auto` the next slice job is created at once (same issue, so no pause). Change it per
   initiative with `factory/bin/job set-checkpoint <initiative> every-slice|auto`.
 - `DONE`: the initiative closes and so does its issue.
 - `NEEDS-HUMAN`: the job goes to `needs-human` with the replan's "Para el humano".
@@ -287,11 +288,59 @@ then moves the job to `merged`; stop any agents still running for it.
    built. For a new issue, `factory/bin/job create <n>` prints the job id;
    start it at **intake**.
 3. Each time a job finishes, run `factory/bin/job queue` again and start its
-   `resume` lines you aren't already running and its `new` lines.
+   `resume` lines you aren't already running. Start its `new` lines only if the
+   run isn't paused (see **Pause between issues**). A slice of the same
+   initiative follows its `checkpoint` and never pauses.
 4. When nothing is queued or running, print `factory/bin/job summary <ids>`
    for the jobs this run touched, then list what waits on a human: PRs to
    review (merge one to approve it, or give feedback with `/factory`) and
    questions waiting on authors.
+
+### Pause between issues
+
+The factory does not chain issues on its own: tokens are the user's budget and
+the next issue is their call. The unit is the **issue** (an initiative), not
+the job: the slices of one initiative keep going by their `checkpoint`
+(`auto` today) without pausing, and rounds and replans run by themselves.
+
+**Pause triggers** (an issue "finishes" for this purpose):
+- its initiative closes (`DONE`);
+- a job of it goes to `needs-human` or `needs-info`;
+- it is rejected.
+
+**Pausing means starting no new work.** Everything already running finishes;
+a job that escalates does not stop
+the others, and the ones that don't depend on it run to their own end. While
+paused, don't start `new` lines. Slices of issues already in progress keep
+following their checkpoint. Crash `resume`s are not new work.
+
+**Caps per issue.** Sum, for the issue, the `cost_usd` of all jobs with its
+`initiative_id` (`factory/bin/job summary`), and count its slices. When it
+passes **5 slices or USD 8**, tell the user in one line
+(`#<n>: 6 slices, $9.40 — pausing this issue`) and hold this issue: its running
+agents finish, but no new slice job (`next-slice` / `checkpoint-ok`) starts
+until the user says `continuar`. Other issues are unaffected.
+
+**The pause message**, once everything running has settled (or right away if
+nothing runs), in under ~12 lines:
+- **Issue:** `#<n> <title>`, its PRs (`#a, #b`), final state.
+- **Work:** slices done and rounds used, real cost in USD, and duration
+  (from `job summary`: cost and time, summed over the issue's jobs).
+- **Recommended next:** one issue and one line of why (plan.md order and
+  dependencies, the replan's `## Resumen`, risk, value). If the queue is empty,
+  say so and offer sprint planning.
+- **Options:** `continuar` (the recommended), `elegir otro <n>`, `replan`
+  (run the replan for that issue first), `parar`.
+
+Then end your turn and wait. Don't start anything on silence. `continuar` /
+`otro <n>` starts that issue (**/factory run <n>** flow); `replan` runs
+**replan**; `parar` ends the run with step 4's summary.
+
+**`--auto [--max-jobs N] [--max-usd N]`** leaves the factory unattended: it does
+not pause between issues. It still stops starting new work when: `--max-jobs`
+jobs have been started (default 5), the run's accumulated cost reaches
+`--max-usd` (default 20), any job goes to `needs-human` or `needs-info`, or an
+issue hits the per-issue caps above. Then it gives the pause message.
 
 **Resuming.** State lives in files, so a new session picks up where a dead one
 stopped. For a `resume` job, run its stage's step again: `intake`, `initiative`, `spec`, `rate` and `replan`
