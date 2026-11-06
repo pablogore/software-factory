@@ -24,7 +24,8 @@ type stageBody struct {
 }
 
 // LoadPipeline parses a pipeline file and validates it against the roles
-// loaded alongside it.
+// loaded alongside it. The pipeline keeps the roles its stages name, so Decide
+// reads each reviewer's mode from its role file.
 func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 	var f pipelineFile
 	if err := decodeStrict(data, &f); err != nil {
@@ -41,7 +42,33 @@ func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 	if err := p.Validate(roles); err != nil {
 		return domain.Pipeline{}, err
 	}
+	named, err := stageRoles(p.Stages, roles)
+	if err != nil {
+		return domain.Pipeline{}, err
+	}
+	p.Roles = named
 	return p, nil
+}
+
+// stageRoles returns, in the order the stages first name them, the roles the
+// stages list. Decide treats a role without a mode as blocking, so a mode
+// missing from a role file must fail here instead of blocking silently.
+func stageRoles(stages []domain.Stage, roles []domain.Role) ([]domain.Role, error) {
+	var out []domain.Role
+	for _, st := range stages {
+		for _, name := range st.Roles {
+			if slices.ContainsFunc(out, func(r domain.Role) bool { return r.Name == name }) {
+				continue
+			}
+			// Pipeline.Validate has checked that every listed role is loaded.
+			i := slices.IndexFunc(roles, func(r domain.Role) bool { return r.Name == name })
+			if err := roles[i].Mode.Validate(); err != nil {
+				return nil, fmt.Errorf("role %s: %w", name, err)
+			}
+			out = append(out, roles[i])
+		}
+	}
+	return out, nil
 }
 
 // parseStage reads either a bare name (`- intake`), which is a stage of that
