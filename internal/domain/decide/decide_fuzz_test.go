@@ -42,7 +42,9 @@ func fuzzEvents() []domain.Event {
 // changes nothing and is not an error, that an allowed person's message
 // without a name is refused unless the job is stopped or rejected, that a job a decision moves records an
 // asker exactly when it lands in needs-info, that only a job in needs-human
-// waits on a length exception, and that a missing or nil event is an error,
+// waits on a length exception, that every needs-human it emits carries one
+// of HumanCauses with each mark set exactly when its cause is, that a job out
+// of needs-human keeps no cause, and that a missing or nil event is an error,
 // never a panic.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
@@ -93,6 +95,15 @@ func FuzzDecide(f *testing.F) {
 		}
 		if after.SpecException && after.Stage != domain.StageNeedsHuman {
 			t.Fatalf("stage %q waiting on a length exception after %s", after.Stage, ev.EventName())
+		}
+		for _, out := range first {
+			if nh, ok := out.(domain.NeedsHuman); ok && (nh.Cause.Validate() != nil ||
+				nh.SpecException != (nh.Cause == domain.CauseSpecException) || nh.SpecEscalated != (nh.Cause == domain.CauseSpecEscalated)) {
+				t.Fatalf("needs-human with cause %q, exception %v, escalated %v after %s", nh.Cause, nh.SpecException, nh.SpecEscalated, ev.EventName())
+			}
+		}
+		if after.Cause != "" && after.Stage != domain.StageNeedsHuman {
+			t.Fatalf("stage %q keeps cause %q after %s", after.Stage, after.Cause, ev.EventName())
 		}
 	})
 }

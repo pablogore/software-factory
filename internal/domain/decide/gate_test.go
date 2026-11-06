@@ -37,7 +37,7 @@ func TestDecideGate(t *testing.T) {
 				{"in round 2 goes back to build in round 3 with the round's reviewers", 2, secCode,
 					[]domain.Event{started(3, 1, secCode...), entered("build", 1)}},
 				{"in round 3 of 3 ends in needs-human", 3, secCode,
-					[]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "gate failed in the last round (3 of 3)", At: at(1)}}},
+					[]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "gate failed in the last round (3 of 3)", Cause: domain.CauseGateFailed, At: at(1)}}},
 			}
 			specs.Table(s, rows, func(r gateRow) string { return r.name }, func(ctx *specs.Context, r gateRow) {
 				evs, err := decide.Decide(atGate(r.round, r.reviewers), gateFailed(1), threeReviewers())

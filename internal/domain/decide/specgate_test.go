@@ -38,7 +38,7 @@ func TestDecideSpecgate(t *testing.T) {
 				{"the second rejection goes back to spec and counts 2", 1,
 					[]domain.Event{rejected(2, 1), entered("spec", 1)}},
 				{"the third rejection ends in needs-human, marked as specgate's escalation", 2,
-					[]domain.Event{rejected(3, 1), domain.NeedsHuman{Job: jobID, Reason: "spec rejected by specgate 3 times", SpecEscalated: true, At: at(1)}}},
+					[]domain.Event{rejected(3, 1), domain.NeedsHuman{Job: jobID, Reason: "spec rejected by specgate 3 times", Cause: domain.CauseSpecEscalated, SpecEscalated: true, At: at(1)}}},
 			}
 			specs.Table(s, rows, func(r specgateRow) string { return r.name }, func(ctx *specs.Context, r specgateRow) {
 				job := atSpecgate(r.rejected)

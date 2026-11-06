@@ -96,7 +96,7 @@ func TestDecideRerun(t *testing.T) {
 					[]domain.Event{passed("reviewer-security", 1), entered("approve", 1)}},
 				{"CHANGES from the round's last reviewer in round 3 of 3 ends in needs-human", 3, secCode, []string{"reviewer-code"}, nil, changes("reviewer-security", 1),
 					[]domain.Event{asked("reviewer-security", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-security", At: at(1)}}},
+						Reason: "CHANGES in the last round (3 of 3) from reviewer-security", Cause: domain.CauseChanges, At: at(1)}}},
 				{"round 1 ends once every reviewer of the stage answered", 1, nil, secCode, nil, pass("reviewer-ux", 1),
 					[]domain.Event{passed("reviewer-ux", 1), entered("approve", 1)}},
 				{"round 1 counts CHANGES from a reviewer that is not always_rerun", 1, nil, secCode, nil, changes("reviewer-ux", 1),

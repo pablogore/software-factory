@@ -233,7 +233,7 @@ func TestDecide(t *testing.T) {
 					[]domain.Event{asked("reviewer-security", 1), started(3, 1, "reviewer-security"), entered("build", 1)}},
 				{"CHANGES in round 3 of 3 ends in needs-human naming the reviewers", 3, []string{"reviewer-ux", "reviewer-ui"}, []string{"security-deep", "reviewer-security"}, changes("reviewer-code", 1),
 					[]domain.Event{asked("reviewer-code", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-security, reviewer-code, security-deep", At: at(1)}}},
+						Reason: "CHANGES in the last round (3 of 3) from reviewer-security, reviewer-code, security-deep", Cause: domain.CauseChanges, At: at(1)}}},
 				{"all PASS in round 3 of 3 enters approve", 3, reviewers[:4], nil, pass("security-deep", 1),
 					[]domain.Event{passed("security-deep", 1), entered("approve", 1)}},
 			}
@@ -277,12 +277,12 @@ func TestDecide(t *testing.T) {
 					roundTwo("reviewer-security", "reviewer-security", "reviewer-ux", "security-deep")},
 				{"mixed round in round 3 of 3 ends in needs-human naming only the blocking reviewer", 3, []string{"reviewer-ui", "reviewer-code"}, []string{"reviewer-ux", "security-deep"}, changes("reviewer-security", 1),
 					[]domain.Event{asked("reviewer-security", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-security", At: at(1)}}},
+						Reason: "CHANGES in the last round (3 of 3) from reviewer-security", Cause: domain.CauseChanges, At: at(1)}}},
 				{"CHANGES from a role with no mode goes back to build at round 2", 1, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}, nil, changes("reviewer-code", 1),
 					roundTwo("reviewer-code", "reviewer-code")},
 				{"CHANGES from a role with no mode in round 3 of 3 ends in needs-human", 3, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}, nil, changes("reviewer-code", 1),
 					[]domain.Event{asked("reviewer-code", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-code", At: at(1)}}},
+						Reason: "CHANGES in the last round (3 of 3) from reviewer-code", Cause: domain.CauseChanges, At: at(1)}}},
 			}
 			specs.Table(s, rows, func(r reviewRow) string { return r.name }, func(ctx *specs.Context, r reviewRow) {
 				job := newJob()
@@ -444,7 +444,7 @@ func TestDecide(t *testing.T) {
 				evs, err := decide.Decide(job, r.ev, defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: r.reason, At: at(1)}})
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: r.reason, Cause: domain.CauseEscalated, At: at(1)}})
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
 				ctx.Expect(after.Round).ToEqual(r.round)
@@ -457,7 +457,7 @@ func TestDecide(t *testing.T) {
 				evs, err := decide.Decide(job, result("approver", 11, domain.ApproveResult{Decision: domain.ApproveEscalate, Reasons: []string{"too risky"}}), defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "approver escalated: too risky", At: at(11)}})
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "approver escalated: too risky", Cause: domain.CauseEscalated, At: at(11)}})
 				ctx.Expect(decide.Apply(job, evs).Stage).ToEqual(domain.StageNeedsHuman)
 			})
 		})

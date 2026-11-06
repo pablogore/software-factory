@@ -54,7 +54,7 @@ func TestBlocked(t *testing.T) {
 				evs, err := decide.Decide(job, blockedBuild(r.summary, 1), defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: r.reason, At: at(1)}})
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: r.reason, Cause: domain.CauseBlocked, At: at(1)}})
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
 				ctx.Expect(after.Reason).ToEqual(r.reason)

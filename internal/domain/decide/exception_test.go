@@ -14,7 +14,7 @@ func exceptionAsked(minute int) domain.SpecgateFailed {
 }
 
 func waitingException(minute int) domain.NeedsHuman {
-	return domain.NeedsHuman{Job: jobID, Reason: "spec asks for a length exception", SpecException: true, At: at(minute)}
+	return domain.NeedsHuman{Job: jobID, Reason: "spec asks for a length exception", Cause: domain.CauseSpecException, SpecException: true, At: at(minute)}
 }
 
 // waitingJob is a job whose spec, rejected once before, asks for a length
