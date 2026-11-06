@@ -62,6 +62,23 @@ func (ReplanRequested) EventName() string { return "ReplanRequested" }
 // JobID implements Event.
 func (e ReplanRequested) JobID() JobID { return e.Job }
 
+// SliceDropped records that By's direction dropped Job, a slice of
+// Initiative that never merged: the job ends rejected and the replan gets
+// Text, the new direction.
+type SliceDropped struct {
+	Job        JobID        `json:"job"`
+	Initiative InitiativeID `json:"initiative"`
+	By         string       `json:"by"`
+	Text       string       `json:"text"`
+	At         time.Time    `json:"at"`
+}
+
+// EventName implements Event.
+func (SliceDropped) EventName() string { return "SliceDropped" }
+
+// JobID implements Event.
+func (e SliceDropped) JobID() JobID { return e.Job }
+
 // ReplanSubmitted records the replan's outcome after Job merged. It is its
 // own event, not a role result, so no new kind or schema is needed. Reason
 // is the replan agent's own words, kept when it asks for a person.

@@ -44,6 +44,9 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	if job.Stage == domain.StageStopped {
 		return nil, fmt.Errorf("%w: %s", ErrStopped, ev.EventName())
 	}
+	if job.Stage == domain.StageRejected {
+		return nil, illegal(job, ev)
+	}
 	switch e := ev.(type) {
 	case domain.StopRequested:
 		if strings.TrimSpace(e.By) == "" {
@@ -101,6 +104,8 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", nil, nil, nil
 		case domain.JobStopped:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageStopped, "", nil, nil, nil
+		case domain.SliceDropped:
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", nil, nil, nil
 		}
 	}
 	return job
@@ -151,12 +156,16 @@ func ignored(e domain.MessageReceived) bool {
 	return !e.Allowed || e.AuthorKind != domain.AuthorPerson
 }
 
-// decideMessage handles an allowed person's message. In needs-info it is the
+// decideMessage handles an allowed person's message. Marked as a direction on
+// an unmerged slice, it drops the slice. In needs-info it is the
 // answer, so the job goes back to the stage that asked. In needs-human it is
 // rework feedback, and in done it reopens the merged job: either way the job
 // goes back to the build stage in the same round, with the text as input, so
 // a reopened job past its last round still needs a person after CHANGES.
 func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
+	if e.Direction && job.Initiative != "" && job.Stage != domain.StageMerge && job.Stage != domain.StageDone {
+		return dropped(job, e), nil
+	}
 	if job.Stage == domain.StageNeedsInfo {
 		return answered(job, e, p)
 	}
@@ -171,6 +180,17 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 		domain.ReworkRequested{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At},
 	}, nil
+}
+
+// dropped ends an unmerged slice rejected on a person's direction and asks
+// its initiative for a replan, which gets the direction. A slice asking to
+// merge is not dropped, since the merge may already be under way, and a
+// merged one keeps its feedback as an ordinary message.
+func dropped(job domain.Job, e domain.MessageReceived) []domain.Event {
+	return []domain.Event{
+		domain.SliceDropped{Job: job.ID, Initiative: job.Initiative, By: e.Author, Text: e.Text, At: e.At},
+		domain.ReplanRequested{Job: job.ID, Initiative: job.Initiative, At: e.At},
+	}
 }
 
 // answered sends a job in needs-info back to the stage recorded as the one
