@@ -3,9 +3,12 @@ package domain
 import "fmt"
 
 // Pipeline is the flow a job follows: an ordered list of stages (04-roles.md).
+// Roles are the roles its stages list, as loaded; decide reads a reviewer's
+// mode from them, and a role missing here counts as blocking.
 type Pipeline struct {
 	Name   string  `json:"name"`
 	Stages []Stage `json:"stages"`
+	Roles  []Role  `json:"roles,omitempty"`
 }
 
 // Stage is one step of a pipeline. Its roles run in parallel; a review stage
