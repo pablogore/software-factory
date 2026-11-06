@@ -30,6 +30,8 @@ type Job struct {
 	Round          int            `json:"round"`                     // review round, from 1
 	SpecRejections int            `json:"spec_rejections,omitempty"` // times specgate rejected the spec
 	HumanReworks   int            `json:"human_reworks,omitempty"`   // reworks a person sent from needs-human; never reset
+	Limits         Limits         `json:"limits,omitzero"`           // limits a person overrode for this job; a nil one is the pipeline's
+	ReworksLifted  bool           `json:"reworks_lifted,omitempty"`  // a person overrode human_reworks to unlimited for this job
 	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer
 	Reason         string         `json:"reason,omitempty"`          // in needs-human, why the job is there; rejected by intake, intake's reason
 	Cause          HumanCause     `json:"cause,omitempty"`           // in needs-human, which of HumanCauses put the job there

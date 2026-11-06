@@ -50,8 +50,9 @@ var ErrOverrideRefused = errors.New("override refused")
 var ErrStaleWait = errors.New("action for another wait")
 
 // ErrReworkRefused means a person's feedback in needs-human would be one more
-// rework than the pipeline's limits.human_reworks allows, so a job that keeps
-// getting stuck ends with a final decision instead of looping. The error names
+// rework than the job's human_reworks allows (a person's override for this
+// job, else the pipeline's), so a job that keeps getting stuck ends with a
+// final decision instead of looping. The error names
 // the limit. Approve, reject (a direction) and stop still act on the job.
 // Decide returns no events with it, so the job stays in needs-human.
 var ErrReworkRefused = errors.New("rework refused")
@@ -71,6 +72,10 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 			return nil, nil
 		}
 	case domain.OverrideRequested:
+		if ignored(e.Allowed, e.AuthorKind) {
+			return nil, nil
+		}
+	case domain.LimitOverrideRequested:
 		if ignored(e.Allowed, e.AuthorKind) {
 			return nil, nil
 		}
@@ -121,6 +126,16 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if job.Stage == domain.StageNeedsHuman {
 			return overridden(job, e)
 		}
+	case domain.LimitOverrideRequested:
+		if blank(e.By) {
+			return nil, fmt.Errorf("decide: limit override without who asked: %w", domain.ErrMissingField)
+		}
+		if err := fresh(job, ev, e.WaitSeq); err != nil {
+			return nil, err
+		}
+		if job.Stage == domain.StageNeedsHuman {
+			return limitOverridden(job, e)
+		}
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
 			evs := []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}
@@ -168,6 +183,10 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Changes = append(slices.Clip(job.Changes), e.Role)
 		case domain.SpecRejected:
 			job.SpecRejections = e.Rejections
+		case domain.LimitOverridden:
+			job = overrideLimit(job, e)
+			// It answered the wait, so a replay of it never acts again.
+			job.WaitSeq++
 		case domain.ReworkRequested:
 			// Only a rework from needs-human counts toward human_reworks: a
 			// comment reopening a merged job in done does not.
@@ -333,6 +352,67 @@ func overridden(job domain.Job, e domain.OverrideRequested) ([]domain.Event, err
 	}, nil
 }
 
+// limitOverridden records a person's change of one limit for this job, once
+// the name and value pass the same checks as the pipeline's limits block. It
+// does not look at the cause: the job keeps waiting for the same reason.
+func limitOverridden(job domain.Job, e domain.LimitOverrideRequested) ([]domain.Event, error) {
+	n, unlimited, err := domain.ParseLimit(e.Limit, e.Value)
+	if err != nil {
+		return nil, fmt.Errorf("decide: limit override: %w", err)
+	}
+	return []domain.Event{domain.LimitOverridden{Job: job.ID, By: e.By, Limit: e.Limit, Value: n, Unlimited: unlimited, At: e.At}}, nil
+}
+
+// overrideLimit sets the job's own value of the limit e names.
+func overrideLimit(job domain.Job, e domain.LimitOverridden) domain.Job {
+	n := e.Value
+	switch e.Limit {
+	case "spec_rejections":
+		job.Limits.SpecRejections = &n
+	case "human_reworks":
+		job.Limits.HumanReworks, job.ReworksLifted = &n, false
+		if e.Unlimited {
+			job.Limits.HumanReworks, job.ReworksLifted = nil, true
+		}
+	case "triage_retries":
+		job.Limits.TriageRetries = &n
+	case "max_rounds":
+		job.Limits.MaxRounds = &n
+	}
+	return job
+}
+
+// humanReworks is the job's own human_reworks when a person overrode it,
+// else the pipeline's; false means unlimited.
+func humanReworks(job domain.Job, p domain.Pipeline) (int, bool) {
+	switch {
+	case job.ReworksLifted:
+		return 0, false
+	case job.Limits.HumanReworks != nil:
+		return *job.Limits.HumanReworks, true
+	default:
+		return p.HumanReworks()
+	}
+}
+
+// maxRounds is the job's own max_rounds when a person overrode it, which wins
+// even over the stage's own value, else the pipeline's for stage st.
+func maxRounds(job domain.Job, p domain.Pipeline, st domain.Stage) int {
+	if job.Limits.MaxRounds != nil {
+		return *job.Limits.MaxRounds
+	}
+	return p.MaxRounds(st)
+}
+
+// specRejections is the job's own spec_rejections when a person overrode it,
+// else the pipeline's.
+func specRejections(job domain.Job, p domain.Pipeline) int {
+	if job.Limits.SpecRejections != nil {
+		return *job.Limits.SpecRejections
+	}
+	return p.SpecRejections()
+}
+
 // decideMessage handles an allowed person's message. Marked as a direction on
 // an unmerged slice, it drops the slice. In needs-info it is the
 // answer, so the job goes back to the stage that asked. In needs-human it is
@@ -361,13 +441,13 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 // count, which can be stale), and after every other cause the job goes back to
 // build with it. A missing or unknown cause fails closed, and the switch
 // refuses by default, so a future cause is never routed by accident. Once the
-// job has used every rework limits.human_reworks allows, feedback is refused
-// whatever the cause.
+// job has used every rework its human_reworks allows (a person's override for
+// this job, else the pipeline's), feedback is refused whatever the cause.
 func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
 	if err := job.Cause.Validate(); err != nil {
 		return nil, fmt.Errorf("decide: feedback in needs-human: %w", err)
 	}
-	if limit, ok := p.HumanReworks(); ok && job.HumanReworks >= limit {
+	if limit, ok := humanReworks(job, p); ok && job.HumanReworks >= limit {
 		return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
 	}
 	switch job.Cause {
@@ -469,7 +549,7 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 	if len(blocking) == 0 {
 		return append(evs, next(job, p, i, e.At)...), nil
 	}
-	if limit := p.MaxRounds(stage); job.Round >= limit {
+	if limit := maxRounds(job, p, stage); job.Round >= limit {
 		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, limit, strings.Join(inOrder(stage.Roles, blocking), ", "))
 		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseChanges, At: e.At}), nil
 	}
@@ -566,7 +646,7 @@ func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) 
 	}
 	n := job.SpecRejections + 1
 	evs := []domain.Event{domain.SpecRejected{Job: job.ID, Rejections: n, At: e.At}}
-	if n >= p.SpecRejections() {
+	if n >= specRejections(job, p) {
 		reason := fmt.Sprintf("spec rejected by specgate %d times", n)
 		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseSpecEscalated, At: e.At}), nil
 	}
@@ -586,7 +666,7 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 	if r < 0 {
 		return nil, fmt.Errorf("decide: pipeline %q has no review stage", p.Name)
 	}
-	if limit := p.MaxRounds(p.Stages[r]); job.Round >= limit {
+	if limit := maxRounds(job, p, p.Stages[r]); job.Round >= limit {
 		reason := fmt.Sprintf("gate failed in the last round (%d of %d)", job.Round, limit)
 		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseGateFailed, At: e.At}}, nil
 	}
