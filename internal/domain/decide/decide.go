@@ -16,7 +16,7 @@ import (
 var ErrIllegalTransition = errors.New("illegal transition")
 
 // ErrUnsupported means the result or message is legal in this stage but its
-// outcome (REJECT, BLOCKED, task results, a person's message outside
+// outcome (REJECT, task results, a person's message outside
 // needs-human, needs-info and done) is not decided yet; E01.4 and E01.5 add
 // it.
 var ErrUnsupported = errors.New("unsupported result")
@@ -158,6 +158,9 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 		if r.Status == domain.BuildReady {
 			return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageGate, At: e.At}}, nil
 		}
+		// No pipeline has a triage stage yet (E02), so a blocked build waits
+		// for a person, whose feedback sends it back to build.
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: blocked(e.Role, r.Summary), At: e.At}}, nil
 	case domain.ReviewResult:
 		return reviewed(job, e, r, p, i)
 	case domain.ApproveResult:
@@ -324,6 +327,16 @@ func escalated(role string, reasons []string) string {
 		return fmt.Sprintf("%s escalated", role)
 	}
 	return fmt.Sprintf("%s escalated: %s", role, strings.Join(reasons, "; "))
+}
+
+// blocked is the needs-human reason for a builder BLOCKED: the builder's
+// summary, or which role blocked when it gave none, so the reason is never
+// empty.
+func blocked(role, summary string) string {
+	if strings.TrimSpace(summary) == "" {
+		return fmt.Sprintf("%s blocked", role)
+	}
+	return summary
 }
 
 // inOrder returns the roles in subset in the order the stage lists them, so
