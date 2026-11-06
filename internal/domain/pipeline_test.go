@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,7 +34,10 @@ type pipelineRow struct {
 func TestPipeline(t *testing.T) {
 	roles := []domain.Role{
 		{Name: "reviewer-code", Kind: domain.KindReview, Prompt: "roles/reviewer-code.md"},
+		{Name: "reviewer-ux", Kind: domain.KindReview, Prompt: "roles/reviewer-ux.md"},
 		{Name: "scribe", Kind: domain.KindTask, Prompt: "roles/scribe.md"},
+		{Name: "notifier", Kind: domain.KindTask, Prompt: "roles/notifier.md"},
+		{Name: "builder", Kind: domain.KindBuild, Prompt: "roles/builder.md"},
 	}
 
 	specs.Describe(t, "Pipeline.Validate", func(s *specs.Spec) {
@@ -58,7 +62,7 @@ func TestPipeline(t *testing.T) {
 			p := validPipeline()
 			p.Stages = append(p.Stages,
 				domain.Stage{Name: "changelog", Kind: domain.KindTask, Roles: []string{"scribe"}},
-				domain.Stage{Name: "notify", Kind: domain.KindTask, Roles: []string{"scribe"}},
+				domain.Stage{Name: "notify", Kind: domain.KindTask, Roles: []string{"notifier"}},
 			)
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
@@ -67,6 +71,59 @@ func TestPipeline(t *testing.T) {
 			p := validPipeline()
 			p.Stages[2].MaxRounds = nil
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+		})
+
+		s.It("accepts several reviewers in one review stage", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Stages[2].Roles = []string{"reviewer-code", "reviewer-ux"}
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+		})
+
+		s.It("accepts two review stages with different reviewers", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Stages = []domain.Stage{
+				p.Stages[0], p.Stages[1], p.Stages[2],
+				{Name: "ux-review", Kind: domain.KindReview, Roles: []string{"reviewer-ux"}, OnChanges: "build"},
+				p.Stages[3],
+			}
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+		})
+
+		s.It("accepts the builder file in build, listed or by default", func(ctx *specs.Context) {
+			p := validPipeline()
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+			p.Stages[1].Roles = []string{"builder"}
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+		})
+
+		s.It("names a roleless stage whose default role file has another kind", func(ctx *specs.Context) {
+			approver := domain.Role{Name: "approver", Kind: domain.KindReview, Prompt: "roles/approver.md"}
+
+			err := validPipeline().Validate(append(slices.Clone(roles), approver))
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`stage approve: invalid value: role "approver" has kind review, want approve`)
+		})
+
+		s.It("names a stage listing a role another stage takes by default", func(ctx *specs.Context) {
+			intake := domain.Role{Name: "intake", Kind: domain.KindIntake, Prompt: "roles/intake.md"}
+			p := validPipeline()
+			p.Stages = append([]domain.Stage{{Name: "triage", Kind: domain.KindIntake}}, p.Stages...)
+			p.Stages[1].Roles = []string{"intake"}
+
+			err := p.Validate(append(slices.Clone(roles), intake))
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`stage intake: invalid value: role "intake" is also in stage triage`)
+		})
+
+		s.It("names a role loaded from two role files", func(ctx *specs.Context) {
+			again := domain.Role{Name: "reviewer-code", Kind: domain.KindReview, Prompt: "roles/other.md"}
+
+			err := validPipeline().Validate(append(slices.Clone(roles), again))
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`pipeline default: invalid value: role "reviewer-code" is loaded twice`)
 		})
 
 		s.When("a flow rule is broken", func(s *specs.Spec) {
@@ -91,7 +148,7 @@ func TestPipeline(t *testing.T) {
 					p.Stages[2].Roles = []string{"reviewer-code", "reviewer-perf"}
 				}, domain.ErrInvalidValue, `stage review: invalid value: role "reviewer-perf" is not loaded`},
 				{"names the stage and the role listed twice", func(p *domain.Pipeline) {
-					p.Stages[2].Roles = []string{"reviewer-code", "scribe", "reviewer-code"}
+					p.Stages[2].Roles = []string{"reviewer-code", "reviewer-ux", "reviewer-code"}
 				}, domain.ErrInvalidValue, `stage review: invalid value: role "reviewer-code" is listed twice`},
 				{"names the stage and an uppercase role", func(p *domain.Pipeline) {
 					p.Stages[2].Roles = []string{"Reviewer-code"}
@@ -185,6 +242,34 @@ func TestPipeline(t *testing.T) {
 						domain.Stage{Name: "spec", Kind: domain.KindSpec},
 					)
 				}, domain.ErrInvalidValue, "stage spec: invalid value: only task stages may come after the approve stage"},
+				{"names the approve stage listing the builder", func(p *domain.Pipeline) {
+					p.Stages[3].Roles = []string{"builder"}
+				}, domain.ErrInvalidValue, `stage approve: invalid value: role "builder" has kind build, want approve`},
+				{"names the intake stage listing the builder while it fills build by default", func(p *domain.Pipeline) {
+					p.Stages[0].Roles = []string{"builder"}
+				}, domain.ErrInvalidValue, `stage intake: invalid value: role "builder" has kind build, want intake`},
+				{"names a review stage listing a task role", func(p *domain.Pipeline) {
+					p.Stages[2].Roles = []string{"reviewer-code", "scribe"}
+				}, domain.ErrInvalidValue, `stage review: invalid value: role "scribe" has kind task, want review`},
+				{"names a task stage listing a reviewer", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "changelog", Kind: domain.KindTask, Roles: []string{"reviewer-ux"}})
+				}, domain.ErrInvalidValue, `stage changelog: invalid value: role "reviewer-ux" has kind review, want task`},
+				{"names the same reviewer in two review stages", func(p *domain.Pipeline) {
+					p.Stages = []domain.Stage{
+						p.Stages[0], p.Stages[1], p.Stages[2],
+						{Name: "second-review", Kind: domain.KindReview, Roles: []string{"reviewer-ux", "reviewer-code"}, OnChanges: "build"},
+						p.Stages[3],
+					}
+				}, domain.ErrInvalidValue, `stage second-review: invalid value: role "reviewer-code" is also in stage review`},
+				{"names the same task role in two task stages", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages,
+						domain.Stage{Name: "changelog", Kind: domain.KindTask, Roles: []string{"scribe"}},
+						domain.Stage{Name: "notify", Kind: domain.KindTask, Roles: []string{"scribe"}},
+					)
+				}, domain.ErrInvalidValue, `stage notify: invalid value: role "scribe" is also in stage changelog`},
+				{"names a default role filling a second stage of its kind", func(p *domain.Pipeline) {
+					p.Stages = append([]domain.Stage{{Name: "triage", Kind: domain.KindIntake}}, p.Stages...)
+				}, domain.ErrInvalidValue, `stage intake: invalid value: role "intake" is also in stage triage`},
 				{"names spec_rejections 0", func(p *domain.Pipeline) {
 					p.Limits.SpecRejections = ptr(0)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: spec_rejections 0, want at least 1"},
