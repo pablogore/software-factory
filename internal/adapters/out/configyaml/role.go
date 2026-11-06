@@ -108,8 +108,9 @@ func decodeStrict(data []byte, v any) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return err
 	}
-	// The decoder reports an empty file as a bare EOF.
-	if len(doc.Content) == 0 {
+	// The decoder reports an empty file as a bare EOF; a lone `---` holds only
+	// a null and would load as a role or pipeline with every field blank.
+	if len(doc.Content) == 0 || doc.Content[0].Tag == "!!null" {
 		return fmt.Errorf("%w: file is empty", domain.ErrInvalidValue)
 	}
 	if err := checkKeys(doc.Content[0], reflect.TypeOf(v).Elem()); err != nil {
@@ -126,6 +127,10 @@ var nodeType = reflect.TypeFor[yaml.Node]()
 // t doesn't declare, at any depth. Fields kept as yaml.Node are checked by
 // their own parser.
 func checkKeys(n *yaml.Node, t reflect.Type) error {
+	// An alias decodes as the node it names, so that node is what gets checked.
+	if n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
 	switch {
 	case t == nodeType:
 		return nil
@@ -136,11 +141,19 @@ func checkKeys(n *yaml.Node, t reflect.Type) error {
 			}
 		}
 	case t.Kind() == reflect.Struct && n.Kind == yaml.MappingNode:
-		if err := knownKeys(n, yamlKeys(t)...); err != nil {
-			return err
-		}
 		for i := 0; i < len(n.Content); i += 2 {
-			if err := checkKeys(n.Content[i+1], fieldType(t, n.Content[i].Value)); err != nil {
+			k, v := n.Content[i], n.Content[i+1]
+			if k.Tag == "!!merge" {
+				if err := checkMerge(v, t); err != nil {
+					return err
+				}
+				continue
+			}
+			ft := fieldType(t, k.Value)
+			if ft == nil {
+				return fmt.Errorf("%w: line %d: unknown key %q", domain.ErrInvalidValue, k.Line, k.Value)
+			}
+			if err := checkKeys(v, ft); err != nil {
 				return err
 			}
 		}
@@ -148,18 +161,22 @@ func checkKeys(n *yaml.Node, t reflect.Type) error {
 	return nil
 }
 
-// yamlKeys lists the yaml keys of the struct type t, so the key check can't
-// drift from the fields decodeStrict decodes into.
-func yamlKeys(t reflect.Type) []string {
-	keys := make([]string, 0, t.NumField())
-	for i := range t.NumField() {
-		keys = append(keys, yamlKey(t.Field(i)))
+// checkMerge checks the maps a merge key (`<<: *x` or `<<: [*x, *y]`) pulls
+// in against t, the struct they are merged into.
+func checkMerge(v *yaml.Node, t reflect.Type) error {
+	if v.Kind != yaml.SequenceNode {
+		return checkKeys(v, t)
 	}
-	return keys
+	for _, item := range v.Content {
+		if err := checkKeys(item, t); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// fieldType is the type of the field of struct type t with yaml key key; the
-// key is known to exist.
+// fieldType is the type of the field of struct type t with yaml key key, or
+// nil when t declares no such key.
 func fieldType(t reflect.Type, key string) reflect.Type {
 	for i := range t.NumField() {
 		if yamlKey(t.Field(i)) == key {

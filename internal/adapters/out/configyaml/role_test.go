@@ -128,6 +128,16 @@ func TestLoadRole(t *testing.T) {
 			})
 		})
 
+		s.It("loads a when condition that merges keys from an anchor", func(ctx *specs.Context) {
+			r, err := configyaml.LoadRole([]byte("name: security-deep\nkind: review\nmode: shadow\nwhen:\n  any:\n    - &c {paths: [x]}\n    - <<: *c\n      labels: [y]\n"))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.When.Any).ToEqual([]domain.Condition{
+				{Paths: []string{"x"}},
+				{Paths: []string{"x"}, Labels: []string{"y"}},
+			})
+		})
+
 		s.When("a key is misspelled", func(s *specs.Spec) {
 			rows := []brokenRow{
 				{
@@ -149,6 +159,21 @@ func TestLoadRole(t *testing.T) {
 					"names the unknown key in budget",
 					"name: security-deep\nkind: review\nmode: shadow\nbudget:\n  attempts: 2\n  dollars: 5\n",
 					`parse role: invalid value: line 6: unknown key "dollars"`,
+				},
+				{
+					"names the unknown key in a map budget aliases",
+					"name: security-deep\nkind: review\nmode: shadow\nwhen: &w {any: [{paths: [x]}]}\nbudget: *w\n",
+					`parse role: invalid value: line 4: unknown key "any"`,
+				},
+				{
+					"names the unknown key in a map merged into a when condition",
+					"name: security-deep\nkind: review\nmode: shadow\ndescription: &c {path: [x]}\nwhen:\n  any:\n    - <<: *c\n",
+					`parse role: invalid value: line 4: unknown key "path"`,
+				},
+				{
+					"rejects a role file holding only a document marker",
+					"---\n",
+					"parse role: invalid value: file is empty",
 				},
 				{
 					"rejects an empty role file",
