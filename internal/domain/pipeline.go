@@ -43,6 +43,24 @@ type Limits struct {
 // person may override for one job.
 var LimitKeys = []string{"spec_rejections", "human_reworks", "triage_retries", "max_rounds"}
 
+// PipelineCap is the most a pipeline may set limit key to, in its limits block
+// or, for max_rounds, in a review stage: a retry limit high enough to let a
+// job loop for long takes a per-job override (04-roles.md "Validación").
+func PipelineCap(key string) int {
+	if key == "triage_retries" {
+		return 3
+	}
+	return 10
+}
+
+// OverrideCap is the most a person may set limit key to for one job.
+func OverrideCap(key string) int {
+	if key == "triage_retries" {
+		return 5
+	}
+	return 20
+}
+
 // Unlimited is the value that lifts human_reworks, the only limit that may
 // be unlimited.
 const Unlimited = "unlimited"
@@ -68,7 +86,8 @@ func ParseLimit(key, value string) (n int, unlimited bool, err error) {
 	return n, false, nil
 }
 
-// Validate checks that every limit that is set is at least 1, naming the key.
+// Validate checks that every limit that is set is at least 1 and at most its
+// PipelineCap, naming the key.
 func (l Limits) Validate() error {
 	for _, v := range []struct {
 		key string
@@ -81,6 +100,9 @@ func (l Limits) Validate() error {
 	} {
 		if v.n != nil && *v.n < 1 {
 			return fmt.Errorf("limits: %w: %s %d, want at least 1", ErrInvalidValue, v.key, *v.n)
+		}
+		if v.n != nil && *v.n > PipelineCap(v.key) {
+			return fmt.Errorf("limits: %w: %s %d, want at most %d", ErrInvalidValue, v.key, *v.n, PipelineCap(v.key))
 		}
 	}
 	return nil
@@ -140,8 +162,8 @@ func (p Pipeline) Label() string {
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
 // the pipeline: exactly one build stage, stage names are unique and not
 // reserved, every review goes back to an earlier stage, lists roles and allows
-// at least one round when it sets max_rounds, every role a stage lists exists,
-// and every limit set is at least 1.
+// at least one round and at most the max_rounds cap when it sets max_rounds,
+// every role a stage lists exists, and every limit set is between 1 and its cap.
 func (p Pipeline) Validate(roles []Role) error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", p.Label(), err)
@@ -192,6 +214,9 @@ func (p Pipeline) Validate(roles []Role) error {
 		}
 		if st.Kind == KindReview && st.MaxRounds != nil && *st.MaxRounds < 1 {
 			return fmt.Errorf("stage %s: %w: max_rounds %d, want at least 1", st.Name, ErrInvalidValue, *st.MaxRounds)
+		}
+		if st.Kind == KindReview && st.MaxRounds != nil && *st.MaxRounds > PipelineCap("max_rounds") {
+			return fmt.Errorf("stage %s: %w: max_rounds %d, want at most %d", st.Name, ErrInvalidValue, *st.MaxRounds, PipelineCap("max_rounds"))
 		}
 		seen[st.Name] = true
 	}

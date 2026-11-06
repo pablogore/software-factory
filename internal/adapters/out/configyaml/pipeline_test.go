@@ -2,6 +2,7 @@ package configyaml_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -64,6 +65,41 @@ func TestLoadPipeline(t *testing.T) {
 			one, two, four := 1, 2, 4
 			ctx.Expect(p.Limits).ToEqual(domain.Limits{SpecRejections: &one, HumanReworks: &two, TriageRetries: &one, MaxRounds: &four})
 			ctx.Expect(p.SpecRejections()).ToEqual(1)
+		})
+
+		s.It("loads every limit at its cap", func(ctx *specs.Context) {
+			data := "name: p\nstages: [build]\nlimits:\n  spec_rejections: 10\n  human_reworks: 10\n  triage_retries: 3\n  max_rounds: 10\n"
+
+			p, err := configyaml.LoadPipeline([]byte(data), nil)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ten, three := 10, 3
+			ctx.Expect(p.Limits).ToEqual(domain.Limits{SpecRejections: &ten, HumanReworks: &ten, TriageRetries: &three, MaxRounds: &ten})
+		})
+
+		s.When("a copy of pipelines/default.yaml sets the review stage's max_rounds", func(s *specs.Spec) {
+			// The copy is edited in memory: pipelines/default.yaml itself stays as it is.
+			withRounds := func(ctx *specs.Context, rounds string) []byte {
+				data, err := os.ReadFile("../../../../pipelines/default.yaml")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(strings.Count(string(data), "max_rounds: 3\n")).ToEqual(1)
+				return []byte(strings.Replace(string(data), "max_rounds: 3\n", "max_rounds: "+rounds+"\n", 1))
+			}
+
+			s.It("names max_rounds and its cap of 10 at 11", func(ctx *specs.Context) {
+				_, err := configyaml.LoadPipeline(withRounds(ctx, "11"), loadedRoles(ctx))
+
+				ctx.Testing().Log(err)
+				ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+				ctx.Expect(err.Error()).ToEqual("stage review: invalid value: max_rounds 11, want at most 10")
+			})
+
+			s.It("loads it at 10", func(ctx *specs.Context) {
+				p, err := configyaml.LoadPipeline(withRounds(ctx, "10"), loadedRoles(ctx))
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(p.MaxRounds(p.Stages[3])).ToEqual(10)
+			})
 		})
 
 		s.It("loads human_reworks unlimited as no limit", func(ctx *specs.Context) {
@@ -191,6 +227,31 @@ func TestLoadPipeline(t *testing.T) {
 					"names human_reworks 0",
 					"name: p\nstages: [build]\nlimits:\n  human_reworks: 0\n",
 					"pipeline p: limits: invalid value: human_reworks 0, want at least 1",
+				},
+				{
+					"names spec_rejections above its cap of 10",
+					"name: p\nstages: [build]\nlimits:\n  spec_rejections: 11\n",
+					"pipeline p: limits: invalid value: spec_rejections 11, want at most 10",
+				},
+				{
+					"names human_reworks above its cap of 10",
+					"name: p\nstages: [build]\nlimits:\n  human_reworks: 11\n",
+					"pipeline p: limits: invalid value: human_reworks 11, want at most 10",
+				},
+				{
+					"names triage_retries above its cap of 3",
+					"name: p\nstages: [build]\nlimits:\n  triage_retries: 4\n",
+					"pipeline p: limits: invalid value: triage_retries 4, want at most 3",
+				},
+				{
+					"names max_rounds in limits above its cap of 10",
+					"name: p\nstages: [build]\nlimits:\n  max_rounds: 11\n",
+					"pipeline p: limits: invalid value: max_rounds 11, want at most 10",
+				},
+				{
+					"names the review stage with max_rounds above its cap of 10",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n      max_rounds: 11\n",
+					"stage review: invalid value: max_rounds 11, want at most 10",
 				},
 				{
 					"rejects limits that are not a map",
