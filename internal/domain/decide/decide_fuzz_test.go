@@ -11,8 +11,8 @@ import (
 var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped, domain.StageRejected}
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
-// has not answered in any fuzzed job, a failing gate and specgate, a specgate
-// rejection count, a person's approval, an intake NEEDS_INFO, messages (and
+// has not answered in any fuzzed job, a failing gate and specgate, a spec
+// asking for a length exception, a specgate rejection count, a person's approval, an intake NEEDS_INFO, messages (and
 // so answers) and direction marks from every kind of author, stop requests with and without a
 // name, a completed merge and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
@@ -20,7 +20,7 @@ func fuzzEvents() []domain.Event {
 	for _, st := range happyPath() {
 		evs = append(evs, st.ev)
 	}
-	evs = append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)},
+	evs = append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)}, exceptionAsked(1),
 		domain.SpecRejected{Job: jobID, Rejections: 1, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
@@ -36,8 +36,9 @@ func fuzzEvents() []domain.Event {
 // Decide never changes the job it receives and that no round goes past the
 // review stage's max_rounds, that a message not from an allowed person
 // changes nothing and is not an error, that a job a decision moves records an
-// asker exactly when it lands in needs-info, and that a missing or nil event
-// is an error, never a panic.
+// asker exactly when it lands in needs-info, that only a job in needs-human
+// waits on a length exception, and that a missing or nil event is an error,
+// never a panic.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(i), uint8(0), uint8(1))
@@ -49,9 +50,10 @@ func FuzzDecide(f *testing.F) {
 		job.Round = 1 + int(round)%3
 		job.Passed = append([]string(nil), reviewers[:int(done)%len(reviewers)]...)
 		job.InfoFrom = fuzzAsker(job.Stage, done)
+		job.SpecException = job.Stage == domain.StageNeedsHuman && done%2 == 1
 		before := newJob()
 		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
-		before.InfoFrom = job.InfoFrom
+		before.InfoFrom, before.SpecException = job.InfoFrom, job.SpecException
 		evs := fuzzEvents()
 		ev := evs[int(event)%len(evs)]
 
@@ -79,6 +81,9 @@ func FuzzDecide(f *testing.F) {
 		}
 		if len(first) > 0 && (after.Stage == domain.StageNeedsInfo) != (after.InfoFrom != "") {
 			t.Fatalf("stage %q with asker %q after %s", after.Stage, after.InfoFrom, ev.EventName())
+		}
+		if after.SpecException && after.Stage != domain.StageNeedsHuman {
+			t.Fatalf("stage %q waiting on a length exception after %s", after.Stage, ev.EventName())
 		}
 	})
 }
