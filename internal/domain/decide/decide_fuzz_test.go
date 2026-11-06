@@ -17,7 +17,8 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // has not answered in any fuzzed job, a failing gate and specgate, a spec
 // asking for a length exception, a specgate rejection count, a person's approval, an intake NEEDS_INFO and REJECT, a builder BLOCKED, messages (and
 // so answers) and direction marks from every kind of author, with and without a name, stop requests with and without a
-// name, a completed merge and every missing or nil event of nilEvents.
+// name, overrides from every kind of author and without a name or a reason,
+// a completed merge and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
@@ -30,7 +31,10 @@ func fuzzEvents() []domain.Event {
 		direction(domain.AuthorPerson, true, 1), direction(domain.AuthorPerson, false, 1), direction(domain.AuthorBot, true, 1),
 		signed(message(domain.AuthorPerson, true, 1), ""), signed(message(domain.AuthorPerson, false, 1), " "),
 		signed(direction(domain.AuthorPerson, true, 1), " \t"), signed(direction(domain.AuthorBot, true, 1), ""),
-		stop("pablogore", 1), stop("", 1), merged(1), needsInfo(), blockedBuild("cannot reach the API", 1), rejectIntake("duplicate of #12", 1))
+		stop("pablogore", 1), stop("", 1), merged(1), needsInfo(), blockedBuild("cannot reach the API", 1), rejectIntake("duplicate of #12", 1),
+		override(domain.AuthorPerson, true, 1), override(domain.AuthorPerson, false, 1), override(domain.AuthorBot, true, 1), override(domain.AuthorCI, true, 1),
+		domain.OverrideRequested{Job: jobID, By: " ", AuthorKind: domain.AuthorPerson, Allowed: true, Reason: overrideReason, At: at(1)},
+		domain.OverrideRequested{Job: jobID, By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Reason: "", At: at(1)})
 	for _, r := range nilEvents() {
 		evs = append(evs, r.ev)
 	}
@@ -46,8 +50,10 @@ func fuzzEvents() []domain.Event {
 // waits on a length exception, that every needs-human it emits carries one
 // of HumanCauses with each mark set exactly when its cause is, that a job out
 // of needs-human keeps no cause, that a person's OK requests the merge only
-// after an approver ESCALATE, and that a missing or nil event is an error,
-// never a panic.
+// after an approver ESCALATE, that an override not from an allowed person
+// changes nothing and is not an error, that one requests the merge only after
+// CHANGES and always with its history entry first, and that a missing or nil
+// event is an error, never a panic.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(i), uint8(0), uint8(1))
@@ -110,6 +116,15 @@ func FuzzDecide(f *testing.F) {
 			return merge
 		}) {
 			t.Fatalf("OK with cause %q requested the merge", job.Cause)
+		}
+		if o, ok := ev.(domain.OverrideRequested); ok && (!o.Allowed || o.AuthorKind != domain.AuthorPerson) && (err1 != nil || len(first) > 0) {
+			t.Fatalf("override from %s (allowed %v) gave %v, %v", o.AuthorKind, o.Allowed, first, err1)
+		}
+		if o, ok := ev.(domain.OverrideRequested); ok && slices.ContainsFunc(first, func(out domain.Event) bool {
+			_, merge := out.(domain.MergeRequested)
+			return merge
+		}) && (job.Cause != domain.CauseChanges || first[0] != domain.MergeOverridden{Job: jobID, By: o.By, Reason: o.Reason, At: o.At}) {
+			t.Fatalf("override with cause %q gave %v", job.Cause, first)
 		}
 		if after.Cause != "" && after.Stage != domain.StageNeedsHuman {
 			t.Fatalf("stage %q keeps cause %q after %s", after.Stage, after.Cause, ev.EventName())

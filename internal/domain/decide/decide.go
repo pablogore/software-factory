@@ -36,6 +36,13 @@ var ErrStopped = errors.New("job stopped")
 // returns no events with it, so the job stays in needs-human.
 var ErrOKRefused = errors.New("OK refused")
 
+// ErrOverrideRefused means a person's override in needs-human does not fit
+// the job's cause: only work stopped by CHANGES in the last round may be
+// merged over review, since every other cause either never passed gate and
+// review or has its own way out through an OK. The error names the cause. Decide
+// returns no events with it, so the job stays in needs-human.
+var ErrOverrideRefused = errors.New("override refused")
+
 // Decide returns the events that follow ev for job in pipeline p. It never
 // reads a clock: every event it returns carries the time of ev.
 func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event, error) {
@@ -45,8 +52,15 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	if ev.JobID() != job.ID {
 		return nil, fmt.Errorf("%w: %s for job %q decided for job %q", ErrOtherJob, ev.EventName(), ev.JobID(), job.ID)
 	}
-	if m, ok := ev.(domain.MessageReceived); ok && ignored(m) {
-		return nil, nil
+	switch e := ev.(type) {
+	case domain.MessageReceived:
+		if ignored(e.Allowed, e.AuthorKind) {
+			return nil, nil
+		}
+	case domain.OverrideRequested:
+		if ignored(e.Allowed, e.AuthorKind) {
+			return nil, nil
+		}
 	}
 	if job.Stage == domain.StageStopped {
 		return nil, fmt.Errorf("%w: %s", ErrStopped, ev.EventName())
@@ -76,6 +90,17 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		}
 		if job.Stage == domain.StageNeedsHuman {
 			return approved(job, e, p)
+		}
+	case domain.OverrideRequested:
+		// Checked after the stopped and rejected refusals, as for messages.
+		if blank(e.By) {
+			return nil, fmt.Errorf("decide: override without who asked: %w", domain.ErrMissingField)
+		}
+		if blank(e.Reason) {
+			return nil, fmt.Errorf("decide: override without a reason: %w", domain.ErrMissingField)
+		}
+		if job.Stage == domain.StageNeedsHuman {
+			return overridden(job, e)
 		}
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
@@ -192,11 +217,16 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 	return nil, fmt.Errorf("%w: %s result from %q in stage %q", ErrUnsupported, stage.Kind, e.Role, job.Stage)
 }
 
-// ignored reports whether Decide drops a message without error: the event
-// source did not mark it as coming from an allowed person, so bots, CI and
-// strangers change nothing, in every stage.
-func ignored(e domain.MessageReceived) bool {
-	return !e.Allowed || e.AuthorKind != domain.AuthorPerson
+// ignored reports whether Decide drops a message or an override without
+// error: the event source did not mark it as coming from an allowed person,
+// so bots, CI and strangers change nothing, in every stage.
+func ignored(allowed bool, kind domain.AuthorKind) bool {
+	return !allowed || kind != domain.AuthorPerson
+}
+
+// blank reports whether a required text field is empty or only spaces.
+func blank(s string) bool {
+	return strings.TrimSpace(s) == ""
 }
 
 // approved decides a person's OK in needs-human from the job's recorded
@@ -221,6 +251,23 @@ func approved(job domain.Job, e domain.HumanApproved, p domain.Pipeline) ([]doma
 		return afterGate(job, e, domain.StageNeedsHuman, domain.KindSpec, e.At, p)
 	}
 	return nil, fmt.Errorf("%w: cause %q", ErrOKRefused, job.Cause)
+}
+
+// overridden decides a person's override in needs-human from the job's
+// recorded cause, never from Reason or the override's own reason: only
+// CHANGES in the last round merges, recording who and why first. A missing
+// or unknown cause fails closed, and every other cause is refused.
+func overridden(job domain.Job, e domain.OverrideRequested) ([]domain.Event, error) {
+	if err := job.Cause.Validate(); err != nil {
+		return nil, fmt.Errorf("decide: override in needs-human: %w", err)
+	}
+	if job.Cause != domain.CauseChanges {
+		return nil, fmt.Errorf("%w: cause %q", ErrOverrideRefused, job.Cause)
+	}
+	return []domain.Event{
+		domain.MergeOverridden{Job: job.ID, By: e.By, Reason: e.Reason, At: e.At},
+		domain.MergeRequested{Job: job.ID, At: e.At},
+	}, nil
 }
 
 // decideMessage handles an allowed person's message. Marked as a direction on

@@ -151,6 +151,7 @@ func nilEvents() []eventRow {
 		{"a nil message", (*domain.MessageReceived)(nil)},
 		{"a nil stop request", (*domain.StopRequested)(nil)},
 		{"a nil approval", (*domain.HumanApproved)(nil)},
+		{"a nil override", (*domain.OverrideRequested)(nil)},
 		{"a nil merge completed", (*domain.MergeCompleted)(nil)},
 		{"a nil gate OK", (*domain.GatePassed)(nil)},
 		{"a result event with a nil result", result("intake", 1, (*domain.IntakeResult)(nil))},

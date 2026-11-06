@@ -131,6 +131,9 @@ func TestNeedsHumanCause(t *testing.T) {
 				if okMoves(r.cause) {
 					exits = append(exits, exitRow{"an OK", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}})
 				}
+				if r.cause == domain.CauseChanges {
+					exits = append(exits, exitRow{"an override", override(domain.AuthorPerson, true, 2)})
+				}
 				s.When("the job is there because "+r.name, func(s *specs.Spec) {
 					specs.Table(s, exits, func(x exitRow) string { return x.name + " clears the cause, the reason and both marks" }, func(ctx *specs.Context, x exitRow) {
 						job := stoppedFor(ctx, r)
