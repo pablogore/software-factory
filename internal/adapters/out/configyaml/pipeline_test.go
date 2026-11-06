@@ -13,6 +13,9 @@ import (
 
 var reviewers = []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "reviewer-code", "security-deep"}
 
+// shortFlow is the smallest stage list that loads: build, review, one approve.
+const shortFlow = "name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n  - approve\n"
+
 // loadedRoles loads the role files the default pipeline lists, so pipelines
 // are checked against roles as an operator declares them.
 func loadedRoles(ctx *specs.Context) []domain.Role {
@@ -57,9 +60,9 @@ func TestLoadPipeline(t *testing.T) {
 		})
 
 		s.It("loads a limits block", func(ctx *specs.Context) {
-			data := "name: p\nstages: [build]\nlimits:\n  spec_rejections: 1\n  human_reworks: 2\n  triage_retries: 1\n  max_rounds: 4\n"
+			data := shortFlow + "limits:\n  spec_rejections: 1\n  human_reworks: 2\n  triage_retries: 1\n  max_rounds: 4\n"
 
-			p, err := configyaml.LoadPipeline([]byte(data), nil)
+			p, err := configyaml.LoadPipeline([]byte(data), loadedRoles(ctx))
 
 			ctx.Expect(err).To(specs.BeNil())
 			one, two, four := 1, 2, 4
@@ -68,9 +71,9 @@ func TestLoadPipeline(t *testing.T) {
 		})
 
 		s.It("loads every limit at its cap", func(ctx *specs.Context) {
-			data := "name: p\nstages: [build]\nlimits:\n  spec_rejections: 10\n  human_reworks: 10\n  triage_retries: 3\n  max_rounds: 10\n"
+			data := shortFlow + "limits:\n  spec_rejections: 10\n  human_reworks: 10\n  triage_retries: 3\n  max_rounds: 10\n"
 
-			p, err := configyaml.LoadPipeline([]byte(data), nil)
+			p, err := configyaml.LoadPipeline([]byte(data), loadedRoles(ctx))
 
 			ctx.Expect(err).To(specs.BeNil())
 			ten, three := 10, 3
@@ -102,15 +105,25 @@ func TestLoadPipeline(t *testing.T) {
 			})
 		})
 
+		s.It("loads a task stage after the approve", func(ctx *specs.Context) {
+			scribe, err := configyaml.LoadRole([]byte("name: scribe\nkind: task\nprompt: roles/scribe.md\nmode: blocking\n"))
+			ctx.Expect(err).To(specs.BeNil())
+
+			p, err := configyaml.LoadPipeline([]byte(shortFlow+"  - task:\n      parallel: [scribe]\n"), append(loadedRoles(ctx), scribe))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.Stages[3]).ToEqual(domain.Stage{Name: "task", Kind: domain.KindTask, Roles: []string{"scribe"}})
+		})
+
 		s.It("loads human_reworks unlimited as no limit", func(ctx *specs.Context) {
-			p, err := configyaml.LoadPipeline([]byte("name: p\nstages: [build]\nlimits:\n  human_reworks: unlimited\n"), nil)
+			p, err := configyaml.LoadPipeline([]byte(shortFlow+"limits:\n  human_reworks: unlimited\n"), loadedRoles(ctx))
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(p.Limits).ToEqual(domain.Limits{})
 		})
 
 		s.It("takes 3 spec rejections with an empty limits block", func(ctx *specs.Context) {
-			p, err := configyaml.LoadPipeline([]byte("name: p\nstages: [build]\nlimits:\n"), nil)
+			p, err := configyaml.LoadPipeline([]byte(shortFlow+"limits:\n"), loadedRoles(ctx))
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(p.SpecRejections()).ToEqual(3)
@@ -260,7 +273,7 @@ func TestLoadPipeline(t *testing.T) {
 				},
 				{
 					"names a task stage that lists no roles, a kind with no default",
-					"name: p\nstages: [intake, build, task]\n",
+					shortFlow + "  - task\n",
 					"stage task: missing field: kind task lists no roles and has no default role",
 				},
 				{
@@ -272,6 +285,27 @@ func TestLoadPipeline(t *testing.T) {
 					"names an approve stage that comes before review",
 					"name: p\nstages:\n  - build\n  - approve\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n",
 					"stage approve: invalid value: approve stage has no review stage before it",
+				},
+				{
+					"names a pipeline with no approve stage",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n",
+					"pipeline p: missing field: approve stage",
+				},
+				{
+					// A YAML stage's kind is its name, so a second approve is first a repeated name.
+					"names a second approve stage",
+					shortFlow + "  - approve\n",
+					"stage approve: invalid value: stage name is repeated",
+				},
+				{
+					"names a review stage before the build",
+					"name: p\nstages:\n  - intake\n  - review:\n      parallel: [reviewer-code]\n      on_changes: intake\n  - build\n  - approve\n",
+					"stage review: invalid value: review stage comes before the build stage",
+				},
+				{
+					"names a spec stage after the approve",
+					shortFlow + "  - spec\n",
+					"stage spec: invalid value: only task stages may come after the approve stage",
 				},
 				{
 					"names a bare stage called merge",
