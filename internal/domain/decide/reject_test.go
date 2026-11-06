@@ -29,9 +29,15 @@ type rejectRow struct {
 	want   string
 }
 
+type rejectInitiativeRow struct {
+	name string
+	in   func() domain.Initiative
+	want string
+}
+
 func TestReject(t *testing.T) {
 	specs.Describe(t, "Decide on an intake REJECT", func(s *specs.Spec) {
-		s.When("intake rejects the ticket", func(s *specs.Spec) {
+		s.When("intake rejects a job with no initiative, asking for no replan", func(s *specs.Spec) {
 			rows := []rejectRow{
 				{"ends rejected with intake's reason", "duplicate of #12", "duplicate of #12"},
 				{"trims the whitespace around intake's reason", "  out of scope for this repo \n", "out of scope for this repo"},
@@ -55,6 +61,61 @@ func TestReject(t *testing.T) {
 
 			s.It("still accepts an intake result written before the reason existed", func(ctx *specs.Context) {
 				ctx.Expect(domain.IntakeResult{Decision: domain.IntakeReject}.Validate()).To(specs.BeNil())
+			})
+		})
+
+		s.When("intake rejects a slice job of an initiative", func(s *specs.Spec) {
+			s.It("ends the job rejected with intake's reason and asks its initiative for a replan", func(ctx *specs.Context) {
+				job := sliceJob()
+				job.Stage = "intake"
+
+				evs, err := decide.Decide(job, rejectIntake("duplicate of #12", 1), defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{
+					domain.JobRejected{Job: jobID, Reason: "duplicate of #12", At: at(1)},
+					domain.ReplanRequested{Job: jobID, Initiative: initiativeID, At: at(1)},
+				})
+				after := decide.Apply(job, evs)
+				ctx.Expect(after.Stage).ToEqual(domain.StageRejected)
+				ctx.Expect(after.Reason).ToEqual("duplicate of #12")
+			})
+
+			running := func() domain.Initiative { return threeSlices(domain.CheckpointEverySlice) }
+			rows := []rejectInitiativeRow{
+				{"moves the initiative running the job to replan", running, domain.InitiativeReplan},
+				{"leaves an initiative running another job as it is", func() domain.Initiative {
+					in := running()
+					in.Job = "other-job"
+					return in
+				}, domain.InitiativeActive},
+				{"leaves an initiative not yet running a job as it is", func() domain.Initiative {
+					in := running()
+					in.Job = ""
+					return in
+				}, domain.InitiativeActive},
+				{"leaves an initiative at a checkpoint as it is", func() domain.Initiative {
+					in := running()
+					in.Stage = domain.InitiativeCheckpoint
+					return in
+				}, domain.InitiativeCheckpoint},
+				{"leaves another initiative as it is", func() domain.Initiative {
+					in := running()
+					in.ID = "018-other"
+					return in
+				}, domain.InitiativeActive},
+			}
+			specs.Table(s, rows, func(r rejectInitiativeRow) string { return r.name }, func(ctx *specs.Context, r rejectInitiativeRow) {
+				job := sliceJob()
+				job.Stage = "intake"
+				in := r.in()
+
+				evs, err := decide.Decide(job, rejectIntake("duplicate of #12", 1), defaultPipeline())
+				ctx.Expect(err).To(specs.BeNil())
+
+				after := decide.ApplyInitiative(in, evs)
+				ctx.Expect(after.Stage).ToEqual(r.want)
+				ctx.Expect(after.Job).ToEqual(in.Job)
 			})
 		})
 

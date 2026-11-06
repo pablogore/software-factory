@@ -51,8 +51,9 @@ const (
 	ReplanNeedsHuman ReplanStatus = "NEEDS-HUMAN"
 )
 
-// ReplanRequested records that Job, a slice of Initiative, merged and the
-// initiative must be replanned before anything else starts.
+// ReplanRequested records that Job, a slice of Initiative, ended (merged,
+// dropped by a direction or rejected by intake) and the initiative must be
+// replanned before anything else starts.
 type ReplanRequested struct {
 	Job        JobID        `json:"job"`
 	Initiative InitiativeID `json:"initiative"`
