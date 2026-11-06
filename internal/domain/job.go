@@ -32,7 +32,7 @@ type Job struct {
 	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer
 	SpecException  bool           `json:"spec_exception,omitempty"`  // in needs-human, waiting on a spec's length exception
 	SpecEscalated  bool           `json:"spec_escalated,omitempty"`  // in needs-human, stopped by specgate's last rejection
-	Reason         string         `json:"reason,omitempty"`          // in needs-human, why the job is there
+	Reason         string         `json:"reason,omitempty"`          // in needs-human, why the job is there; rejected by intake, intake's reason
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
 	Reviewers      []string       `json:"reviewers,omitempty"`       // review roles that run in this round; empty runs every role of the stage

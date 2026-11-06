@@ -194,6 +194,21 @@ func (NeedsInfo) EventName() string { return "NeedsInfo" }
 // JobID implements Event.
 func (e NeedsInfo) JobID() JobID { return e.Job }
 
+// JobRejected records that intake discarded the ticket: the job ends
+// rejected, final, with Reason. Reason is agent-written text, data only:
+// adapters show it quoted and escaped, never as markup or commands.
+type JobRejected struct {
+	Job    JobID     `json:"job"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (JobRejected) EventName() string { return "JobRejected" }
+
+// JobID implements Event.
+func (e JobRejected) JobID() JobID { return e.Job }
+
 // MergeRequested records that the job finished its pipeline and asks to merge.
 type MergeRequested struct {
 	Job JobID     `json:"job"`
