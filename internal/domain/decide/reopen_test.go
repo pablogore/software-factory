@@ -160,7 +160,7 @@ func nilEvents() []eventRow {
 func TestNilEvent(t *testing.T) {
 	specs.Describe(t, "Decide on a missing event", func(s *specs.Spec) {
 		stages := []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve",
-			domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped}
+			domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped, domain.StageRejected}
 		type nilRow struct {
 			name  string
 			stage string

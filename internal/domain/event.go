@@ -219,8 +219,10 @@ const (
 )
 
 // MessageReceived records a message on one of the job's threads. The event
-// source decides Allowed (the provider's allowlist, 03-integraciones.md) and
-// AuthorKind; decide.Decide trusts both and only acts on an allowed person.
+// source decides Allowed (the provider's allowlist, 03-integraciones.md),
+// AuthorKind and Direction, a change of course for the job's initiative;
+// decide.Decide trusts all three and only acts on an allowed person. The text
+// alone never makes a message a direction.
 type MessageReceived struct {
 	Job        JobID      `json:"job"`
 	Provider   string     `json:"provider"`
@@ -228,6 +230,7 @@ type MessageReceived struct {
 	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
 	Allowed    bool       `json:"allowed"`
+	Direction  bool       `json:"direction"`
 	Text       string     `json:"text"`
 	At         time.Time  `json:"at"`
 }

@@ -8,12 +8,12 @@ import (
 	"github.com/pablogore/software-factory/internal/domain/decide"
 )
 
-var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped}
+var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped, domain.StageRejected}
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
 // has not answered in any fuzzed job, a failing gate and specgate, a specgate
 // rejection count, a person's approval, an intake NEEDS_INFO, messages (and
-// so answers) from every kind of author, stop requests with and without a
+// so answers) and direction marks from every kind of author, stop requests with and without a
 // name, a completed merge and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
@@ -24,6 +24,7 @@ func fuzzEvents() []domain.Event {
 		domain.SpecRejected{Job: jobID, Rejections: 1, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
+		direction(domain.AuthorPerson, true, 1), direction(domain.AuthorPerson, false, 1), direction(domain.AuthorBot, true, 1),
 		stop("pablogore", 1), stop("", 1), merged(1), needsInfo())
 	for _, r := range nilEvents() {
 		evs = append(evs, r.ev)
@@ -112,6 +113,36 @@ func FuzzStopped(f *testing.F) {
 		}
 		if !reflect.DeepEqual(job, before) || !reflect.DeepEqual(decide.Apply(job, out), before) {
 			t.Fatalf("stopped job changed on %s: %+v, was %+v", ev.EventName(), job, before)
+		}
+	})
+}
+
+// FuzzDropped checks that a slice a direction dropped never moves again:
+// whatever the event, including another direction, an approval, a merge or a
+// message with any author, text or mark, Decide returns no events and the job
+// stays rejected.
+func FuzzDropped(f *testing.F) {
+	for i := range fuzzEvents() {
+		f.Add(uint8(i), uint8(1), "pablogore", "[direction] build S2", true, true)
+	}
+	f.Add(uint8(0), uint8(2), "", "", false, false)
+	f.Fuzz(func(t *testing.T, event, round uint8, by, text string, allowed, marked bool) {
+		job := sliceJob()
+		job.Stage, job.Round = domain.StageRejected, 1+int(round)%3
+		before := job
+		kinds := []domain.AuthorKind{domain.AuthorPerson, domain.AuthorBot, domain.AuthorCI, ""}
+		m := domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: by,
+			AuthorKind: kinds[int(event)%len(kinds)], Allowed: allowed, Direction: marked, Text: text, At: at(1)}
+		evs := append(fuzzEvents(), stop(by, 1), domain.HumanApproved{Job: jobID, By: by, At: at(1)}, m)
+		ev := evs[int(event)%len(evs)]
+
+		out, _ := decide.Decide(job, ev, defaultPipeline())
+
+		if len(out) > 0 {
+			t.Fatalf("dropped slice moved on %s: %v", ev.EventName(), out)
+		}
+		if !reflect.DeepEqual(job, before) || !reflect.DeepEqual(decide.Apply(job, out), before) {
+			t.Fatalf("dropped slice changed on %s: %+v, was %+v", ev.EventName(), job, before)
 		}
 	})
 }
