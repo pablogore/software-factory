@@ -169,6 +169,8 @@ func TestOverride(t *testing.T) {
 					rows = append(rows, overrideEventRow{"ignores one on " + j.name + " from " + sd.name, j.job, ov, nil})
 					ov.By, ov.Reason = " ", ""
 					rows = append(rows, overrideEventRow{"ignores one on " + j.name + " from " + sd.name + " with no name or reason", j.job, ov, nil})
+					ov.By, ov.Reason = "\u200b", "..."
+					rows = append(rows, overrideEventRow{"ignores one on " + j.name + " from " + sd.name + " with an invisible name and a punctuation reason", j.job, ov, nil})
 				}
 			}
 			specs.Table(s, rows, func(r overrideEventRow) string { return r.name }, func(ctx *specs.Context, r overrideEventRow) {
@@ -196,8 +198,15 @@ func TestOverride(t *testing.T) {
 			person := override(domain.AuthorPerson, true, 2)
 			noName, spaces, noReason, blankReason := person, person, person, person
 			noName.By, spaces.By, noReason.Reason, blankReason.Reason = "", " \t", "", "  "
+			invisible, controls, dots, invisibleReason, dotsReason := person, person, person, person, person
+			invisible.By, controls.By, dots.By = "\u200b\u2060\ufeff", "\x00\x1b", "-.-"
+			invisibleReason.Reason, dotsReason.Reason = "\u200c \u200d", "...!?"
+			braille, brailleReason := person, person
+			braille.By, brailleReason.Reason = "\u2800", "\u2800"
 			other := person
 			other.Job = "999-other"
+			otherInvisible := invisible
+			otherInvisible.Job = "999-other"
 			otherBot := override(domain.AuthorBot, true, 2)
 			otherBot.Job = "999-other"
 			rows := []overrideEventRow{
@@ -205,6 +214,18 @@ func TestOverride(t *testing.T) {
 				{"refuses a name of only spaces", changesJob, spaces, domain.ErrMissingField},
 				{"refuses an empty reason", changesJob, noReason, domain.ErrMissingField},
 				{"refuses a reason of only spaces", changesJob, blankReason, domain.ErrMissingField},
+				{"refuses a name of only zero-width characters", changesJob, invisible, domain.ErrMissingField},
+				{"refuses a name of only control characters", changesJob, controls, domain.ErrMissingField},
+				{"refuses a name of only punctuation", changesJob, dots, domain.ErrMissingField},
+				{"refuses a reason of only zero-width characters", changesJob, invisibleReason, domain.ErrMissingField},
+				{"refuses a reason of only punctuation", changesJob, dotsReason, domain.ErrMissingField},
+				{"refuses a name of only a Braille blank", changesJob, braille, domain.ErrMissingField},
+				{"refuses a reason of only a Braille blank", changesJob, brailleReason, domain.ErrMissingField},
+				{"refuses an invisible name before the cause", blocked, invisible, domain.ErrMissingField},
+				{"refuses a punctuation reason before the cause", blocked, dotsReason, domain.ErrMissingField},
+				{"refuses an invisible name on a stopped job as it refuses any event", stoppedJob, invisible, decide.ErrStopped},
+				{"refuses a punctuation reason on a rejected job as it refuses any event", func() domain.Job { return unmergedSlice(domain.StageRejected) }, dotsReason, decide.ErrIllegalTransition},
+				{"refuses one with an invisible name for another job", changesJob, otherInvisible, decide.ErrOtherJob},
 				{"refuses a missing name before the cause", blocked, noName, domain.ErrMissingField},
 				{"refuses a missing reason before the cause", blocked, noReason, domain.ErrMissingField},
 				{"refuses a missing name before the stage", func() domain.Job { return unmergedSlice("review") }, noName, domain.ErrMissingField},

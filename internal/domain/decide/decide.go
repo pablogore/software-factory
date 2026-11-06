@@ -114,10 +114,10 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		}
 	case domain.OverrideRequested:
 		// Checked after the stopped and rejected refusals, as for messages.
-		if blank(e.By) {
+		if domain.Blank(e.By) {
 			return nil, fmt.Errorf("decide: override without who asked: %w", domain.ErrMissingField)
 		}
-		if blank(e.Reason) {
+		if domain.Blank(e.Reason) {
 			return nil, fmt.Errorf("decide: override without a reason: %w", domain.ErrMissingField)
 		}
 		if err := fresh(job, ev, e.WaitSeq); err != nil {
@@ -127,7 +127,7 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 			return overridden(job, e)
 		}
 	case domain.LimitOverrideRequested:
-		if blank(e.By) {
+		if domain.Blank(e.By) {
 			return nil, fmt.Errorf("decide: limit override without who asked: %w", domain.ErrMissingField)
 		}
 		if err := fresh(job, ev, e.WaitSeq); err != nil {
@@ -304,11 +304,6 @@ func fresh(job domain.Job, ev domain.Event, seq int) error {
 // unmerged slice job.
 func drops(job domain.Job, e domain.MessageReceived) bool {
 	return e.Direction && job.Initiative != "" && job.Stage != domain.StageMerge && job.Stage != domain.StageDone
-}
-
-// blank reports whether a required text field is empty or only spaces.
-func blank(s string) bool {
-	return strings.TrimSpace(s) == ""
 }
 
 // approved decides a person's OK in needs-human from the job's recorded
