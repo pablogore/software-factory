@@ -382,7 +382,7 @@ func TestDecide(t *testing.T) {
 		s.When("a job waits in needs-human", func(s *specs.Spec) {
 			needsHuman := func() domain.Job {
 				job := newJob()
-				job.Stage, job.Round, job.WaitSeq = domain.StageNeedsHuman, 3, 1
+				job.Stage, job.Round, job.Cause, job.WaitSeq = domain.StageNeedsHuman, 3, domain.CauseChanges, 1
 				return job
 			}
 

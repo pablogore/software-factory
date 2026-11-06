@@ -30,8 +30,6 @@ type Job struct {
 	Round          int            `json:"round"`                     // review round, from 1
 	SpecRejections int            `json:"spec_rejections,omitempty"` // times specgate rejected the spec
 	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer
-	SpecException  bool           `json:"spec_exception,omitempty"`  // in needs-human, waiting on a spec's length exception
-	SpecEscalated  bool           `json:"spec_escalated,omitempty"`  // in needs-human, stopped by specgate's last rejection
 	Reason         string         `json:"reason,omitempty"`          // in needs-human, why the job is there; rejected by intake, intake's reason
 	Cause          HumanCause     `json:"cause,omitempty"`           // in needs-human, which of HumanCauses put the job there
 	WaitSeq        int            `json:"wait_seq"`                  // entries into needs-human, needs-info or done so far; a person's action names the one it answers

@@ -26,6 +26,9 @@ func unmergedSlice(stage string) domain.Job {
 	if stage == domain.StageNeedsInfo {
 		job.InfoFrom = "spec"
 	}
+	if stage == domain.StageNeedsHuman {
+		job.Cause = domain.CauseBlocked
+	}
 	return job
 }
 
@@ -226,7 +229,7 @@ func TestDirection(t *testing.T) {
 
 			s.It("treats it as ordinary feedback on a job outside any initiative", func(ctx *specs.Context) {
 				job := newJob()
-				job.Stage, job.WaitSeq = domain.StageNeedsHuman, 1
+				job.Stage, job.Cause, job.WaitSeq = domain.StageNeedsHuman, domain.CauseBlocked, 1
 
 				evs, err := decide.Decide(job, direction(domain.AuthorPerson, true, 1), defaultPipeline())
 

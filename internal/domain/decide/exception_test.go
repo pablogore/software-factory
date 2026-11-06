@@ -14,14 +14,14 @@ func exceptionAsked(minute int) domain.SpecgateFailed {
 }
 
 func waitingException(minute int) domain.NeedsHuman {
-	return domain.NeedsHuman{Job: jobID, Reason: "spec asks for a length exception", Cause: domain.CauseSpecException, SpecException: true, At: at(minute)}
+	return domain.NeedsHuman{Job: jobID, Reason: "spec asks for a length exception", Cause: domain.CauseSpecException, At: at(minute)}
 }
 
 // waitingJob is a job whose spec, rejected once before, asks for a length
 // exception and waits for a person.
 func waitingJob() domain.Job {
 	job := atSpecgate(1)
-	job.Stage, job.SpecException, job.Cause, job.WaitSeq = domain.StageNeedsHuman, true, domain.CauseSpecException, 1
+	job.Stage, job.Cause, job.WaitSeq = domain.StageNeedsHuman, domain.CauseSpecException, 1
 	return job
 }
 
@@ -47,7 +47,7 @@ func TestDecideSpecException(t *testing.T) {
 				ctx.Expect(evs).ToEqual([]domain.Event{waitingException(1)})
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
-				ctx.Expect(after.SpecException).To(specs.BeTrue())
+				ctx.Expect(after.Cause).ToEqual(domain.CauseSpecException)
 				ctx.Expect(after.SpecRejections).ToEqual(r.rejected)
 				ctx.Expect(after.Round).ToEqual(job.Round)
 			})
@@ -63,7 +63,7 @@ func TestDecideSpecException(t *testing.T) {
 				ctx.Expect(evs).ToEqual([]domain.Event{entered("build", 2)})
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Stage).ToEqual("build")
-				ctx.Expect(after.SpecException).To(specs.BeFalse())
+				ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 				ctx.Expect(after.SpecRejections).ToEqual(1)
 				ctx.Expect(after.Round).ToEqual(job.Round)
 			})
@@ -80,7 +80,7 @@ func TestDecideSpecException(t *testing.T) {
 				})
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Stage).ToEqual("spec")
-				ctx.Expect(after.SpecException).To(specs.BeFalse())
+				ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 				ctx.Expect(after.SpecRejections).ToEqual(1)
 				ctx.Expect(after.Round).ToEqual(job.Round)
 			})
@@ -163,7 +163,7 @@ func TestDecideSpecException(t *testing.T) {
 			step(result("spec-writer", 4, domain.SpecResult{Title: "S5", Spec: "# S5"}))
 			step(exceptionAsked(5))
 			ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
-			ctx.Expect(job.SpecException).To(specs.BeTrue())
+			ctx.Expect(job.Cause).ToEqual(domain.CauseSpecException)
 
 			step(domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 2, At: at(6)})
 

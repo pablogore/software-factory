@@ -164,18 +164,13 @@ func (RoundStarted) EventName() string { return "RoundStarted" }
 func (e RoundStarted) JobID() JobID { return e.Job }
 
 // NeedsHuman records that the job stops until a person acts, and why: Cause
-// is one of HumanCauses, Reason the same cause in words for a person.
-// SpecException says it waits on a spec's length exception: a person's OK
-// lets the spec through and their feedback sends it back to spec.
-// SpecEscalated says specgate rejected the spec too often: a person's feedback
-// goes to a rewritten spec, whatever the rejection count says by then.
+// is one of HumanCauses, and what a person's OK or feedback does is decided
+// from it alone; Reason is the same cause in words for a person.
 type NeedsHuman struct {
-	Job           JobID      `json:"job"`
-	Reason        string     `json:"reason"`
-	Cause         HumanCause `json:"cause"`
-	SpecException bool       `json:"spec_exception,omitempty"`
-	SpecEscalated bool       `json:"spec_escalated,omitempty"`
-	At            time.Time  `json:"at"`
+	Job    JobID      `json:"job"`
+	Reason string     `json:"reason"`
+	Cause  HumanCause `json:"cause"`
+	At     time.Time  `json:"at"`
 }
 
 // EventName implements Event.

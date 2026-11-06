@@ -32,12 +32,11 @@ type foldRow struct {
 }
 
 type reasonRow struct {
-	name      string
-	job       domain.Job
-	ev        domain.Event
-	reason    string
-	escalated bool
-	exception bool
+	name   string
+	job    domain.Job
+	ev     domain.Event
+	reason string
+	cause  domain.HumanCause
 }
 
 type stateRow struct {
@@ -154,15 +153,15 @@ func TestSliceState(t *testing.T) {
 				return job
 			}
 			rows := []reasonRow{
-				{"records specgate's escalation and its reason", atSpecgate(2), specgateFailed(1), "spec rejected by specgate 3 times", true, false},
-				{"records a length exception and its reason", atSpecgate(2), exceptionAsked(1), "spec asks for a length exception", false, true},
+				{"records specgate's escalation and its reason", atSpecgate(2), specgateFailed(1), "spec rejected by specgate 3 times", domain.CauseSpecEscalated},
+				{"records a length exception and its reason", atSpecgate(2), exceptionAsked(1), "spec asks for a length exception", domain.CauseSpecException},
 				{"records CHANGES in the last round, not as specgate's escalation, even after three rejections", inStage("review", 3, 3), changes("reviewer-code", 1),
-					"CHANGES in the last round (3 of 3) from reviewer-code", false, false},
+					"CHANGES in the last round (3 of 3) from reviewer-code", domain.CauseChanges},
 				{"records a gate failing in the last round", inStage(domain.StageGate, 3, 3), domain.GateFailed{Job: jobID, At: at(1)},
-					"gate failed in the last round (3 of 3)", false, false},
+					"gate failed in the last round (3 of 3)", domain.CauseGateFailed},
 				{"records an approver escalation, not as specgate's escalation, even after three rejections", inStage("approve", 2, 3),
 					result("approver", 1, domain.ApproveResult{Decision: domain.ApproveEscalate, Reasons: []string{"needs a product decision"}}),
-					"approver escalated: needs a product decision", false, false},
+					"approver escalated: needs a product decision", domain.CauseEscalated},
 			}
 			specs.Table(s, rows, func(r reasonRow) string { return r.name }, func(ctx *specs.Context, r reasonRow) {
 				evs, err := decide.Decide(r.job, r.ev, defaultPipeline())
@@ -171,8 +170,7 @@ func TestSliceState(t *testing.T) {
 				after := decide.Apply(r.job, evs)
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
 				ctx.Expect(after.Reason).ToEqual(r.reason)
-				ctx.Expect(after.SpecEscalated).ToEqual(r.escalated)
-				ctx.Expect(after.SpecException).ToEqual(r.exception)
+				ctx.Expect(after.Cause).ToEqual(r.cause)
 			})
 
 			leaving := []step{
@@ -187,7 +185,7 @@ func TestSliceState(t *testing.T) {
 				ctx.Expect(err).To(specs.BeNil())
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Reason).ToEqual("")
-				ctx.Expect(after.SpecEscalated).To(specs.BeFalse())
+				ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 			})
 
 			s.It("keeps the reason when a person's OK is refused", func(ctx *specs.Context) {
@@ -202,7 +200,7 @@ func TestSliceState(t *testing.T) {
 			s.It("forgets a length exception if the job is ever asked a question", func(ctx *specs.Context) {
 				after := decide.Apply(waitingJob(), []domain.Event{domain.NeedsInfo{Job: jobID, From: "intake", At: at(2)}})
 
-				ctx.Expect(after.SpecException).To(specs.BeFalse())
+				ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 				ctx.Expect(after.Reason).ToEqual("")
 			})
 		})
@@ -231,7 +229,7 @@ func TestSliceState(t *testing.T) {
 						step(result("spec-writer", 2*k, domain.SpecResult{Title: "S6", Spec: "# S6"}))
 						step(specgateFailed(2*k + 1))
 					}
-					ctx.Expect(job.SpecEscalated).To(specs.BeTrue())
+					ctx.Expect(job.Cause).ToEqual(domain.CauseSpecEscalated)
 					// An OK cannot merge a job specgate stopped, so the merge
 					// happens outside Decide and is only folded in.
 					_, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(10)}, defaultPipeline())
@@ -292,7 +290,7 @@ func TestSliceState(t *testing.T) {
 					ctx.Expect(evs).ToEqual([]domain.Event{domain.JobStopped{Job: jobID, By: "pablogore", At: at(2)}})
 					after := decide.Apply(job, evs)
 					ctx.Expect(after.Stage).ToEqual(domain.StageStopped)
-					ctx.Expect(after.SpecException).To(specs.BeFalse())
+					ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 				}},
 				{"a stop without who asked is still refused", func(ctx *specs.Context) {
 					evs, err := decide.Decide(waitingJob(), stop("", 2), defaultPipeline())
@@ -309,7 +307,7 @@ func TestSliceState(t *testing.T) {
 					ctx.Expect(evs).ToEqual(droppedBy(2))
 					after := decide.Apply(job, evs)
 					ctx.Expect(after.Stage).ToEqual(domain.StageRejected)
-					ctx.Expect(after.SpecException).To(specs.BeFalse())
+					ctx.Expect(after.Cause).ToEqual(domain.HumanCause(""))
 					ctx.Expect(after.Reason).ToEqual("")
 					in := decide.ApplyInitiative(threeSlices(domain.CheckpointEverySlice), evs)
 					ctx.Expect(in.Stage).ToEqual(domain.InitiativeReplan)

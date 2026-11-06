@@ -165,7 +165,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
-			job.SpecException, job.SpecEscalated, job.Reason, job.Cause = e.SpecException, e.SpecEscalated, e.Reason, e.Cause
+			job.Reason, job.Cause = e.Reason, e.Cause
 			job.WaitSeq++
 		case domain.MergeRequested:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", nil, nil, nil
@@ -188,7 +188,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 // leftNeedsHuman forgets why the job was in needs-human, so a later stop for
 // a person never inherits an old cause.
 func leftNeedsHuman(job domain.Job) domain.Job {
-	job.SpecException, job.SpecEscalated, job.Reason, job.Cause = false, false, "", ""
+	job.Reason, job.Cause = "", ""
 	return job
 }
 
@@ -280,7 +280,7 @@ func blank(s string) bool {
 }
 
 // approved decides a person's OK in needs-human from the job's recorded
-// cause, never from Reason or the marks: only an approver ESCALATE, which
+// cause, never from Reason: only an approver ESCALATE, which
 // comes after gate and review passed, merges. After CHANGES in the last round
 // the job goes back to build in the same round, and on a length exception
 // the spec passes specgate as it is. A missing or unknown cause fails closed.
@@ -322,29 +322,50 @@ func overridden(job domain.Job, e domain.OverrideRequested) ([]domain.Event, err
 
 // decideMessage handles an allowed person's message. Marked as a direction on
 // an unmerged slice, it drops the slice. In needs-info it is the
-// answer, so the job goes back to the stage that asked. In needs-human on a
-// length exception or marked as stopped by specgate's last rejection (not
-// read from the count, which can be stale) it is feedback for the spec, which
-// is rewritten with it. Otherwise in needs-human it is rework feedback, and in done it
-// reopens the merged job: either way the job goes back to the build stage in
-// the same round, with the text as input, so a reopened job past its last
-// round still needs a person after CHANGES.
+// answer, so the job goes back to the stage that asked. In needs-human it is
+// feedback routed on the recorded cause (see feedback). In done it reopens the
+// merged job: the job goes back to the build stage in the same round, with the
+// text as input, so a reopened job past its last round still needs a person
+// after CHANGES.
 func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
 	if drops(job, e) {
 		return dropped(job, e), nil
 	}
-	if job.Stage == domain.StageNeedsInfo {
+	switch job.Stage {
+	case domain.StageNeedsInfo:
 		return answered(job, e, p)
+	case domain.StageNeedsHuman:
+		return feedback(job, e, p)
+	case domain.StageDone:
+		return reworked(job, e, p)
 	}
-	if job.Stage != domain.StageNeedsHuman && job.Stage != domain.StageDone {
-		return nil, fmt.Errorf("%w: message from %q in stage %q", ErrUnsupported, e.Author, job.Stage)
+	return nil, fmt.Errorf("%w: message from %q in stage %q", ErrUnsupported, e.Author, job.Stage)
+}
+
+// feedback decides a person's feedback in needs-human from the job's recorded
+// cause, never from Reason or the text: after specgate's escalation or on a
+// length exception the spec is rewritten with it (not read from the rejection
+// count, which can be stale), and after every other cause the job goes back to
+// build with it. A missing or unknown cause fails closed, and the switch
+// refuses by default, so a future cause is never routed by accident.
+func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
+	if err := job.Cause.Validate(); err != nil {
+		return nil, fmt.Errorf("decide: feedback in needs-human: %w", err)
 	}
-	if job.Stage == domain.StageNeedsHuman && job.SpecException {
-		return respecified(job, e, p, false)
-	}
-	if job.Stage == domain.StageNeedsHuman && job.SpecEscalated {
+	switch job.Cause {
+	case domain.CauseSpecEscalated:
 		return respecified(job, e, p, true)
+	case domain.CauseSpecException:
+		return respecified(job, e, p, false)
+	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated:
+		return reworked(job, e, p)
 	}
+	return nil, fmt.Errorf("decide: feedback in needs-human, cause %q: %w", job.Cause, domain.ErrInvalidValue)
+}
+
+// reworked sends the job back to the build stage in the same round with the
+// person's text as input.
+func reworked(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
 	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
 	if i < 0 {
 		return nil, fmt.Errorf("decide: pipeline %q has no build stage", p.Name)
@@ -527,13 +548,13 @@ func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) 
 		return nil, illegal(job, e)
 	}
 	if e.Exception {
-		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "spec asks for a length exception", Cause: domain.CauseSpecException, SpecException: true, At: e.At}}, nil
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "spec asks for a length exception", Cause: domain.CauseSpecException, At: e.At}}, nil
 	}
 	n := job.SpecRejections + 1
 	evs := []domain.Event{domain.SpecRejected{Job: job.ID, Rejections: n, At: e.At}}
 	if n >= maxSpecRejections {
 		reason := fmt.Sprintf("spec rejected by specgate %d times", n)
-		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseSpecEscalated, SpecEscalated: true, At: e.At}), nil
+		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseSpecEscalated, At: e.At}), nil
 	}
 	return append(evs, domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At}), nil
 }
