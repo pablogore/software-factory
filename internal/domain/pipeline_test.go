@@ -43,6 +43,13 @@ func TestPipeline(t *testing.T) {
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
 
+		s.It("accepts every limit at its cap and a review at the max_rounds cap", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Limits = domain.Limits{SpecRejections: ptr(10), HumanReworks: ptr(10), TriageRetries: ptr(3), MaxRounds: ptr(10)}
+			p.Stages[2].MaxRounds = ptr(10)
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+		})
+
 		s.It("accepts a review that leaves out max_rounds", func(ctx *specs.Context) {
 			p := validPipeline()
 			p.Stages[2].MaxRounds = nil
@@ -116,6 +123,21 @@ func TestPipeline(t *testing.T) {
 				{"names max_rounds 0 in limits", func(p *domain.Pipeline) {
 					p.Limits.MaxRounds = ptr(0)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: max_rounds 0, want at least 1"},
+				{"names spec_rejections above its cap of 10", func(p *domain.Pipeline) {
+					p.Limits.SpecRejections = ptr(11)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: spec_rejections 11, want at most 10"},
+				{"names human_reworks above its cap of 10", func(p *domain.Pipeline) {
+					p.Limits.HumanReworks = ptr(11)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: human_reworks 11, want at most 10"},
+				{"names triage_retries above its cap of 3", func(p *domain.Pipeline) {
+					p.Limits.TriageRetries = ptr(4)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: triage_retries 4, want at most 3"},
+				{"names max_rounds in limits above its cap of 10", func(p *domain.Pipeline) {
+					p.Limits.MaxRounds = ptr(11)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: max_rounds 11, want at most 10"},
+				{"names a review with max_rounds above its cap of 10", func(p *domain.Pipeline) {
+					p.Stages[2].MaxRounds = ptr(11)
+				}, domain.ErrInvalidValue, "stage review: invalid value: max_rounds 11, want at most 10"},
 			}
 			specs.Table(s, rows, func(r pipelineRow) string {
 				return r.name
