@@ -2,6 +2,7 @@ package configyaml_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -78,6 +79,66 @@ func TestLoadRole(t *testing.T) {
 					"name: security-deep\nkind: review\nprompt: roles/security-deep.md\n",
 					domain.ErrInvalidValue,
 					`role security-deep: invalid value: mode ""`,
+				},
+				{
+					"names a role whose name has an uppercase letter",
+					"name: Builder\nkind: build\nprompt: roles/builder.md\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "Builder", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names a role whose name has an underscore",
+					"name: builder_x\nkind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "builder_x", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names a role whose quoted name ends in a space",
+					"name: \"builder \"\nkind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "builder ", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names a role whose name has a Cyrillic look-alike",
+					"name: b\u0443ilder\nkind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "b\u0443ilder", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names a role whose name starts with a hyphen",
+					"name: -builder\nkind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "-builder" starts or ends with a hyphen`,
+				},
+				{
+					"names a role whose name ends with a hyphen",
+					"name: builder-\nkind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "builder-" starts or ends with a hyphen`,
+				},
+				{
+					"rejects a role with no name",
+					"kind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					"invalid value: role name is empty",
+				},
+				{
+					"rejects a role with an empty name",
+					"name: \"\"\nkind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					"invalid value: role name is empty",
+				},
+				{
+					"names a role whose name is over 64 characters",
+					"name: " + strings.Repeat("b", 65) + "\nkind: build\nmode: blocking\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "` + strings.Repeat("b", 65) + `" is 65 characters, want at most 64`,
+				},
+				{
+					"names a badly formed name before a bad always_rerun",
+					"name: Builder\nkind: build\nmode: blocking\nalways_rerun: yes\n",
+					domain.ErrInvalidValue,
+					`invalid value: role name "Builder", want only lowercase letters, digits and hyphens`,
 				},
 				{
 					"names the role and the unknown kind",

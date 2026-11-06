@@ -71,14 +71,16 @@ func LoadRole(data []byte) (domain.Role, error) {
 			DiffLines:   c.DiffLines,
 		})
 	}
+	// Validated first so a badly formed name is the error, not a later one
+	// that prints it unquoted.
+	if err := r.Validate(); err != nil {
+		return domain.Role{}, err
+	}
 	rerun, err := alwaysRerun(&f.AlwaysRerun)
 	if err != nil {
 		return domain.Role{}, fmt.Errorf("role %s: %w", f.Name, err)
 	}
 	r.AlwaysRerun = rerun
-	if err := r.Validate(); err != nil {
-		return domain.Role{}, err
-	}
 	return r, nil
 }
 

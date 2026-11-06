@@ -152,6 +152,46 @@ func TestLoadPipeline(t *testing.T) {
 					`stage review: invalid value: role "reviewer-perf" is not loaded`,
 				},
 				{
+					"names the stage and the role listed twice",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code, reviewer-ux, reviewer-code]\n      on_changes: build\n  - approve\n",
+					`stage review: invalid value: role "reviewer-code" is listed twice`,
+				},
+				{
+					"names the stage and a role with an uppercase letter",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [Reviewer-code]\n      on_changes: build\n  - approve\n",
+					`stage review: invalid value: role name "Reviewer-code", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names the stage and a role with an underscore",
+					"name: p\nstages:\n  - build:\n      parallel: [builder_x]\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n  - approve\n",
+					`stage build: invalid value: role name "builder_x", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names the stage and a role that would repeat one but for a trailing space",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code, \"reviewer-code \"]\n      on_changes: build\n  - approve\n",
+					`stage review: invalid value: role name "reviewer-code ", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names the stage and a role with a Cyrillic look-alike",
+					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-cod\u0435]\n      on_changes: build\n  - approve\n",
+					`stage review: invalid value: role name "reviewer-cod\u0435", want only lowercase letters, digits and hyphens`,
+				},
+				{
+					"names the stage and a role starting with a hyphen",
+					"name: p\nstages:\n  - build:\n      parallel: [-builder]\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n  - approve\n",
+					`stage build: invalid value: role name "-builder" starts or ends with a hyphen`,
+				},
+				{
+					"names the stage and an empty role",
+					"name: p\nstages:\n  - build:\n      parallel: [\"\"]\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n  - approve\n",
+					"stage build: invalid value: role name is empty",
+				},
+				{
+					"names the stage and a role over 64 characters",
+					"name: p\nstages:\n  - build:\n      parallel: [" + strings.Repeat("b", 65) + "]\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n  - approve\n",
+					`stage build: invalid value: role name "` + strings.Repeat("b", 65) + `" is 65 characters, want at most 64`,
+				},
+				{
 					"rejects a stage that is neither a name nor a one-key map",
 					"name: p\nstages:\n  - build\n  - {review: {on_changes: build}, approve: {}}\n",
 					"pipeline p: stages[1]: invalid value: line 4: want a stage name or a one-key map",
