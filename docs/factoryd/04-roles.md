@@ -85,6 +85,10 @@ Las métricas por rol (costo, hallazgos, cuántos terminaron en cambios reales, 
 ## Validación (`factory config validate` / `plan`)
 - Pipeline es un DAG; hay exactamente un `build` por job; todo `review` tiene a dónde volver.
 - Los nombres de etapa son únicos.
+- **Orden:** el build va antes de cualquier review, toda review va antes del approve, hay exactamente un approve, y después del approve solo puede haber etapas de kind `task`. Una etapa de otro kind entre la review y el approve se acepta.
+- **Roles de cada etapa:** una etapa que no lista roles toma el rol por defecto de su kind; ninguna etapa queda sin rol. Cada rol listado tiene el kind de su etapa y aparece en una sola etapa (así un builder no puede aprobar su propio trabajo), y un rol repetido en la misma etapa es error.
+- **Nombres de rol:** minúsculas, dígitos y guiones; se comparan exactos. En `Decide`, el resultado de un rol que no es de la etapa en curso es una transición ilegal.
+- Conocido: un `~` o `null` dentro de `parallel` se descarta sin error al cargar.
 - Todo `review` lista al menos un rol (`parallel`); su `max_rounds`, si lo fija, es >= 1.
 - Los valores de `limits` que se fijan son >= 1, y una clave desconocida en `limits` es un error.
 - Topes: `max_rounds` (en `limits` o en una etapa de review), `spec_rejections` y `human_reworks` <= 10; `triage_retries` <= 3. `human_reworks: unlimited` sigue siendo válido. Un override por job puede llegar hasta 20 (5 para `triage_retries`) y queda registrado con quién lo pidió.
