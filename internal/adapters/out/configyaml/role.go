@@ -26,6 +26,9 @@ type roleFile struct {
 	Tools       []string   `yaml:"tools"`
 	Permissions string     `yaml:"permissions"`
 	Budget      budgetFile `yaml:"budget"`
+	// AlwaysRerun is a node, not a bool, so a value that isn't true or false
+	// fails with an error naming the role instead of a bare decode error.
+	AlwaysRerun yaml.Node `yaml:"always_rerun"`
 }
 
 type whenFile struct {
@@ -68,10 +71,28 @@ func LoadRole(data []byte) (domain.Role, error) {
 			DiffLines:   c.DiffLines,
 		})
 	}
+	rerun, err := alwaysRerun(&f.AlwaysRerun)
+	if err != nil {
+		return domain.Role{}, fmt.Errorf("role %s: %w", f.Name, err)
+	}
+	r.AlwaysRerun = rerun
 	if err := r.Validate(); err != nil {
 		return domain.Role{}, err
 	}
 	return r, nil
+}
+
+// alwaysRerun reads always_rerun: off when the key is absent, otherwise it
+// must be the YAML boolean true or false.
+func alwaysRerun(n *yaml.Node) (bool, error) {
+	if n.Kind == 0 {
+		return false, nil
+	}
+	var v bool
+	if n.Kind != yaml.ScalarNode || n.Tag != "!!bool" || n.Decode(&v) != nil {
+		return false, fmt.Errorf("%w: line %d: always_rerun %q, want true or false", domain.ErrInvalidValue, n.Line, n.Value)
+	}
+	return v, nil
 }
 
 // decodeStrict decodes data into v and fails on a key v doesn't declare, so a

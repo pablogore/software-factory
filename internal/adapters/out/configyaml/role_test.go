@@ -10,6 +10,12 @@ import (
 	"github.com/pablogore/software-factory/internal/domain"
 )
 
+type rerunRow struct {
+	name string
+	yaml string
+	want bool
+}
+
 type badRoleRow struct {
 	name     string
 	yaml     string
@@ -43,6 +49,22 @@ func TestLoadRole(t *testing.T) {
 			})
 		})
 
+		s.When("the role file sets always_rerun", func(s *specs.Spec) {
+			rows := []rerunRow{
+				{"loads always_rerun true as always-rerun on", "always_rerun: true\n", true},
+				{"loads always_rerun false as always-rerun off", "always_rerun: false\n", false},
+				{"loads a role without always_rerun as always-rerun off", "", false},
+			}
+			specs.Table(s, rows, func(r rerunRow) string {
+				return r.name
+			}, func(ctx *specs.Context, r rerunRow) {
+				role, err := configyaml.LoadRole([]byte("name: reviewer-security\nkind: review\nprompt: roles/reviewer-security.md\nmode: blocking\n" + r.yaml))
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(role.AlwaysRerun).ToEqual(r.want)
+			})
+		})
+
 		s.When("the role file is wrong", func(s *specs.Spec) {
 			rows := []badRoleRow{
 				{
@@ -62,6 +84,30 @@ func TestLoadRole(t *testing.T) {
 					"name: security-deep\nkind: deploy\nprompt: roles/security-deep.md\nmode: shadow\n",
 					domain.ErrInvalidValue,
 					`role security-deep: invalid value: kind "deploy"`,
+				},
+				{
+					"names the role whose always_rerun is a word",
+					"name: security-deep\nkind: review\nmode: shadow\nalways_rerun: yes\n",
+					domain.ErrInvalidValue,
+					`role security-deep: invalid value: line 4: always_rerun "yes", want true or false`,
+				},
+				{
+					"names the role whose always_rerun is a quoted true",
+					"name: security-deep\nkind: review\nmode: shadow\nalways_rerun: \"true\"\n",
+					domain.ErrInvalidValue,
+					`role security-deep: invalid value: line 4: always_rerun "true", want true or false`,
+				},
+				{
+					"names the role whose always_rerun is empty",
+					"name: security-deep\nkind: review\nmode: shadow\nalways_rerun:\n",
+					domain.ErrInvalidValue,
+					`role security-deep: invalid value: line 4: always_rerun "", want true or false`,
+				},
+				{
+					"names the role whose always_rerun is a list",
+					"name: security-deep\nkind: review\nmode: shadow\nalways_rerun: [true]\n",
+					domain.ErrInvalidValue,
+					`role security-deep: invalid value: line 4: always_rerun "", want true or false`,
 				},
 			}
 			specs.Table(s, rows, func(r badRoleRow) string {
