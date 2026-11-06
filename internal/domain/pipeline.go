@@ -1,6 +1,14 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
+
+// ReservedStageNames are the stages a job is in outside its pipeline, plus its
+// terminal states. A pipeline stage with one of these names would be mistaken
+// for them.
+var ReservedStageNames = []string{"stopped", StageMerge, StageNeedsHuman, "needs-info", "done", "rejected"}
 
 // Pipeline is the flow a job follows: an ordered list of stages (04-roles.md).
 // Roles are the roles its stages list, as loaded; decide reads a reviewer's
@@ -22,9 +30,9 @@ type Stage struct {
 }
 
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
-// the pipeline: exactly one build stage, stage names are unique, every review
-// goes back to an earlier stage, lists roles and allows at least one round, and
-// every role a stage lists exists.
+// the pipeline: exactly one build stage, stage names are unique and not
+// reserved, every review goes back to an earlier stage, lists roles and allows
+// at least one round, and every role a stage lists exists.
 func (p Pipeline) Validate(roles []Role) error {
 	known := make(map[string]bool, len(roles))
 	for _, r := range roles {
@@ -41,6 +49,11 @@ func (p Pipeline) Validate(roles []Role) error {
 	}
 	seen := make(map[string]bool, len(p.Stages))
 	for _, st := range p.Stages {
+		// Checked before the kind: a YAML stage's kind is its name, and the
+		// reserved name is the real fault.
+		if slices.Contains(ReservedStageNames, st.Name) {
+			return fmt.Errorf("stage %s: %w: stage name is reserved", st.Name, ErrInvalidValue)
+		}
 		if err := st.Kind.Validate(); err != nil {
 			return fmt.Errorf("stage %s: %w", st.Name, err)
 		}

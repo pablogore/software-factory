@@ -120,6 +120,16 @@ func TestLoadPipeline(t *testing.T) {
 					"name: p\nstages:\n  - build\n  - review:\n      on_changes: build\n      max_rounds: 3\n",
 					"stage review: missing field: parallel",
 				},
+				{
+					"names a bare stage called merge",
+					"name: p\nstages: [intake, build, merge]\n",
+					"stage merge: invalid value: stage name is reserved",
+				},
+				{
+					"names a map stage called done",
+					"name: p\nstages:\n  - build\n  - done:\n      parallel: [reviewer-code]\n      on_changes: build\n      max_rounds: 3\n",
+					"stage done: invalid value: stage name is reserved",
+				},
 			}
 			specs.Table(s, rows, func(r brokenRow) string {
 				return r.name

@@ -60,6 +60,9 @@ Las métricas por rol (costo, hallazgos, cuántos terminaron en cambios reales, 
 
 ## Validación (`factory config validate` / `plan`)
 - Pipeline es un DAG; hay exactamente un `build` por job; todo `review` tiene a dónde volver.
+- Los nombres de etapa son únicos.
+- Todo `review` lista al menos un rol (`parallel`) y tiene `max_rounds` >= 1.
+- Ninguna etapa, sea del kind que sea, se llama como un estado del job: `stopped`, `merge`, `needs-human`, `needs-info`, `done`, `rejected`. El error nombra la etapa.
 - El schema del kind existe y el prompt no está vacío.
 - El agente y el modelo existen en la config; las tools pedidas están permitidas para ese kind.
 - `plan` muestra el impacto: "security-deep habría corrido en 7 de los últimos 20 jobs, costo estimado X".
