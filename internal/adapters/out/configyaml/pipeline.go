@@ -25,8 +25,9 @@ type stageBody struct {
 }
 
 // LoadPipeline parses a pipeline file and validates it against the roles
-// loaded alongside it. The pipeline keeps the roles its stages name, so Decide
-// reads each reviewer's mode from its role file.
+// loaded alongside it. A stage that lists no roles takes its kind's default
+// role. The pipeline keeps the loaded roles its stages name, so Decide reads
+// each reviewer's mode from its role file.
 func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 	var f pipelineFile
 	if err := decodeStrict(data, &f); err != nil {
@@ -48,6 +49,10 @@ func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 	if err := p.Validate(roles); err != nil {
 		return domain.Pipeline{}, err
 	}
+	p, err = p.WithDefaultRoles()
+	if err != nil {
+		return domain.Pipeline{}, err
+	}
 	named, err := stageRoles(p.Stages, roles)
 	if err != nil {
 		return domain.Pipeline{}, err
@@ -56,9 +61,9 @@ func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 	return p, nil
 }
 
-// stageRoles returns, in the order the stages first name them, the roles the
-// stages list. Decide treats a role without a mode as blocking, so a mode
-// missing from a role file must fail here instead of blocking silently.
+// stageRoles returns, in the order the stages first name them, the loaded
+// roles the stages list. Decide treats a role without a mode as blocking, so a
+// mode missing from a role file must fail here instead of blocking silently.
 func stageRoles(stages []domain.Stage, roles []domain.Role) ([]domain.Role, error) {
 	var out []domain.Role
 	for _, st := range stages {
@@ -66,8 +71,12 @@ func stageRoles(stages []domain.Stage, roles []domain.Role) ([]domain.Role, erro
 			if slices.ContainsFunc(out, func(r domain.Role) bool { return r.Name == name }) {
 				continue
 			}
-			// Pipeline.Validate has checked that every listed role is loaded.
+			// Pipeline.Validate has checked that every listed role is loaded;
+			// only a default role, which needs no role file, may be missing.
 			i := slices.IndexFunc(roles, func(r domain.Role) bool { return r.Name == name })
+			if i < 0 {
+				continue
+			}
 			if err := roles[i].Mode.Validate(); err != nil {
 				return nil, fmt.Errorf("role %s: %w", name, err)
 			}

@@ -46,11 +46,11 @@ func TestLoadPipeline(t *testing.T) {
 			ctx.Expect(p).ToEqual(domain.Pipeline{
 				Name: "default",
 				Stages: []domain.Stage{
-					{Name: "intake", Kind: domain.KindIntake},
-					{Name: "spec", Kind: domain.KindSpec},
-					{Name: "build", Kind: domain.KindBuild},
+					{Name: "intake", Kind: domain.KindIntake, Roles: []string{"intake"}},
+					{Name: "spec", Kind: domain.KindSpec, Roles: []string{"spec-writer"}},
+					{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder"}},
 					{Name: "review", Kind: domain.KindReview, Roles: reviewers, OnChanges: "build", MaxRounds: new(3)},
-					{Name: "approve", Kind: domain.KindApprove},
+					{Name: "approve", Kind: domain.KindApprove, Roles: []string{"approver"}},
 				},
 				Roles: roles,
 			})
@@ -257,6 +257,21 @@ func TestLoadPipeline(t *testing.T) {
 					"rejects limits that are not a map",
 					"name: p\nstages: [build]\nlimits: 3\n",
 					"pipeline p: limits: invalid value: line 3: want a map of limits",
+				},
+				{
+					"names a task stage that lists no roles, a kind with no default",
+					"name: p\nstages: [intake, build, task]\n",
+					"stage task: missing field: kind task lists no roles and has no default role",
+				},
+				{
+					"names an approve stage with no review stage",
+					"name: p\nstages: [intake, build, approve]\n",
+					"stage approve: invalid value: approve stage has no review stage before it",
+				},
+				{
+					"names an approve stage that comes before review",
+					"name: p\nstages:\n  - build\n  - approve\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n",
+					"stage approve: invalid value: approve stage has no review stage before it",
 				},
 				{
 					"names a bare stage called merge",
