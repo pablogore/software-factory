@@ -31,6 +31,7 @@ type Job struct {
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
 	Reviewers      []string       `json:"reviewers,omitempty"`       // review roles that run in this round; empty runs every role of the stage
+	Initiative     InitiativeID   `json:"initiative,omitempty"`      // the initiative this job is a slice of; empty for a job on its own
 	Origin         Origin         `json:"origin"`
 	Subscriptions  []Subscription `json:"subscriptions,omitempty"`
 }
