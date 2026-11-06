@@ -55,8 +55,39 @@ func (m Mode) Validate() error {
 	return fmt.Errorf("%w: mode %q", ErrInvalidValue, m)
 }
 
-// Validate checks the role's kind and mode; the error names the role.
+// MaxRoleNameLen is the longest a role name may be: a validation bound, not a
+// retry count.
+const MaxRoleNameLen = 64
+
+// ValidateRoleName checks that name is 1 to MaxRoleNameLen ASCII lowercase
+// letters, digits and hyphens, not starting or ending with a hyphen. Role
+// names key the separation-of-duties check and are compared exactly, so a
+// look-alike (other case, Unicode, whitespace) must not load. The name is
+// quoted with non-ASCII escaped so an invisible fault shows in the message.
+func ValidateRoleName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: role name is empty", ErrInvalidValue)
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return fmt.Errorf("%w: role name %+q, want only lowercase letters, digits and hyphens", ErrInvalidValue, name)
+		}
+	}
+	if name[0] == '-' || name[len(name)-1] == '-' {
+		return fmt.Errorf("%w: role name %+q starts or ends with a hyphen", ErrInvalidValue, name)
+	}
+	if len(name) > MaxRoleNameLen {
+		return fmt.Errorf("%w: role name %+q is %d characters, want at most %d", ErrInvalidValue, name, len(name), MaxRoleNameLen)
+	}
+	return nil
+}
+
+// Validate checks the role's name, kind and mode; the error names the role.
 func (r Role) Validate() error {
+	if err := ValidateRoleName(r.Name); err != nil {
+		return err
+	}
 	if err := r.Kind.Validate(); err != nil {
 		return fmt.Errorf("role %s: %w", r.Name, err)
 	}
