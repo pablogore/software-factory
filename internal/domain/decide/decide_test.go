@@ -496,16 +496,6 @@ func TestDecide(t *testing.T) {
 				job = decide.Apply(job, evs)
 			}
 		})
-
-		s.It("leaves the other outcomes of E01.4 unsupported", func(ctx *specs.Context) {
-			job := newJob()
-			job.Stage = "build"
-
-			evs, err := decide.Decide(job, result("builder", 1, domain.BuildResult{Status: domain.BuildBlocked}), defaultPipeline())
-
-			ctx.Expect(err).To(specs.MatchError(decide.ErrUnsupported))
-			ctx.Expect(evs).To(specs.BeEmpty())
-		})
 	})
 }
 

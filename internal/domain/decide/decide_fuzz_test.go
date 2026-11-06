@@ -12,7 +12,7 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
 // has not answered in any fuzzed job, a failing gate and specgate, a spec
-// asking for a length exception, a specgate rejection count, a person's approval, an intake NEEDS_INFO, messages (and
+// asking for a length exception, a specgate rejection count, a person's approval, an intake NEEDS_INFO, a builder BLOCKED, messages (and
 // so answers) and direction marks from every kind of author, stop requests with and without a
 // name, a completed merge and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
@@ -25,7 +25,7 @@ func fuzzEvents() []domain.Event {
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
 		direction(domain.AuthorPerson, true, 1), direction(domain.AuthorPerson, false, 1), direction(domain.AuthorBot, true, 1),
-		stop("pablogore", 1), stop("", 1), merged(1), needsInfo())
+		stop("pablogore", 1), stop("", 1), merged(1), needsInfo(), blockedBuild("cannot reach the API", 1))
 	for _, r := range nilEvents() {
 		evs = append(evs, r.ev)
 	}
