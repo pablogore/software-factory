@@ -29,6 +29,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return afterGate(job, ev, domain.StageSpecgate, domain.KindSpec, e.At, p)
 	case domain.GatePassed:
 		return afterGate(job, ev, domain.StageGate, domain.KindBuild, e.At, p)
+	case domain.SpecgateFailed:
+		return specgateFailed(job, e, p)
 	case domain.GateFailed:
 		return gateFailed(job, e, p)
 	case domain.HumanApproved:
@@ -52,6 +54,8 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Passed = append(slices.Clip(job.Passed), e.Role)
 		case domain.ChangesRequested:
 			job.Changes = append(slices.Clip(job.Changes), e.Role)
+		case domain.SpecRejected:
+			job.SpecRejections = e.Rejections
 		case domain.RoundStarted:
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
@@ -214,6 +218,27 @@ func afterGate(job domain.Job, ev domain.Event, gate string, kind domain.Kind, a
 		return nil, illegal(job, ev)
 	}
 	return next(job, p, i, at), nil
+}
+
+// maxSpecRejections is how many specgate rejections a job takes before a
+// person must look at it, fixed as in the current factory.
+const maxSpecRejections = 3
+
+// specgateFailed counts the rejection and sends the job back to the spec
+// stage to be rewritten, or to needs-human on the last allowed rejection so
+// a spec that keeps failing never loops. The review round does not change.
+func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) ([]domain.Event, error) {
+	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindSpec })
+	if job.Stage != domain.StageSpecgate || i < 0 {
+		return nil, illegal(job, e)
+	}
+	n := job.SpecRejections + 1
+	evs := []domain.Event{domain.SpecRejected{Job: job.ID, Rejections: n, At: e.At}}
+	if n >= maxSpecRejections {
+		reason := fmt.Sprintf("spec rejected by specgate %d times", n)
+		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}), nil
+	}
+	return append(evs, domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At}), nil
 }
 
 // gateFailed sends the job back to build for another round, or to needs-human

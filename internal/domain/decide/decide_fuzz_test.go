@@ -11,14 +11,14 @@ import (
 var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageNeedsHuman}
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
-// has not answered in any fuzzed job, a failing gate, a person's approval and
+// has not answered in any fuzzed job, a failing gate and specgate, a person's approval and
 // messages from every kind of author.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
 		evs = append(evs, st.ev)
 	}
-	return append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
+	return append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1))
 }
