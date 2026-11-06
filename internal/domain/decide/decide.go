@@ -158,10 +158,12 @@ func ignored(e domain.MessageReceived) bool {
 
 // decideMessage handles an allowed person's message. Marked as a direction on
 // an unmerged slice, it drops the slice. In needs-info it is the
-// answer, so the job goes back to the stage that asked. In needs-human it is
-// rework feedback, and in done it reopens the merged job: either way the job
-// goes back to the build stage in the same round, with the text as input, so
-// a reopened job past its last round still needs a person after CHANGES.
+// answer, so the job goes back to the stage that asked. In needs-human after
+// specgate's last rejection it is feedback for the spec, which is rewritten
+// with it. Otherwise in needs-human it is rework feedback, and in done it
+// reopens the merged job: either way the job goes back to the build stage in
+// the same round, with the text as input, so a reopened job past its last
+// round still needs a person after CHANGES.
 func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
 	if e.Direction && job.Initiative != "" && job.Stage != domain.StageMerge && job.Stage != domain.StageDone {
 		return dropped(job, e), nil
@@ -172,12 +174,30 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 	if job.Stage != domain.StageNeedsHuman && job.Stage != domain.StageDone {
 		return nil, fmt.Errorf("%w: message from %q in stage %q", ErrUnsupported, e.Author, job.Stage)
 	}
+	if job.Stage == domain.StageNeedsHuman && job.SpecRejections >= maxSpecRejections {
+		return respecified(job, e, p)
+	}
 	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
 	if i < 0 {
 		return nil, fmt.Errorf("decide: pipeline %q has no build stage", p.Name)
 	}
 	return []domain.Event{
 		domain.ReworkRequested{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
+		domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At},
+	}, nil
+}
+
+// respecified sends a job that specgate rejected too often back to the spec
+// stage with the person's feedback as input. The rejection count starts again,
+// so the rewritten spec gets every specgate try a new spec gets.
+func respecified(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
+	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindSpec })
+	if i < 0 {
+		return nil, fmt.Errorf("decide: pipeline %q has no spec stage", p.Name)
+	}
+	return []domain.Event{
+		domain.ReworkRequested{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
+		domain.SpecRejected{Job: job.ID, Rejections: 0, At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At},
 	}, nil
 }

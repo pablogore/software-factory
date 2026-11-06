@@ -62,8 +62,8 @@ func (SpecgateFailed) EventName() string { return "SpecgateFailed" }
 // JobID implements Event.
 func (e SpecgateFailed) JobID() JobID { return e.Job }
 
-// SpecRejected records that the job counts one more specgate rejection;
-// Rejections is the total so far.
+// SpecRejected records the job's count of specgate rejections: one more
+// after a rejection, or 0 when a person's feedback starts it again.
 type SpecRejected struct {
 	Job        JobID     `json:"job"`
 	Rejections int       `json:"rejections"`
@@ -241,8 +241,9 @@ func (MessageReceived) EventName() string { return "MessageReceived" }
 // JobID implements Event.
 func (e MessageReceived) JobID() JobID { return e.Job }
 
-// ReworkRequested records that a person sent the job back to build with
-// feedback; the build stage gets Text as input.
+// ReworkRequested records that a person sent the job back to build, or to
+// spec after specgate's last rejection, with feedback; that stage gets Text
+// as input.
 type ReworkRequested struct {
 	Job  JobID     `json:"job"`
 	By   string    `json:"by"`
