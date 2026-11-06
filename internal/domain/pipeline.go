@@ -25,6 +25,10 @@ type Pipeline struct {
 // the current factory.
 const DefaultSpecRejections = 3
 
+// DefaultMaxRounds is how many rounds a review stage allows when neither the
+// stage nor limits.max_rounds sets it, the value pipelines/default.yaml uses.
+const DefaultMaxRounds = 3
+
 // Limits are the pipeline's retry limits. A nil value is not set and takes
 // its default; a nil HumanReworks, set or not, is unlimited.
 type Limits struct {
@@ -70,14 +74,28 @@ func (p Pipeline) HumanReworks() (int, bool) {
 	return *p.Limits.HumanReworks, true
 }
 
+// MaxRounds is how many rounds review stage st allows: its own max_rounds,
+// else limits.max_rounds, else DefaultMaxRounds.
+func (p Pipeline) MaxRounds(st Stage) int {
+	switch {
+	case st.MaxRounds != nil:
+		return *st.MaxRounds
+	case p.Limits.MaxRounds != nil:
+		return *p.Limits.MaxRounds
+	default:
+		return DefaultMaxRounds
+	}
+}
+
 // Stage is one step of a pipeline. Its roles run in parallel; a review stage
-// says where to go back on CHANGES and how many rounds it allows.
+// says where to go back on CHANGES and how many rounds it allows; a nil
+// MaxRounds is not set and follows Pipeline.MaxRounds.
 type Stage struct {
 	Name      string   `json:"name"`
 	Kind      Kind     `json:"kind"`
 	Roles     []string `json:"roles,omitempty"`
 	OnChanges string   `json:"on_changes,omitempty"`
-	MaxRounds int      `json:"max_rounds,omitempty"`
+	MaxRounds *int     `json:"max_rounds,omitempty"`
 }
 
 // Label names the pipeline in errors: "pipeline <name>", or just "pipeline"
@@ -92,8 +110,8 @@ func (p Pipeline) Label() string {
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
 // the pipeline: exactly one build stage, stage names are unique and not
 // reserved, every review goes back to an earlier stage, lists roles and allows
-// at least one round, every role a stage lists exists, and every limit set is
-// at least 1.
+// at least one round when it sets max_rounds, every role a stage lists exists,
+// and every limit set is at least 1.
 func (p Pipeline) Validate(roles []Role) error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", p.Label(), err)
@@ -142,8 +160,8 @@ func (p Pipeline) Validate(roles []Role) error {
 				return fmt.Errorf("stage %s: %w: role %q is not loaded", st.Name, ErrInvalidValue, role)
 			}
 		}
-		if st.Kind == KindReview && st.MaxRounds < 1 {
-			return fmt.Errorf("stage %s: %w: max_rounds %d, want at least 1", st.Name, ErrInvalidValue, st.MaxRounds)
+		if st.Kind == KindReview && st.MaxRounds != nil && *st.MaxRounds < 1 {
+			return fmt.Errorf("stage %s: %w: max_rounds %d, want at least 1", st.Name, ErrInvalidValue, *st.MaxRounds)
 		}
 		seen[st.Name] = true
 	}

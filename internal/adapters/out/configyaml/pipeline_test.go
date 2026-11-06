@@ -48,7 +48,7 @@ func TestLoadPipeline(t *testing.T) {
 					{Name: "intake", Kind: domain.KindIntake},
 					{Name: "spec", Kind: domain.KindSpec},
 					{Name: "build", Kind: domain.KindBuild},
-					{Name: "review", Kind: domain.KindReview, Roles: reviewers, OnChanges: "build", MaxRounds: 3},
+					{Name: "review", Kind: domain.KindReview, Roles: reviewers, OnChanges: "build", MaxRounds: new(3)},
 					{Name: "approve", Kind: domain.KindApprove},
 				},
 				Roles: roles,
@@ -135,11 +135,6 @@ func TestLoadPipeline(t *testing.T) {
 				{
 					"names the review stage with max_rounds 0",
 					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n      max_rounds: 0\n",
-					"stage review: invalid value: max_rounds 0, want at least 1",
-				},
-				{
-					"names the review stage with no max_rounds",
-					"name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n",
 					"stage review: invalid value: max_rounds 0, want at least 1",
 				},
 				{

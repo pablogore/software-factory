@@ -21,7 +21,7 @@ type pipelineFile struct {
 type stageBody struct {
 	Parallel  []string `yaml:"parallel"`
 	OnChanges string   `yaml:"on_changes"`
-	MaxRounds int      `yaml:"max_rounds"`
+	MaxRounds *int     `yaml:"max_rounds"`
 }
 
 // LoadPipeline parses a pipeline file and validates it against the roles

@@ -469,8 +469,8 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 	if len(blocking) == 0 {
 		return append(evs, next(job, p, i, e.At)...), nil
 	}
-	if job.Round >= stage.MaxRounds {
-		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, stage.MaxRounds, strings.Join(inOrder(stage.Roles, blocking), ", "))
+	if limit := p.MaxRounds(stage); job.Round >= limit {
+		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, limit, strings.Join(inOrder(stage.Roles, blocking), ", "))
 		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseChanges, At: e.At}), nil
 	}
 	return append(evs,
@@ -575,7 +575,7 @@ func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) 
 
 // gateFailed sends the job back to build for another round, or to needs-human
 // when it fails in the last one. A failing gate uses up a round, as in the
-// current factory, so the limit is the review stage's max_rounds; the new
+// current factory, so the limit is the review stage's rounds; the new
 // round keeps job.Reviewers because none of them got to run.
 func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domain.Event, error) {
 	b := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
@@ -586,7 +586,7 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 	if r < 0 {
 		return nil, fmt.Errorf("decide: pipeline %q has no review stage", p.Name)
 	}
-	if limit := p.Stages[r].MaxRounds; job.Round >= limit {
+	if limit := p.MaxRounds(p.Stages[r]); job.Round >= limit {
 		reason := fmt.Sprintf("gate failed in the last round (%d of %d)", job.Round, limit)
 		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseGateFailed, At: e.At}}, nil
 	}
