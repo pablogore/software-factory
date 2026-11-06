@@ -13,12 +13,13 @@ func TestJob(t *testing.T) {
 	specs.Describe(t, "Job", func(s *specs.Spec) {
 		s.It("reads back from JSON equal to the original", func(ctx *specs.Context) {
 			job := domain.Job{
-				ID:       "001-e01-1-modelo-de",
-				Title:    "Domain model",
-				Pipeline: "default",
-				Stage:    "review",
-				Round:    2,
-				Origin:   domain.Origin{Provider: "github", Thread: "issue/23", Author: "pablogore"},
+				ID:         "001-e01-1-modelo-de",
+				Title:      "Domain model",
+				Pipeline:   "default",
+				Stage:      "review",
+				Round:      2,
+				Initiative: "017-e01-6-decide-maneja",
+				Origin:     domain.Origin{Provider: "github", Thread: "issue/23", Author: "pablogore"},
 				Subscriptions: []domain.Subscription{
 					{Provider: "github", Thread: "issue/23", Kind: domain.ThreadIssue},
 					{Provider: "github", Thread: "pr/24", Kind: domain.ThreadPR},
