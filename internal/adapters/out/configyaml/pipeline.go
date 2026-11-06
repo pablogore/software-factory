@@ -5,6 +5,7 @@ package configyaml
 
 import (
 	"fmt"
+	"slices"
 
 	"go.yaml.in/yaml/v3"
 
@@ -26,7 +27,7 @@ type stageBody struct {
 // loaded alongside it.
 func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 	var f pipelineFile
-	if err := yaml.Unmarshal(data, &f); err != nil {
+	if err := decodeStrict(data, &f); err != nil {
 		return domain.Pipeline{}, fmt.Errorf("parse pipeline: %w", err)
 	}
 	p := domain.Pipeline{Name: f.Name}
@@ -51,6 +52,9 @@ func parseStage(n *yaml.Node) (domain.Stage, error) {
 		return domain.Stage{Name: n.Value, Kind: domain.Kind(n.Value)}, nil
 	case n.Kind == yaml.MappingNode && len(n.Content) == 2:
 		name := n.Content[0].Value
+		if err := knownKeys(n.Content[1], "parallel", "on_changes", "max_rounds"); err != nil {
+			return domain.Stage{}, fmt.Errorf("stage %s: %w", name, err)
+		}
 		var b stageBody
 		if err := n.Content[1].Decode(&b); err != nil {
 			return domain.Stage{}, fmt.Errorf("stage %s: %w", name, err)
@@ -65,4 +69,19 @@ func parseStage(n *yaml.Node) (domain.Stage, error) {
 	default:
 		return domain.Stage{}, fmt.Errorf("%w: line %d: want a stage name or a one-key map", domain.ErrInvalidValue, n.Line)
 	}
+}
+
+// knownKeys fails on a map key not in keys. Node.Decode can't decode strictly,
+// so a stage body is checked here before it is decoded.
+func knownKeys(n *yaml.Node, keys ...string) error {
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i < len(n.Content); i += 2 {
+		k := n.Content[i]
+		if !slices.Contains(keys, k.Value) {
+			return fmt.Errorf("%w: line %d: unknown key %q", domain.ErrInvalidValue, k.Line, k.Value)
+		}
+	}
+	return nil
 }

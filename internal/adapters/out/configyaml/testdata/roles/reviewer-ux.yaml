@@ -1,0 +1,4 @@
+name: reviewer-ux
+kind: review
+prompt: roles/reviewer-ux.md
+mode: blocking
