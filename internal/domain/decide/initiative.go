@@ -31,6 +31,9 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 		if domain.Blank(e.Author) {
 			return nil, fmt.Errorf("decide: message without who sent it: %w", domain.ErrMissingField)
 		}
+		if err := freshInitiative(in, ev, e.WaitSeq); err != nil {
+			return nil, err
+		}
 		// A person's answer is the only way out of needs-human: the replan
 		// runs again with it.
 		if in.Stage == domain.InitiativeNeedsHuman {
@@ -47,11 +50,29 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 		if domain.Blank(e.By) {
 			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
 		}
+		if err := freshInitiative(in, ev, e.WaitSeq); err != nil {
+			return nil, err
+		}
 		if in.Stage == domain.InitiativeCheckpoint {
 			return []domain.Event{domain.NextSliceRequested{Job: in.Job, Initiative: in.ID, At: e.At}}, nil
 		}
 	}
 	return nil, fmt.Errorf("%w: %s in initiative stage %q", ErrIllegalTransition, ev.EventName(), in.Stage)
+}
+
+// freshInitiative refuses a person's answer or OK unless seq names the
+// initiative's current wait, as fresh does for a job, so an old checkpoint OK
+// never starts a slice nobody approved and an old answer never reruns the
+// replan. An initiative stored without a counter reads as 0 and refuses every
+// answer.
+func freshInitiative(in domain.Initiative, ev domain.Event, seq int) error {
+	if seq == 0 {
+		return fmt.Errorf("decide: %s without the wait it answers: %w", ev.EventName(), domain.ErrMissingField)
+	}
+	if seq != in.WaitSeq {
+		return fmt.Errorf("%w: %s for wait %d, expected wait %d", ErrStaleWait, ev.EventName(), seq, in.WaitSeq)
+	}
+	return nil
 }
 
 // replanned starts the next slice on CONTINUE, right away with checkpoint
@@ -83,7 +104,8 @@ func replanned(in domain.Initiative, e domain.ReplanSubmitted) ([]domain.Event, 
 // and the request comes from the slice it runs, so another or a stale slice
 // job never pulls it out of a checkpoint or needs-human. Only a person's
 // answer to the slice it stopped on takes it from needs-human back to the
-// replan.
+// replan. Entering the checkpoint or needs-human raises WaitSeq; nothing
+// lowers it.
 func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative {
 	for _, ev := range evs {
 		if in.Stage == domain.InitiativeClosed {
@@ -97,6 +119,7 @@ func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative
 		case domain.CheckpointReached:
 			if e.Initiative == in.ID {
 				in.Stage = domain.InitiativeCheckpoint
+				in.WaitSeq++
 			}
 		case domain.NextSliceRequested:
 			if e.Initiative == in.ID {
@@ -113,6 +136,7 @@ func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative
 		case domain.InitiativeNeedsHumanRaised:
 			if e.Initiative == in.ID {
 				in.Stage, in.Reason = domain.InitiativeNeedsHuman, e.Reason
+				in.WaitSeq++
 			}
 		case domain.InitiativeAnswered:
 			if e.Initiative == in.ID && in.Stage == domain.InitiativeNeedsHuman && e.Job == in.Job {
