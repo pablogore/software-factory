@@ -107,7 +107,13 @@ func TestLoadRole(t *testing.T) {
 					"names the role whose always_rerun is a list",
 					"name: security-deep\nkind: review\nmode: shadow\nalways_rerun: [true]\n",
 					domain.ErrInvalidValue,
-					`role security-deep: invalid value: line 4: always_rerun "", want true or false`,
+					`role security-deep: invalid value: line 4: always_rerun is a list, want true or false`,
+				},
+				{
+					"names the role whose always_rerun is a map",
+					"name: security-deep\nkind: review\nmode: shadow\nalways_rerun: {on: true}\n",
+					domain.ErrInvalidValue,
+					`role security-deep: invalid value: line 4: always_rerun is a map, want true or false`,
 				},
 			}
 			specs.Table(s, rows, func(r badRoleRow) string {
@@ -115,6 +121,8 @@ func TestLoadRole(t *testing.T) {
 			}, func(ctx *specs.Context, r badRoleRow) {
 				_, err := configyaml.LoadRole([]byte(r.yaml))
 
+				// Printed so `go test -v` shows the operator's message.
+				ctx.Testing().Log(err)
 				ctx.Expect(err).To(specs.MatchError(r.sentinel))
 				ctx.Expect(err.Error()).ToEqual(r.want)
 			})
@@ -130,7 +138,27 @@ func TestLoadRole(t *testing.T) {
 				{
 					"names the unknown key in a when condition",
 					"name: security-deep\nkind: review\nmode: shadow\nwhen:\n  any:\n    - path: [src/**]\n",
-					"parse role: yaml: unmarshal errors:\n  line 6: field path not found in type configyaml.conditionFile",
+					`parse role: invalid value: line 6: unknown key "path"`,
+				},
+				{
+					"names the unknown key in when",
+					"name: security-deep\nkind: review\nmode: shadow\nwhen:\n  all:\n    - paths: [src/**]\n",
+					`parse role: invalid value: line 5: unknown key "all"`,
+				},
+				{
+					"names the unknown key in budget",
+					"name: security-deep\nkind: review\nmode: shadow\nbudget:\n  attempts: 2\n  dollars: 5\n",
+					`parse role: invalid value: line 6: unknown key "dollars"`,
+				},
+				{
+					"rejects an empty role file",
+					"",
+					"parse role: invalid value: file is empty",
+				},
+				{
+					"rejects a role file with only comments",
+					"# reviewer-security\n",
+					"parse role: invalid value: file is empty",
 				},
 			}
 			specs.Table(s, rows, func(r brokenRow) string {
@@ -138,6 +166,8 @@ func TestLoadRole(t *testing.T) {
 			}, func(ctx *specs.Context, r brokenRow) {
 				_, err := configyaml.LoadRole([]byte(r.yaml))
 
+				// Printed so `go test -v` shows the operator's message.
+				ctx.Testing().Log(err)
 				ctx.Expect(err == nil).ToEqual(false)
 				ctx.Expect(err.Error()).ToEqual(r.want)
 			})
