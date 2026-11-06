@@ -17,7 +17,8 @@ type needsHumanRow struct {
 // specEscalated is a job that specgate's third rejection put in needs-human.
 func specEscalated() domain.Job {
 	job := newJob()
-	job.Stage, job.SpecRejections = domain.StageNeedsHuman, 3
+	job.Stage, job.SpecRejections, job.SpecEscalated = domain.StageNeedsHuman, 3, true
+	job.Reason = "spec rejected by specgate 3 times"
 	return job
 }
 

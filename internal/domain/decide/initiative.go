@@ -3,6 +3,7 @@ package decide
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/pablogore/software-factory/internal/domain"
 )
@@ -30,6 +31,9 @@ func Initiative(in domain.Initiative, ev domain.Event) ([]domain.Event, error) {
 			return replanned(in, e)
 		}
 	case domain.HumanApproved:
+		if strings.TrimSpace(e.By) == "" {
+			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
+		}
 		if in.Stage == domain.InitiativeCheckpoint {
 			return []domain.Event{domain.NextSliceRequested{Job: in.Job, Initiative: in.ID, At: e.At}}, nil
 		}
@@ -61,7 +65,10 @@ func replanned(in domain.Initiative, e domain.ReplanSubmitted) ([]domain.Event, 
 
 // ApplyInitiative folds events into in and returns the new initiative.
 // Events of other initiatives, and job events, leave it as it is, and so
-// does anything after it closed: a closed initiative never reopens.
+// does anything after it closed: a closed initiative never reopens. A replan
+// request is refused, leaving it as it is, unless the initiative is active
+// and the request comes from the slice it runs, so another or a stale slice
+// job never pulls it out of a checkpoint or needs-human.
 func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative {
 	for _, ev := range evs {
 		if in.Stage == domain.InitiativeClosed {
@@ -69,8 +76,8 @@ func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative
 		}
 		switch e := ev.(type) {
 		case domain.ReplanRequested:
-			if e.Initiative == in.ID {
-				in.Stage, in.Job = domain.InitiativeReplan, e.Job
+			if e.Initiative == in.ID && in.Stage == domain.InitiativeActive && in.Job != "" && e.Job == in.Job {
+				in.Stage = domain.InitiativeReplan
 			}
 		case domain.CheckpointReached:
 			if e.Initiative == in.ID {
@@ -78,7 +85,11 @@ func ApplyInitiative(in domain.Initiative, evs []domain.Event) domain.Initiative
 			}
 		case domain.NextSliceRequested:
 			if e.Initiative == in.ID {
-				in.Stage = domain.InitiativeActive
+				in.Stage, in.Job = domain.InitiativeActive, ""
+			}
+		case domain.SliceStarted:
+			if e.Initiative == in.ID && in.Stage == domain.InitiativeActive && in.Job == "" {
+				in.Job = e.Job
 			}
 		case domain.InitiativeEnded:
 			if e.Initiative == in.ID {

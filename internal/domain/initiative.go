@@ -28,8 +28,10 @@ const (
 )
 
 // Initiative is the state decide keeps for an initiative. Job is the slice
-// job it last heard of: the one whose merge is being replanned or waits at
-// the checkpoint. Reason is why it needs a person, as the replan wrote it.
+// job it last heard of: the one running while it is active, or whose merge
+// is being replanned or waits at the checkpoint; it is empty from the request
+// for the next slice until that slice starts. Reason is why it needs a
+// person, as the replan wrote it.
 type Initiative struct {
 	ID         InitiativeID `json:"id"`
 	Checkpoint Checkpoint   `json:"checkpoint,omitempty"`
@@ -123,6 +125,20 @@ func (NextSliceRequested) EventName() string { return "NextSliceRequested" }
 
 // JobID implements Event.
 func (e NextSliceRequested) JobID() JobID { return e.Job }
+
+// SliceStarted records that Job started as the initiative's next slice, after
+// a NextSliceRequested. From then on only Job's merge or drop replans it.
+type SliceStarted struct {
+	Job        JobID        `json:"job"`
+	Initiative InitiativeID `json:"initiative"`
+	At         time.Time    `json:"at"`
+}
+
+// EventName implements Event.
+func (SliceStarted) EventName() string { return "SliceStarted" }
+
+// JobID implements Event.
+func (e SliceStarted) JobID() JobID { return e.Job }
 
 // InitiativeEnded records that the replan after Job said DONE: the
 // initiative is closed and no slice follows.
