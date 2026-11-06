@@ -15,7 +15,7 @@ import (
 var ErrIllegalTransition = errors.New("illegal transition")
 
 // ErrUnsupported means the result or message is legal in this stage but its
-// outcome (NEEDS_INFO, REJECT, BLOCKED, ESCALATE, task results, a person's
+// outcome (NEEDS_INFO, REJECT, BLOCKED, task results, a person's
 // message outside needs-human) is not decided yet; E01.4 and E01.5 add it.
 var ErrUnsupported = errors.New("unsupported result")
 
@@ -91,6 +91,7 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 		if r.Decision == domain.ApproveApprove {
 			return next(job, p, i, e.At), nil
 		}
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: escalated(e.Role, r.Reasons), At: e.At}}, nil
 	}
 	return nil, fmt.Errorf("%w: %s result from %q in stage %q", ErrUnsupported, stage.Kind, e.Role, job.Stage)
 }
@@ -152,6 +153,15 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: stage.OnChanges, At: e.At},
 	), nil
+}
+
+// escalated is the needs-human reason for an approver ESCALATE: a person
+// must be able to act on it, so it keeps every reason the approver gave.
+func escalated(role string, reasons []string) string {
+	if len(reasons) == 0 {
+		return fmt.Sprintf("%s escalated", role)
+	}
+	return fmt.Sprintf("%s escalated: %s", role, strings.Join(reasons, "; "))
 }
 
 // inOrder returns the roles in subset in the order the stage lists them, so

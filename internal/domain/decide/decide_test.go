@@ -118,6 +118,13 @@ type messageRow struct {
 	ev   domain.MessageReceived
 }
 
+type escalateRow struct {
+	name   string
+	round  int
+	ev     domain.ResultSubmitted
+	reason string
+}
+
 type reviewRow struct {
 	name    string
 	round   int
@@ -340,6 +347,47 @@ func TestDecide(t *testing.T) {
 			})
 		})
 
+		s.When("the approver escalates", func(s *specs.Spec) {
+			escalate := func(reasons ...string) domain.ResultSubmitted {
+				return result("approver", 1, domain.ApproveResult{Decision: domain.ApproveEscalate, Reasons: reasons})
+			}
+			rows := []escalateRow{
+				{"ESCALATE with two reasons in round 1 ends in needs-human with both", 1,
+					escalate("touches the billing schema", "no rollback plan"),
+					"approver escalated: touches the billing schema; no rollback plan"},
+				{"ESCALATE with one reason in round 2 ends in needs-human", 2,
+					escalate("the spec and the PR disagree"),
+					"approver escalated: the spec and the PR disagree"},
+				{"ESCALATE in the last round ends in needs-human", 3,
+					escalate("needs a product decision"),
+					"approver escalated: needs a product decision"},
+				{"ESCALATE with no reasons still ends in needs-human", 1, escalate(), "approver escalated"},
+			}
+			specs.Table(s, rows, func(r escalateRow) string { return r.name }, func(ctx *specs.Context, r escalateRow) {
+				job := newJob()
+				job.Stage, job.Round = "approve", r.round
+
+				evs, err := decide.Decide(job, r.ev, defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: r.reason, At: at(1)}})
+				after := decide.Apply(job, evs)
+				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
+				ctx.Expect(after.Round).ToEqual(r.round)
+			})
+
+			s.It("stops the happy path before merge", func(ctx *specs.Context) {
+				steps := happyPath()
+				job := walk(ctx, steps, len(steps)-1)
+
+				evs, err := decide.Decide(job, result("approver", 11, domain.ApproveResult{Decision: domain.ApproveEscalate, Reasons: []string{"too risky"}}), defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "approver escalated: too risky", At: at(11)}})
+				ctx.Expect(decide.Apply(job, evs).Stage).ToEqual(domain.StageNeedsHuman)
+			})
+		})
+
 		s.It("leaves an allowed person's message outside needs-human unsupported", func(ctx *specs.Context) {
 			job := newJob()
 			job.Stage = "review"
@@ -377,9 +425,9 @@ func TestDecide(t *testing.T) {
 
 		s.It("leaves the other outcomes of E01.4 unsupported", func(ctx *specs.Context) {
 			job := newJob()
-			job.Stage = "approve"
+			job.Stage = "build"
 
-			evs, err := decide.Decide(job, result("approver", 1, domain.ApproveResult{Decision: domain.ApproveEscalate}), defaultPipeline())
+			evs, err := decide.Decide(job, result("builder", 1, domain.BuildResult{Status: domain.BuildBlocked}), defaultPipeline())
 
 			ctx.Expect(err).To(specs.MatchError(decide.ErrUnsupported))
 			ctx.Expect(evs).To(specs.BeEmpty())
