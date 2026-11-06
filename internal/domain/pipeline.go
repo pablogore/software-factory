@@ -161,10 +161,10 @@ func (p Pipeline) Label() string {
 
 // Validate checks the flow rules of 04-roles.md against the roles loaded with
 // the pipeline: exactly one build stage, stage names are unique and not
-// reserved, every approve comes after some review, every review goes back to an
-// earlier stage, lists roles and allows at least one round and at most the
-// max_rounds cap when it sets max_rounds, every role a stage lists exists, and
-// every limit set is between 1 and its cap.
+// reserved, stages run build, then review, then exactly one approve, then only
+// tasks, every review goes back to an earlier stage, lists roles and allows at
+// least one round and at most the max_rounds cap when it sets max_rounds, every
+// role a stage lists exists, and every limit set is between 1 and its cap.
 func (p Pipeline) Validate(roles []Role) error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", p.Label(), err)
@@ -182,17 +182,8 @@ func (p Pipeline) Validate(roles []Role) error {
 	if builds != 1 {
 		return fmt.Errorf("%s: %w: %d build stages, want exactly 1", p.Label(), ErrInvalidValue, builds)
 	}
-	// An approve with no review before it would sign off unreviewed work.
-	reviewed := false
-	for _, st := range p.Stages {
-		if st.Kind == KindReview {
-			reviewed = true
-		}
-		if st.Kind == KindApprove && !reviewed {
-			return fmt.Errorf("stage %s: %w: approve stage has no review stage before it", st.Name, ErrInvalidValue)
-		}
-	}
 	seen := make(map[string]bool, len(p.Stages))
+	built, reviewed, approved := false, false, false
 	for _, st := range p.Stages {
 		// Checked before the kind: a YAML stage's kind is its name, and the
 		// reserved name is the real fault.
@@ -205,6 +196,19 @@ func (p Pipeline) Validate(roles []Role) error {
 		// A repeated name makes on_changes ambiguous.
 		if seen[st.Name] {
 			return fmt.Errorf("stage %s: %w: stage name is repeated", st.Name, ErrInvalidValue)
+		}
+		// Work must pass build, then review, then one approve; anything after
+		// the approve could change approved work, so only tasks may follow.
+		if err := checkOrder(st, built, reviewed, approved); err != nil {
+			return err
+		}
+		switch st.Kind {
+		case KindBuild:
+			built = true
+		case KindReview:
+			reviewed = true
+		case KindApprove:
+			approved = true
 		}
 		if st.Kind == KindReview {
 			// on_changes must point back, so the flow stays a DAG plus its review loops.
@@ -230,6 +234,28 @@ func (p Pipeline) Validate(roles []Role) error {
 			return fmt.Errorf("stage %s: %w: max_rounds %d, want at most %d", st.Name, ErrInvalidValue, *st.MaxRounds, PipelineCap("max_rounds"))
 		}
 		seen[st.Name] = true
+	}
+	if !approved {
+		return fmt.Errorf("%s: %w: approve stage", p.Label(), ErrMissingField)
+	}
+	return nil
+}
+
+// checkOrder names st when it breaks the stage order build, review, one
+// approve, then only tasks, given the kinds seen before it.
+func checkOrder(st Stage, built, reviewed, approved bool) error {
+	switch {
+	case approved && st.Kind == KindApprove:
+		return fmt.Errorf("stage %s: %w: second approve stage, want exactly 1", st.Name, ErrInvalidValue)
+	case approved && st.Kind == KindReview:
+		return fmt.Errorf("stage %s: %w: review stage comes after the approve stage", st.Name, ErrInvalidValue)
+	case approved && st.Kind != KindTask:
+		return fmt.Errorf("stage %s: %w: only task stages may come after the approve stage", st.Name, ErrInvalidValue)
+	case st.Kind == KindReview && !built:
+		return fmt.Errorf("stage %s: %w: review stage comes before the build stage", st.Name, ErrInvalidValue)
+	case st.Kind == KindApprove && !reviewed:
+		// An approve with no review before it would sign off unreviewed work.
+		return fmt.Errorf("stage %s: %w: approve stage has no review stage before it", st.Name, ErrInvalidValue)
 	}
 	return nil
 }

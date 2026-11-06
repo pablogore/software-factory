@@ -22,11 +22,12 @@ type stageResultRow struct {
 func TestLoadPipelineDefaultRoles(t *testing.T) {
 	specs.Describe(t, "LoadPipeline with stages that list no roles", func(s *specs.Spec) {
 		s.It("gives a roleless build the builder role without a role file", func(ctx *specs.Context) {
-			p, err := configyaml.LoadPipeline([]byte("name: p\nstages: [build]\n"), nil)
+			roles := loadedRoles(ctx)
+			p, err := configyaml.LoadPipeline([]byte(shortFlow), roles)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(p.Stages[0].Roles).ToEqual([]string{"builder"})
-			ctx.Expect(p.Roles).To(specs.BeEmpty())
+			ctx.Expect(p.Roles).ToEqual([]domain.Role{roles[3]})
 		})
 
 		s.It("keeps a default role's file when it is loaded", func(ctx *specs.Context) {

@@ -30,7 +30,10 @@ type pipelineRow struct {
 }
 
 func TestPipeline(t *testing.T) {
-	roles := []domain.Role{{Name: "reviewer-code", Kind: domain.KindReview, Prompt: "roles/reviewer-code.md"}}
+	roles := []domain.Role{
+		{Name: "reviewer-code", Kind: domain.KindReview, Prompt: "roles/reviewer-code.md"},
+		{Name: "scribe", Kind: domain.KindTask, Prompt: "roles/scribe.md"},
+	}
 
 	specs.Describe(t, "Pipeline.Validate", func(s *specs.Spec) {
 		s.It("accepts one build and a review that goes back to it", func(ctx *specs.Context) {
@@ -50,9 +53,12 @@ func TestPipeline(t *testing.T) {
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
 
-		s.It("accepts a pipeline with no approve stage", func(ctx *specs.Context) {
+		s.It("accepts task stages after the approve", func(ctx *specs.Context) {
 			p := validPipeline()
-			p.Stages = p.Stages[:3]
+			p.Stages = append(p.Stages,
+				domain.Stage{Name: "changelog", Kind: domain.KindTask, Roles: []string{"scribe"}},
+				domain.Stage{Name: "notify", Kind: domain.KindTask, Roles: []string{"scribe"}},
+			)
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
 
@@ -129,6 +135,34 @@ func TestPipeline(t *testing.T) {
 				{"names an approve stage that comes before review", func(p *domain.Pipeline) {
 					p.Stages[2], p.Stages[3] = p.Stages[3], p.Stages[2]
 				}, domain.ErrInvalidValue, "stage approve: invalid value: approve stage has no review stage before it"},
+				{"rejects a pipeline with no approve stage", func(p *domain.Pipeline) {
+					p.Stages = p.Stages[:3]
+				}, domain.ErrMissingField, "pipeline default: missing field: approve stage"},
+				{"names a second approve stage", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "approve2", Kind: domain.KindApprove})
+				}, domain.ErrInvalidValue, "stage approve2: invalid value: second approve stage, want exactly 1"},
+				{"names a review stage before the build", func(p *domain.Pipeline) {
+					p.Stages = []domain.Stage{
+						p.Stages[0],
+						{Name: "early-review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "intake"},
+						p.Stages[1], p.Stages[2], p.Stages[3],
+					}
+				}, domain.ErrInvalidValue, "stage early-review: invalid value: review stage comes before the build stage"},
+				{"names a review stage after the approve", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "late-review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "build"})
+				}, domain.ErrInvalidValue, "stage late-review: invalid value: review stage comes after the approve stage"},
+				{"names a spec stage after the approve", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "spec", Kind: domain.KindSpec})
+				}, domain.ErrInvalidValue, "stage spec: invalid value: only task stages may come after the approve stage"},
+				{"names an intake stage after the approve", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "intake2", Kind: domain.KindIntake})
+				}, domain.ErrInvalidValue, "stage intake2: invalid value: only task stages may come after the approve stage"},
+				{"names a non-task stage after a task that follows the approve", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages,
+						domain.Stage{Name: "changelog", Kind: domain.KindTask, Roles: []string{"scribe"}},
+						domain.Stage{Name: "spec", Kind: domain.KindSpec},
+					)
+				}, domain.ErrInvalidValue, "stage spec: invalid value: only task stages may come after the approve stage"},
 				{"names spec_rejections 0", func(p *domain.Pipeline) {
 					p.Limits.SpecRejections = ptr(0)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: spec_rejections 0, want at least 1"},
