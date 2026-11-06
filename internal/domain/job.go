@@ -1,5 +1,7 @@
 package domain
 
+import "fmt"
+
 // Stages a job can be in that are not pipeline stages: the deterministic gates
 // after a spec and after a build, the end of the pipeline, the wait for a
 // person (02-diagramas.md), the wait for an answer to a stage's question,
@@ -42,4 +44,21 @@ type Job struct {
 	Initiative     InitiativeID   `json:"initiative,omitempty"`      // the initiative this job is a slice of; empty for a job on its own
 	Origin         Origin         `json:"origin"`
 	Subscriptions  []Subscription `json:"subscriptions,omitempty"`
+}
+
+// Validate checks the invariants Apply keeps on every job Decide folds: a
+// wait stage (needs-human, needs-info, done) was entered at least once, so
+// WaitSeq is not 0, and a job in needs-human records one of HumanCauses. A
+// store refuses to save or load a job that breaks them. The error names the
+// field.
+func (j Job) Validate() error {
+	if j.WaitSeq == 0 && (j.Stage == StageNeedsHuman || j.Stage == StageNeedsInfo || j.Stage == StageDone) {
+		return fmt.Errorf("job %q: %w: wait_seq 0 in stage %q", j.ID, ErrInvalidValue, j.Stage)
+	}
+	if j.Stage == StageNeedsHuman || j.Cause != "" {
+		if err := j.Cause.Validate(); err != nil {
+			return fmt.Errorf("job %q: %w", j.ID, err)
+		}
+	}
+	return nil
 }
