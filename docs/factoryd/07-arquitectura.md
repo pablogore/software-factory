@@ -98,20 +98,22 @@ func Register(r *ops.Registry, h *Handler) {
 
 // slices/approve/handler.go
 type jobs interface {               // puerto angosto, del lado del consumidor
-    Load(ctx context.Context, id domain.JobID) (domain.Job, error)
-    Apply(ctx context.Context, j domain.Job, evs []domain.Event) error // estado + EventLog atómico
+    Load(ctx context.Context, id domain.JobID) (domain.Job, ports.Version, error)
+    // corre decide.Decide sobre el job guardado en v y guarda estado + sus eventos
+    // en una transacción; solo guarda eventos de Decide, nunca ev
+    Apply(ctx context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event) ([]domain.Event, ports.Version, error)
 }
 
 type Handler struct{ Jobs jobs; Pipelines pipelines; Clock ports.Clock }
 
 func (h *Handler) Handle(ctx context.Context, in ApproveInput) (ApproveOutput, error) {
-    j, err := h.Jobs.Load(ctx, in.JobID)
+    j, v, err := h.Jobs.Load(ctx, in.JobID)
     if err != nil { return ApproveOutput{}, err }
     p, err := h.Pipelines.For(j)
     if err != nil { return ApproveOutput{}, err }
-    evs, err := decide.Decide(j, domain.HumanApproved{By: in.Actor, At: h.Clock.Now()}, p)
-    if err != nil { return ApproveOutput{}, err } // ej. el job no está esperando aprobación
-    return ApproveOutput{Job: j.ID}, h.Jobs.Apply(ctx, j, evs)
+    ev := domain.HumanApproved{Job: j.ID, By: in.Actor, WaitSeq: in.WaitSeq, At: h.Clock.Now()}
+    _, _, err = h.Jobs.Apply(ctx, j.ID, v, p, ev) // ej. el job no está esperando aprobación, o ports.ErrVersionConflict
+    return ApproveOutput{Job: j.ID}, err
 }
 ```
 
