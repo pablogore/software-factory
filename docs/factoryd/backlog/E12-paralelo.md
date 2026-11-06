@@ -62,6 +62,7 @@ As a operador de la fábrica, I want que el mismo agente que diseñó el contrat
 2. Given todas las partes READY, when corre la integración, then se reanuda la misma sesión del arquitecto; si el agente no soporta reanudar, arranca uno nuevo con `contract.md` y los resúmenes de cada parte como traspaso.
 3. Given la integración, when el arquitecto mergea las partes, then solo escribe pegamento (wiring, imports, adaptaciones mínimas); una parte que no cumple el contrato vuelve a su builder como rework y no se reescribe.
 4. Given la integración terminada, when corre el gate completo y pasa, then el job sigue a los revisores como cualquier otro.
+5. Given `walking_skeleton: true` en la configuración o en el plan, when arranca el paralelo, then la primera parte recorre build, gate e integración contra el contrato antes de que arranquen las demás; si falla, el contrato se corrige antes de abrir el resto.
 
 ---
 STORY: Revisión del total, un solo merge y métricas de paralelo

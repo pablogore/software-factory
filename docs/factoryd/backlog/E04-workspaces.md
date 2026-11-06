@@ -85,3 +85,17 @@ As a operador de la fábrica, I want un comando que encuentre lo que quedó colg
 1. Given worktrees o ramas `factory/*` de jobs cerrados, dev servers en puertos de la fábrica o sesiones de agentes sin job, when se corre `factory doctor`, then los lista con el motivo.
 2. Given `factory doctor --fix`, when se corre, then los limpia, guardando antes un archivo de recuperación con las ramas y SHAs borrados.
 3. Given trabajo sin mergear en un worktree, when se corre `--fix`, then no se borra: se reporta.
+
+---
+STORY: Sensores de trazabilidad y de fuentes citadas
+DEPENDS: 3
+
+As a revisor humano, I want que el gate verifique que cada criterio de aceptación tiene un test que lo cubre y que todo lo que un agente cita existe, so that ni un criterio quede sin probar ni pase una referencia inventada.
+
+## Acceptance criteria
+1. Given una spec con criterios numerados, when corre el gate, then cada criterio tiene al menos un test que lo nombra (por ejemplo `// AC2` o el nombre del spec en go-specs); si falta alguno, falla nombrando el criterio.
+2. Given `build.md`, una review o la decisión del approver, when citan un SHA, un `archivo:línea`, un issue o un PR, then el gate verifica que exista (SHA en git, línea dentro del archivo, issue o PR en el tracker) y falla nombrando la cita que no existe.
+3. Given una cita a un SHA, when el agente la escribe, then debe venir de `git rev-parse` o del contexto del job; una cita no verificable cuenta como hallazgo.
+
+## Notes
+Idea tomada de los sensors de AI-DLC (traceability, claim-sources). Motivado por un agente que citó un SHA inventado en otro proyecto.

@@ -80,3 +80,18 @@ As a operador de la fábrica, I want agregar un rol nuevo con YAML y prompt, ver
 2. Given `factory config plan` con el rol nuevo, when se muestra, then incluye el impacto estimado: en cuántos de los últimos N jobs habría corrido según su `when` y el costo estimado.
 3. Given un rol en shadow con jobs corridos, when se pide `factory stats --role security-deep`, then se ven costo, hallazgos, hallazgos que terminaron en cambios reales y falsos positivos marcados por personas.
 4. Given el ejemplo de `04-roles.md`, when se agrega y se corre un job que toca `src/auth/`, then el rol corre; si el job no toca nada de su `when`, then queda salteado sin costo.
+
+---
+STORY: Perfiles de pipeline según el tipo de trabajo
+DEPENDS: 6, E05.2
+
+As a operador de la fábrica, I want que cada tipo de trabajo use un pipeline con la profundidad que necesita, so that un bugfix no pase por la misma ceremonia ni gaste lo mismo que un feature.
+
+## Acceptance criteria
+1. Given `pipelines/` con perfiles (al menos feature, bugfix, refactor, security-patch y poc), when intake acepta un issue, then propone el perfil según el tipo de trabajo y lo registra en el job con una línea de por qué.
+2. Given una etiqueta `profile:<nombre>` en el issue o `/ticket --profile <nombre>`, when llega, then se usa ese perfil sin que intake lo cambie.
+3. Given el perfil bugfix, when corre, then exige un test de regresión que falla antes del cambio y pasa después, y no corre los revisores de UX/UI salvo que el diff toque UI.
+4. Given `factory stats`, when se consulta, then costo, rondas y duración se ven también por perfil.
+
+## Notes
+Idea tomada de los workflow profiles de AI-DLC (awslabs/aidlc-workflows): cada perfil fija etapas, profundidad y estrategia de tests.

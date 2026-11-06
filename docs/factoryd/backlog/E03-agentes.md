@@ -63,6 +63,7 @@ As a agente que trabaja en un job, I want pedirle algo a una persona, correr los
 2. Given un builder, when llama a `run_gate`, then recibe el resultado de los checks deterministas del job sin poder cambiarlos.
 3. Given un builder o un revisor de UX/UI, when pide `dev_server`, then factoryd asigna un puerto libre del rango del job, levanta el comando configurado y lo mata al terminar la etapa.
 4. Given un agente sin MCP, when usa los equivalentes `factory worker ask-human|run-gate|dev-server`, then el efecto es idéntico.
+5. Given una pregunta de `ask_human`, when se crea, then cada pregunta lleva quién debería contestarla (producto o técnica) y el canal la manda a la persona configurada para ese rol, si hay; cualquiera de las permitidas puede igual responderla.
 
 ---
 STORY: Prompts de rol y mapeo rol → agente y modelo

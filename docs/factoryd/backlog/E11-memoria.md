@@ -35,3 +35,18 @@ As a operador de la fábrica, I want una lista corta de hechos operativos verifi
 1. Given `.factory/learnings.md`, when el approver cierra un job y encontró un hecho operativo nuevo y verificado, then lo propone con fecha y origen en el PR; el archivo nunca supera 100 líneas y se poda lo viejo.
 2. Given `context_pack`, when se arma, then incluye los learnings.
 3. Given 10 jobs antes y 10 después, when se pide `factory stats --rediscovery`, then se comparan tokens por agente y comandos de exploración repetidos.
+
+---
+STORY: Aprender de las correcciones humanas
+DEPENDS: 2, E05.6
+
+As a persona que corrige a la fábrica, I want que una corrección que doy una vez se proponga como regla para que no tenga que repetirla, so that la fábrica aprenda de mí y no solo de lo que el approver deduce.
+
+## Acceptance criteria
+1. Given un feedback de rework desde needs-human, when el job termina, then la fábrica propone como mucho una regla corta derivada de esa corrección y pregunta en el canal de origen si guardarla; sin respuesta, no guarda nada.
+2. Given que la persona confirma, when se guarda, then va como cambio al repo de configuración (por PR, como cualquier cambio de configuración) en la capa que elija: org, team, proyecto o rol.
+3. Given reglas en capas, when se arma `context_pack`, then se incluyen todas las que aplican al repo y al rol, sin que una pise a otra; dos reglas que se contradicen se detectan al confirmar la nueva.
+4. Given un job sin correcciones humanas, when termina, then no se pregunta nada.
+
+## Notes
+Idea tomada del learning loop de AI-DLC: una corrección confirmada en el gate queda como regla en capas org → team → project → phase.
