@@ -1,6 +1,6 @@
 # Backlog de factoryd
 
-El backlog completo de la nueva arquitectura, en el formato del product-owner de la fábrica (`EPIC:` / `STORY:` / `DEPENDS:`), cargado en GitHub como 11 épicas (#12–#22) y 62 historias (#23–#83 y #103), todas con la etiqueta `factoryd`. La fábrica sumó #97 (seguimiento de E01.2) por su cuenta.
+El backlog completo de la nueva arquitectura, en el formato del product-owner de la fábrica (`EPIC:` / `STORY:` / `DEPENDS:`), cargado en GitHub como 12 épicas (#12–#22 y #110) y 67 historias (#23–#83, #103 y #111–#115), todas con la etiqueta `factoryd`. La fábrica sumó #97 (seguimiento de E01.2) por su cuenta.
 
 | Archivo | Épica | Issue |
 |---|---|---|
@@ -15,6 +15,7 @@ El backlog completo de la nueva arquitectura, en el formato del product-owner de
 | `E09-observabilidad.md` | Observabilidad de solo lectura: kanban en TUI y desktop | #20 |
 | `E10-cierre.md` | Extensiones, migración y corte de la fábrica vieja | #21 |
 | `E11-memoria.md` | Memoria: decisiones y aprendizajes | #22 |
+| `E12-paralelo.md` | Una historia en paralelo: arquitecto, builders e integración | #110 |
 
 - `issues.json`: id de cada historia (ej. `E05.3`) → número de issue.
 - `plan.md`: orden de arranque (`ORDER`) y dependencias (`AFTER`) para la cola de la fábrica.
