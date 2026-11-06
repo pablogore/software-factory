@@ -8,19 +8,22 @@ import (
 	"github.com/pablogore/software-factory/internal/domain/decide"
 )
 
-var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageNeedsHuman}
+var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageNeedsHuman, domain.StageStopped}
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
-// has not answered in any fuzzed job, a failing gate and specgate, a person's approval and
-// messages from every kind of author.
+// has not answered in any fuzzed job, a failing gate and specgate, a specgate
+// rejection count, a person's approval, messages from every kind of author and
+// stop requests with and without a name.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
 		evs = append(evs, st.ev)
 	}
-	return append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
+	return append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)},
+		domain.SpecRejected{Job: jobID, Rejections: 1, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
-		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1))
+		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
+		stop("pablogore", 1), stop("", 1))
 }
 
 // FuzzDecide checks that the same input always gives the same output, that
@@ -59,6 +62,37 @@ func FuzzDecide(f *testing.F) {
 		}
 		if after := decide.Apply(job, first); after.Round > 3 {
 			t.Fatalf("round %d past max_rounds 3", after.Round)
+		}
+	})
+}
+
+// FuzzStopped checks that a stopped job never moves: whatever the event,
+// including another stop or a message with any author, text or mark, Decide
+// returns no events and the job stays as it was.
+func FuzzStopped(f *testing.F) {
+	for i := range fuzzEvents() {
+		f.Add(uint8(i), uint8(0), uint8(1), "pablogore", "rename the flag", true)
+	}
+	f.Add(uint8(0), uint8(3), uint8(2), "", "", false)
+	f.Fuzz(func(t *testing.T, event, done, round uint8, by, text string, allowed bool) {
+		job := newJob()
+		job.Stage, job.Round = domain.StageStopped, 1+int(round)%3
+		job.Passed = append([]string(nil), reviewers[:int(done)%len(reviewers)]...)
+		before := newJob()
+		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
+		kinds := []domain.AuthorKind{domain.AuthorPerson, domain.AuthorBot, domain.AuthorCI, ""}
+		m := domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: by,
+			AuthorKind: kinds[int(event)%len(kinds)], Allowed: allowed, Text: text, At: at(1)}
+		evs := append(fuzzEvents(), stop(by, 1), domain.HumanApproved{Job: jobID, By: by, At: at(1)}, m)
+		ev := evs[int(event)%len(evs)]
+
+		out, _ := decide.Decide(job, ev, defaultPipeline())
+
+		if len(out) > 0 {
+			t.Fatalf("stopped job moved on %s: %v", ev.EventName(), out)
+		}
+		if !reflect.DeepEqual(job, before) || !reflect.DeepEqual(decide.Apply(job, out), before) {
+			t.Fatalf("stopped job changed on %s: %+v, was %+v", ev.EventName(), job, before)
 		}
 	})
 }
