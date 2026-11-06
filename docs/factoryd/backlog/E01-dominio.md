@@ -99,3 +99,18 @@ As a operador de la fábrica, I want que un issue grande se trabaje como iniciat
 
 ## Notes
 Leer los tests con `git show origin/main:factory/tests/<archivo>`. Los arreglos recientes de iniciativas (Refs en vez de Closes, direction sobre PR sin mergear, checkpoint sin slot, needs-info vuelve a `info_from`) están cubiertos por esos tests.
+
+---
+STORY: Decide maneja REJECT, BLOCKED y exige quién actúa en toda acción humana
+DEPENDS: 6
+
+As a operador de la fábrica, I want que ningún resultado válido de un agente quede sin decidir y que toda acción humana diga quién la hizo, so that ningún job quede trabado por un caso no contemplado ni avance por una acción anónima.
+
+## Acceptance criteria
+1. Given un job en intake, when llega un resultado REJECT, then pasa a `rejected` con el motivo de intake; un job rechazado no se mueve más, salvo un `[direction]` permitido si ya está soportado.
+2. Given un job en build, when el builder devuelve BLOCKED, then el job pasa a triage (o a needs-human si el pipeline no tiene triage) con el motivo del builder; nunca devuelve `ErrUnsupported`.
+3. Given `HumanApproved`, `ReworkRequested`, `InfoAnswered` o cualquier otra acción humana sin `By`, when se decide, then Decide devuelve `ErrMissingField` y no cambia nada (como ya hace `StopRequested`).
+4. Given todos los kinds y sus resultados válidos, when se recorren en una tabla, then ninguno devuelve `ErrUnsupported` salvo los de `task`, que quedan explícitamente para #76; el comentario de `ErrUnsupported` refleja eso.
+
+## Notes
+Huecos encontrados al analizar la rama el 2026-11-06 (`decide.go`: REJECT y BLOCKED caen en `ErrUnsupported`; `HumanApproved` no valida `By`).

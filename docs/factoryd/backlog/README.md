@@ -1,6 +1,6 @@
 # Backlog de factoryd
 
-El backlog completo de la nueva arquitectura, en el formato del product-owner de la fábrica (`EPIC:` / `STORY:` / `DEPENDS:`), cargado en GitHub como 12 épicas (#12–#22 y #110) y 67 historias (#23–#83, #103 y #111–#115), todas con la etiqueta `factoryd`. La fábrica sumó #97 (seguimiento de E01.2) por su cuenta.
+El backlog completo de la nueva arquitectura, en el formato del product-owner de la fábrica (`EPIC:` / `STORY:` / `DEPENDS:`), cargado en GitHub como 13 épicas (#12–#22, #110 y #117) y 74 historias (#23–#83, #103, #111–#116 y #118–#123), todas con la etiqueta `factoryd`. La fábrica sumó #97 (seguimiento de E01.2) por su cuenta.
 
 | Archivo | Épica | Issue |
 |---|---|---|
@@ -16,12 +16,13 @@ El backlog completo de la nueva arquitectura, en el formato del product-owner de
 | `E10-cierre.md` | Extensiones, migración y corte de la fábrica vieja | #21 |
 | `E11-memoria.md` | Memoria: decisiones y aprendizajes | #22 |
 | `E12-paralelo.md` | Una historia en paralelo: arquitecto, builders e integración | #110 |
+| `E13-calidad.md` | Confianza y operación: replays, evals, seguridad, dogfooding y releases | #117 |
 
 - `issues.json`: id de cada historia (ej. `E05.3`) → número de issue.
 - `plan.md`: orden de arranque (`ORDER`) y dependencias (`AFTER`) para la cola de la fábrica.
 - `file_issues.py`: el script que cargó todo (`check` para validar los archivos).
 
-Solo las historias de E01 (#23–#28) tienen la etiqueta `factory` (en cola). El resto está en `factory:draft`: se encolan cuando se planifica el sprint (product-owner) o agregando la etiqueta `factory` a mano.
+Solo las historias de E01 (#23–#28 y #116) tienen la etiqueta `factory` (en cola). El resto está en `factory:draft`: se encolan cuando se planifica el sprint (product-owner) o agregando la etiqueta `factory` a mano.
 
 ## Cómo poner a trabajar a la fábrica actual sobre esta rama
 
@@ -48,3 +49,6 @@ La fábrica actual (en `main`) corre desde tu checkout de `main` y crea los work
 5. Arrancar: `/factory run`.
 
 Cuando termine E01, encolar la épica siguiente (o pedirle al product-owner que planifique el sprint con el backlog).
+
+## Issues de la fábrica actual
+Los cambios para la fábrica que vive en `main` llevan la etiqueta `legacy-factory` y no `factory`, para que la fábrica no los construya en esta rama: #124 (intake lee la rama base) y #125 (slices independientes en paralelo).
