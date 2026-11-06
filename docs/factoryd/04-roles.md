@@ -52,6 +52,30 @@ stages:
 ```
 Y en la fábrica (`factory.yaml` o `.factory/` del repo): `pipeline: default`. Otra fábrica puede usar `pipeline: backend` sin ux/ui.
 
+### Límites de reintento (`limits`)
+Un pipeline puede fijar cuántas veces se reintenta cada cosa antes de que el job pase a una persona. Todos son opcionales y, si se ponen, valen al menos 1; una clave desconocida en `limits` es un error.
+
+```yaml
+name: default
+limits:
+  spec_rejections: 3   # rechazos de specgate antes de needs-human (por defecto 3)
+  human_reworks: 1     # retrabajos que una persona puede pedir desde needs-human (sin límite si no se pone)
+  triage_retries: 1    # reintentos que el triage puede dar a un job trabado
+  max_rounds: 3        # rondas de un review que no fija las suyas (por defecto 3)
+stages:
+  - intake
+  - spec
+  - build
+  - review:
+      parallel: [reviewer-code]
+      on_changes: build    # sin max_rounds: usa limits.max_rounds
+  - approve
+```
+
+- **Rondas:** un review usa su propio `max_rounds`; si no lo tiene, `limits.max_rounds`; si tampoco, 3. Un gate fallido gasta una ronda igual que un CHANGES.
+- **`human_reworks` nunca se reinicia.** Cuenta solo el feedback desde needs-human; reabrir un job mergeado (un comentario en done) no cuenta. Cuando se agota, en needs-human solo se puede aprobar, rechazar o detener.
+- **Un rework humano no da rondas nuevas:** el job vuelve a build en la misma ronda. Si esa era la última, un nuevo CHANGES lo devuelve a needs-human.
+
 ## Modos de un rol nuevo (para meterlo sin riesgo)
 1. **shadow**: corre y registra hallazgos, pero nadie los ve en el PR ni frenan nada. Sirve para medir costo y si encuentra cosas útiles.
 2. **advisory**: sus hallazgos se publican en el PR y los lee el approver, pero un CHANGES no bloquea.
@@ -61,7 +85,8 @@ Las métricas por rol (costo, hallazgos, cuántos terminaron en cambios reales, 
 ## Validación (`factory config validate` / `plan`)
 - Pipeline es un DAG; hay exactamente un `build` por job; todo `review` tiene a dónde volver.
 - Los nombres de etapa son únicos.
-- Todo `review` lista al menos un rol (`parallel`) y tiene `max_rounds` >= 1.
+- Todo `review` lista al menos un rol (`parallel`); su `max_rounds`, si lo fija, es >= 1.
+- Los valores de `limits` que se fijan son >= 1, y una clave desconocida en `limits` es un error.
 - Ninguna etapa, sea del kind que sea, se llama como un estado del job: `stopped`, `merge`, `needs-human`, `needs-info`, `done`, `rejected`. El error nombra la etapa.
 - El schema del kind existe y el prompt no está vacío.
 - El agente y el modelo existen en la config; las tools pedidas están permitidas para ese kind.
