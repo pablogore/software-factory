@@ -350,12 +350,16 @@ func overridden(job domain.Job, e domain.OverrideRequested) ([]domain.Event, err
 }
 
 // limitOverridden records a person's change of one limit for this job, once
-// the name and value pass the same checks as the pipeline's limits block. It
-// does not look at the cause: the job keeps waiting for the same reason.
+// the name and value pass the same checks as the pipeline's limits block and
+// the value is within the override's cap, so no override lets a job loop for
+// long. It does not look at the cause: the job keeps waiting for the same reason.
 func limitOverridden(job domain.Job, e domain.LimitOverrideRequested) ([]domain.Event, error) {
 	n, unlimited, err := domain.ParseLimit(e.Limit, e.Value)
 	if err != nil {
 		return nil, fmt.Errorf("decide: limit override: %w", err)
+	}
+	if !unlimited && n > domain.OverrideCap(e.Limit) {
+		return nil, fmt.Errorf("decide: limit override: %w: %s %q, want at most %d", domain.ErrInvalidValue, e.Limit, e.Value, domain.OverrideCap(e.Limit))
 	}
 	return []domain.Event{domain.LimitOverridden{Job: job.ID, By: e.By, Limit: e.Limit, Value: n, Unlimited: unlimited, At: e.At}}, nil
 }

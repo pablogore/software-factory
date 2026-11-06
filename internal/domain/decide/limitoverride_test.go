@@ -158,6 +158,10 @@ func TestLimitOverride(t *testing.T) {
 				{"records who lifted human_reworks", "human_reworks", "unlimited", domain.LimitOverridden{Job: jobID, By: "pablogore", Limit: "human_reworks", Unlimited: true, At: at(2)}},
 				{"records who set triage_retries and to what", "triage_retries", "2", domain.LimitOverridden{Job: jobID, By: "pablogore", Limit: "triage_retries", Value: 2, At: at(2)}},
 				{"records who set max_rounds and to what", "max_rounds", "1", domain.LimitOverridden{Job: jobID, By: "pablogore", Limit: "max_rounds", Value: 1, At: at(2)}},
+				{"records who set spec_rejections to its cap of 20", "spec_rejections", "20", domain.LimitOverridden{Job: jobID, By: "pablogore", Limit: "spec_rejections", Value: 20, At: at(2)}},
+				{"records who set human_reworks to its cap of 20", "human_reworks", "20", domain.LimitOverridden{Job: jobID, By: "pablogore", Limit: "human_reworks", Value: 20, At: at(2)}},
+				{"records who set triage_retries to its cap of 5", "triage_retries", "5", domain.LimitOverridden{Job: jobID, By: "pablogore", Limit: "triage_retries", Value: 5, At: at(2)}},
+				{"records who set max_rounds to its cap of 20", "max_rounds", "20", domain.LimitOverridden{Job: jobID, By: "pablogore", Limit: "max_rounds", Value: 20, At: at(2)}},
 			}
 			specs.Table(s, rows, func(r limitSetRow) string { return r.name }, func(ctx *specs.Context, r limitSetRow) {
 				job := waitingFor(ctx, domain.CauseBlocked)
@@ -177,6 +181,11 @@ func TestLimitOverride(t *testing.T) {
 				{"refuses a value that is not a whole number", "human_reworks", "2.5", domain.ErrInvalidValue, `decide: limit override: invalid value: human_reworks "2.5", want a whole number of 1 or more or unlimited`},
 				{"refuses an empty value", "human_reworks", "", domain.ErrInvalidValue, `decide: limit override: invalid value: human_reworks "", want a whole number of 1 or more or unlimited`},
 				{"refuses unlimited on a limit other than human_reworks", "max_rounds", "unlimited", domain.ErrInvalidValue, `decide: limit override: invalid value: max_rounds "unlimited", want a whole number of 1 or more`},
+				{"refuses spec_rejections above its cap of 20", "spec_rejections", "21", domain.ErrInvalidValue, `decide: limit override: invalid value: spec_rejections "21", want at most 20`},
+				{"refuses human_reworks above its cap of 20", "human_reworks", "21", domain.ErrInvalidValue, `decide: limit override: invalid value: human_reworks "21", want at most 20`},
+				{"refuses triage_retries above its cap of 5", "triage_retries", "6", domain.ErrInvalidValue, `decide: limit override: invalid value: triage_retries "6", want at most 5`},
+				{"refuses max_rounds above its cap of 20", "max_rounds", "21", domain.ErrInvalidValue, `decide: limit override: invalid value: max_rounds "21", want at most 20`},
+				{"refuses a value far above the cap", "max_rounds", "1000000", domain.ErrInvalidValue, `decide: limit override: invalid value: max_rounds "1000000", want at most 20`},
 				{"refuses unlimited written another way", "human_reworks", "Unlimited", domain.ErrInvalidValue, `decide: limit override: invalid value: human_reworks "Unlimited", want a whole number of 1 or more or unlimited`},
 			}
 			specs.Table(s, bad, func(r badLimitRow) string { return r.name }, func(ctx *specs.Context, r badLimitRow) {
