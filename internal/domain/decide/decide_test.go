@@ -525,6 +525,10 @@ func eventTime(ev domain.Event) time.Time {
 		return e.At
 	case domain.ReworkRequested:
 		return e.At
+	case domain.NeedsInfo:
+		return e.At
+	case domain.InfoAnswered:
+		return e.At
 	}
 	return time.Time{}
 }

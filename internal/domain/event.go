@@ -170,6 +170,20 @@ func (NeedsHuman) EventName() string { return "NeedsHuman" }
 // JobID implements Event.
 func (e NeedsHuman) JobID() JobID { return e.Job }
 
+// NeedsInfo records that the job waits for a person to answer a question
+// from stage From, which gets the answer.
+type NeedsInfo struct {
+	Job  JobID     `json:"job"`
+	From string    `json:"from"`
+	At   time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (NeedsInfo) EventName() string { return "NeedsInfo" }
+
+// JobID implements Event.
+func (e NeedsInfo) JobID() JobID { return e.Job }
+
 // MergeRequested records that the job finished its pipeline and asks to merge.
 type MergeRequested struct {
 	Job JobID     `json:"job"`
@@ -238,6 +252,21 @@ func (ReworkRequested) EventName() string { return "ReworkRequested" }
 
 // JobID implements Event.
 func (e ReworkRequested) JobID() JobID { return e.Job }
+
+// InfoAnswered records that a person answered the job's question; the stage
+// that asked gets Text as input.
+type InfoAnswered struct {
+	Job  JobID     `json:"job"`
+	By   string    `json:"by"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (InfoAnswered) EventName() string { return "InfoAnswered" }
+
+// JobID implements Event.
+func (e InfoAnswered) JobID() JobID { return e.Job }
 
 // StopRequested asks to stop the job for good. Like HumanApproved, the event
 // source vouches that an allowed person sent it; By names that person.

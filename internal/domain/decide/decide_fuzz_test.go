@@ -8,13 +8,13 @@ import (
 	"github.com/pablogore/software-factory/internal/domain/decide"
 )
 
-var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageStopped}
+var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped}
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
 // has not answered in any fuzzed job, a failing gate and specgate, a specgate
-// rejection count, a person's approval, messages from every kind of author,
-// stop requests with and without a name, a completed merge and every missing
-// or nil event of nilEvents.
+// rejection count, a person's approval, an intake NEEDS_INFO, messages (and
+// so answers) from every kind of author, stop requests with and without a
+// name, a completed merge and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
@@ -24,7 +24,7 @@ func fuzzEvents() []domain.Event {
 		domain.SpecRejected{Job: jobID, Rejections: 1, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
-		stop("pablogore", 1), stop("", 1), merged(1))
+		stop("pablogore", 1), stop("", 1), merged(1), needsInfo())
 	for _, r := range nilEvents() {
 		evs = append(evs, r.ev)
 	}
@@ -34,8 +34,9 @@ func fuzzEvents() []domain.Event {
 // FuzzDecide checks that the same input always gives the same output, that
 // Decide never changes the job it receives and that no round goes past the
 // review stage's max_rounds, that a message not from an allowed person
-// changes nothing and is not an error, and that a missing or nil event is an
-// error, never a panic.
+// changes nothing and is not an error, that a job a decision moves records an
+// asker exactly when it lands in needs-info, and that a missing or nil event
+// is an error, never a panic.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(i), uint8(0), uint8(1))
@@ -46,8 +47,10 @@ func FuzzDecide(f *testing.F) {
 		job.Stage = fuzzStages[int(stage)%len(fuzzStages)]
 		job.Round = 1 + int(round)%3
 		job.Passed = append([]string(nil), reviewers[:int(done)%len(reviewers)]...)
+		job.InfoFrom = fuzzAsker(job.Stage, done)
 		before := newJob()
 		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
+		before.InfoFrom = job.InfoFrom
 		evs := fuzzEvents()
 		ev := evs[int(event)%len(evs)]
 
@@ -69,15 +72,20 @@ func FuzzDecide(f *testing.F) {
 		if missing(ev) && err1 == nil {
 			t.Fatalf("missing event %#v accepted in stage %q", ev, job.Stage)
 		}
-		if after := decide.Apply(job, first); after.Round > 3 {
+		after := decide.Apply(job, first)
+		if after.Round > 3 {
 			t.Fatalf("round %d past max_rounds 3", after.Round)
+		}
+		if len(first) > 0 && (after.Stage == domain.StageNeedsInfo) != (after.InfoFrom != "") {
+			t.Fatalf("stage %q with asker %q after %s", after.Stage, after.InfoFrom, ev.EventName())
 		}
 	})
 }
 
 // FuzzStopped checks that a stopped job never moves: whatever the event,
-// including another stop or a message with any author, text or mark, Decide
-// returns no events and the job stays as it was.
+// including another stop, an answer or a message with any author, text or
+// mark, Decide returns no events and the job stays as it was, even with an
+// asker left recorded on it.
 func FuzzStopped(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(0), uint8(1), "pablogore", "rename the flag", true)
@@ -87,8 +95,10 @@ func FuzzStopped(f *testing.F) {
 		job := newJob()
 		job.Stage, job.Round = domain.StageStopped, 1+int(round)%3
 		job.Passed = append([]string(nil), reviewers[:int(done)%len(reviewers)]...)
+		job.InfoFrom = fuzzAsker(domain.StageNeedsInfo, done)
 		before := newJob()
 		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
+		before.InfoFrom = job.InfoFrom
 		kinds := []domain.AuthorKind{domain.AuthorPerson, domain.AuthorBot, domain.AuthorCI, ""}
 		m := domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: by,
 			AuthorKind: kinds[int(event)%len(kinds)], Allowed: allowed, Text: text, At: at(1)}
@@ -104,6 +114,16 @@ func FuzzStopped(f *testing.F) {
 			t.Fatalf("stopped job changed on %s: %+v, was %+v", ev.EventName(), job, before)
 		}
 	})
+}
+
+// fuzzAsker is the stage recorded as asking for a job in stage: one of the
+// pipeline's stages or an empty or bogus one in needs-info, none elsewhere.
+func fuzzAsker(stage string, n uint8) string {
+	if stage != domain.StageNeedsInfo {
+		return ""
+	}
+	askers := []string{"intake", "spec", "", domain.StageDone}
+	return askers[int(n)%len(askers)]
 }
 
 // missing reports whether ev is one of nilEvents: nil, a nil pointer or a

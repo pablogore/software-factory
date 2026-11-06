@@ -2,14 +2,16 @@ package domain
 
 // Stages a job can be in that are not pipeline stages: the deterministic gates
 // after a spec and after a build, the end of the pipeline, the wait for a
-// person (02-diagramas.md), the merged job, which a person's comment can
-// reopen, and the stop a person asked for, which is final.
+// person (02-diagramas.md), the wait for an answer to a stage's question,
+// the merged job, which a person's comment can reopen, and the stop a person
+// asked for, which is final.
 const (
 	StageSpecgate   = "specgate"
 	StageGate       = "gate"
 	StageMerge      = "merge"
 	StageDone       = "done"
 	StageNeedsHuman = "needs-human"
+	StageNeedsInfo  = "needs-info"
 	StageStopped    = "stopped"
 )
 
@@ -25,6 +27,7 @@ type Job struct {
 	Stage          string         `json:"stage"`
 	Round          int            `json:"round"`                     // review round, from 1
 	SpecRejections int            `json:"spec_rejections,omitempty"` // times specgate rejected the spec
+	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
 	Reviewers      []string       `json:"reviewers,omitempty"`       // review roles that run in this round; empty runs every role of the stage

@@ -16,9 +16,9 @@ import (
 var ErrIllegalTransition = errors.New("illegal transition")
 
 // ErrUnsupported means the result or message is legal in this stage but its
-// outcome (NEEDS_INFO, REJECT, BLOCKED, task results, a person's
-// message outside needs-human and done) is not decided yet; E01.4 and E01.5
-// add it.
+// outcome (REJECT, BLOCKED, task results, a person's message outside
+// needs-human, needs-info and done) is not decided yet; E01.4 and E01.5 add
+// it.
 var ErrUnsupported = errors.New("unsupported result")
 
 // ErrOtherJob means the event is addressed to a different job than the one
@@ -80,7 +80,9 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 	for _, ev := range evs {
 		switch e := ev.(type) {
 		case domain.StageEntered:
-			job.Stage, job.Passed, job.Changes = e.Stage, nil, nil
+			job.Stage, job.InfoFrom, job.Passed, job.Changes = e.Stage, "", nil, nil
+		case domain.NeedsInfo:
+			job.Stage, job.InfoFrom, job.Passed, job.Changes = domain.StageNeedsInfo, e.From, nil, nil
 		case domain.ReviewPassed:
 			job.Passed = append(slices.Clip(job.Passed), e.Role)
 		case domain.ChangesRequested:
@@ -90,11 +92,11 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.RoundStarted:
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
-			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, nil, nil, nil
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
 		case domain.MergeRequested:
-			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, nil, nil, nil
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", nil, nil, nil
 		case domain.JobStopped:
-			job.Stage, job.Reviewers, job.Passed, job.Changes = domain.StageStopped, nil, nil, nil
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageStopped, "", nil, nil, nil
 		}
 	}
 	return job
@@ -115,8 +117,11 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 
 	switch r := e.Result.(type) {
 	case domain.IntakeResult:
-		if r.Decision == domain.IntakeAccept {
+		switch r.Decision {
+		case domain.IntakeAccept:
 			return next(job, p, i, e.At), nil
+		case domain.IntakeNeedsInfo:
+			return []domain.Event{domain.NeedsInfo{Job: job.ID, From: stage.Name, At: e.At}}, nil
 		}
 	case domain.SpecResult:
 		return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageSpecgate, At: e.At}}, nil
@@ -142,11 +147,15 @@ func ignored(e domain.MessageReceived) bool {
 	return !e.Allowed || e.AuthorKind != domain.AuthorPerson
 }
 
-// decideMessage handles an allowed person's message. In needs-human it is
+// decideMessage handles an allowed person's message. In needs-info it is the
+// answer, so the job goes back to the stage that asked. In needs-human it is
 // rework feedback, and in done it reopens the merged job: either way the job
 // goes back to the build stage in the same round, with the text as input, so
 // a reopened job past its last round still needs a person after CHANGES.
 func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
+	if job.Stage == domain.StageNeedsInfo {
+		return answered(job, e, p)
+	}
 	if job.Stage != domain.StageNeedsHuman && job.Stage != domain.StageDone {
 		return nil, fmt.Errorf("%w: message from %q in stage %q", ErrUnsupported, e.Author, job.Stage)
 	}
@@ -157,6 +166,19 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 	return []domain.Event{
 		domain.ReworkRequested{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At},
+	}, nil
+}
+
+// answered sends a job in needs-info back to the stage recorded as the one
+// that asked, with the answer as its input. The recorded stage must be one of
+// the pipeline's, so a corrupt job never jumps to a gate or a terminal state.
+func answered(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
+	if !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.InfoFrom }) {
+		return nil, fmt.Errorf("decide: needs-info asked by %q, not a stage of pipeline %q: %w", job.InfoFrom, p.Name, domain.ErrInvalidValue)
+	}
+	return []domain.Event{
+		domain.InfoAnswered{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
+		domain.StageEntered{Job: job.ID, Stage: job.InfoFrom, At: e.At},
 	}, nil
 }
 
