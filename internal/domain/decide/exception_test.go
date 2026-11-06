@@ -21,7 +21,7 @@ func waitingException(minute int) domain.NeedsHuman {
 // exception and waits for a person.
 func waitingJob() domain.Job {
 	job := atSpecgate(1)
-	job.Stage, job.SpecException, job.Cause = domain.StageNeedsHuman, true, domain.CauseSpecException
+	job.Stage, job.SpecException, job.Cause, job.WaitSeq = domain.StageNeedsHuman, true, domain.CauseSpecException, 1
 	return job
 }
 
@@ -57,7 +57,7 @@ func TestDecideSpecException(t *testing.T) {
 			s.It("goes on to build on a person's OK, with the spec and the count as they were", func(ctx *specs.Context) {
 				job := waitingJob()
 
-				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, defaultPipeline())
+				evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}, defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(evs).ToEqual([]domain.Event{entered("build", 2)})
@@ -127,7 +127,7 @@ func TestDecideSpecException(t *testing.T) {
 				p := defaultPipeline()
 				p.Stages = p.Stages[2:]
 
-				evs, err := decide.Decide(waitingJob(), domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, p)
+				evs, err := decide.Decide(waitingJob(), domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}, p)
 
 				ctx.Expect(err).To(specs.MatchError(decide.ErrIllegalTransition))
 				ctx.Expect(evs).To(specs.BeEmpty())
@@ -165,7 +165,7 @@ func TestDecideSpecException(t *testing.T) {
 			ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
 			ctx.Expect(job.SpecException).To(specs.BeTrue())
 
-			step(domain.HumanApproved{Job: jobID, By: "pablogore", At: at(6)})
+			step(domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 2, At: at(6)})
 
 			ctx.Expect(job.Stage).ToEqual("build")
 			ctx.Expect(job.SpecRejections).ToEqual(0)
@@ -174,9 +174,9 @@ func TestDecideSpecException(t *testing.T) {
 
 		s.It("still requests the merge on a person's OK after an approver ESCALATE", func(ctx *specs.Context) {
 			job := atSpecgate(1)
-			job.Stage, job.Cause = domain.StageNeedsHuman, domain.CauseEscalated
+			job.Stage, job.Cause, job.WaitSeq = domain.StageNeedsHuman, domain.CauseEscalated, 1
 
-			evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}, defaultPipeline())
+			evs, err := decide.Decide(job, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}, defaultPipeline())
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(evs).ToEqual([]domain.Event{domain.MergeRequested{Job: jobID, At: at(2)}})

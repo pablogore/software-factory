@@ -17,7 +17,7 @@ type needsHumanRow struct {
 // specEscalated is a job that specgate's third rejection put in needs-human.
 func specEscalated() domain.Job {
 	job := newJob()
-	job.Stage, job.SpecRejections, job.SpecEscalated, job.Cause = domain.StageNeedsHuman, 3, true, domain.CauseSpecEscalated
+	job.Stage, job.SpecRejections, job.SpecEscalated, job.Cause, job.WaitSeq = domain.StageNeedsHuman, 3, true, domain.CauseSpecEscalated, 1
 	job.Reason = "spec rejected by specgate 3 times"
 	return job
 }
@@ -114,7 +114,7 @@ func TestDecideFeedbackAfterSpecgate(t *testing.T) {
 			}
 			specs.Table(s, rows, func(r needsHumanRow) string { return r.name }, func(ctx *specs.Context, r needsHumanRow) {
 				job := newJob()
-				job.Stage, job.Round, job.SpecRejections = domain.StageNeedsHuman, 3, r.rejected
+				job.Stage, job.Round, job.SpecRejections, job.WaitSeq = domain.StageNeedsHuman, 3, r.rejected, 1
 
 				evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 1), defaultPipeline())
 

@@ -128,7 +128,7 @@ func TestReject(t *testing.T) {
 				{"refuses a builder READY", result("builder", 2, domain.BuildResult{Status: domain.BuildReady})},
 				{"refuses a specgate OK", domain.SpecgatePassed{Job: jobID, At: at(2)}},
 				{"refuses a gate failure", domain.GateFailed{Job: jobID, At: at(2)}},
-				{"refuses a person's approval", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}},
+				{"refuses a person's approval", domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}},
 				{"refuses a completed merge", merged(2)},
 				{"refuses a stop request", stop("pablogore", 2)},
 				{"refuses an allowed person's message", message(domain.AuthorPerson, true, 2)},

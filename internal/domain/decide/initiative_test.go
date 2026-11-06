@@ -91,7 +91,7 @@ func TestInitiative(t *testing.T) {
 				})
 				ctx.Expect(in.Stage).ToEqual(domain.InitiativeCheckpoint)
 
-				in = replan(ctx, in, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(3)}, []domain.Event{nextSlice(3)})
+				in = replan(ctx, in, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(3)}, []domain.Event{nextSlice(3)})
 				ctx.Expect(in.Stage).ToEqual(domain.InitiativeActive)
 				ctx.Expect(job.Stage).ToEqual(domain.StageDone)
 			}},
@@ -137,7 +137,7 @@ func TestInitiative(t *testing.T) {
 				for _, ev := range []domain.Event{
 					continued(3),
 					doneReplan(3),
-					domain.HumanApproved{Job: jobID, By: "pablogore", At: at(3)},
+					domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(3)},
 				} {
 					evs, err := decide.Initiative(closed, ev)
 					ctx.Expect(err).To(specs.MatchError(decide.ErrIllegalTransition))
@@ -222,7 +222,7 @@ func TestInitiative(t *testing.T) {
 			unknown.Status = "MAYBE"
 			badCheckpoint := replanning()
 			badCheckpoint.Checkpoint = "weekly"
-			approval := domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}
+			approval := domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}
 			rows := []refusedRow{
 				{"refuses a replan for another initiative", replanning(), otherInitiative, decide.ErrOtherInitiative},
 				{"refuses a replan about another slice job", replanning(), otherJob, decide.ErrOtherInitiative},

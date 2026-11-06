@@ -16,7 +16,7 @@ func merged(minute int) domain.MergeCompleted {
 // doneJob is a job merged after its last review round.
 func doneJob() domain.Job {
 	job := newJob()
-	job.Stage, job.Round = domain.StageDone, 3
+	job.Stage, job.Round, job.WaitSeq = domain.StageDone, 3, 1
 	return job
 }
 
@@ -125,7 +125,7 @@ func TestReopen(t *testing.T) {
 
 		s.It("leaves an allowed person's message to a job asking to merge unsupported", func(ctx *specs.Context) {
 			job := newJob()
-			job.Stage = domain.StageMerge
+			job.Stage, job.WaitSeq = domain.StageMerge, 1
 
 			evs, err := decide.Decide(job, message(domain.AuthorPerson, true, 1), defaultPipeline())
 
@@ -134,7 +134,7 @@ func TestReopen(t *testing.T) {
 		})
 
 		s.It("refuses a person's approval on a finished job", func(ctx *specs.Context) {
-			evs, err := decide.Decide(doneJob(), domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)}, defaultPipeline())
+			evs, err := decide.Decide(doneJob(), domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(1)}, defaultPipeline())
 
 			ctx.Expect(err).To(specs.MatchError(decide.ErrIllegalTransition))
 			ctx.Expect(evs).To(specs.BeEmpty())

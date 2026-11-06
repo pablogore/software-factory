@@ -15,10 +15,11 @@ func signed(m domain.MessageReceived, by string) domain.MessageReceived {
 	return m
 }
 
-// needsHumanJob is a job waiting for a person after an approver escalation.
+// needsHumanJob is a job waiting for a person after an approver escalation,
+// its first wait.
 func needsHumanJob() domain.Job {
 	job := newJob()
-	job.Stage, job.Round, job.Reason = domain.StageNeedsHuman, 2, "approver escalated"
+	job.Stage, job.Round, job.Reason, job.WaitSeq = domain.StageNeedsHuman, 2, "approver escalated", 1
 	return job
 }
 

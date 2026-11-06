@@ -93,7 +93,7 @@ func TestInitiativeAnswer(t *testing.T) {
 			{"the slice job's own events never pull it out of needs-human", func(ctx *specs.Context) {
 				in := stuck(ctx, domain.CheckpointEverySlice)
 				job := sliceJob()
-				job.Stage = domain.StageDone
+				job.Stage, job.WaitSeq = domain.StageDone, 1
 				// The same answer reaches the merged slice too, which reopens it.
 				reopened, err := decide.Decide(job, reply(domain.AuthorPerson, true, 3), defaultPipeline())
 				ctx.Expect(err).To(specs.BeNil())
@@ -159,7 +159,7 @@ func TestInitiativeAnswer(t *testing.T) {
 				{"refuses a replan CONTINUE in needs-human", stuckAt(), continued(3), decide.ErrIllegalTransition},
 				{"refuses a replan DONE in needs-human", stuckAt(), doneReplan(3), decide.ErrIllegalTransition},
 				{"refuses a replan NEEDS-HUMAN in needs-human", stuckAt(), needsHumanReplan(3, "again"), decide.ErrIllegalTransition},
-				{"refuses a person's OK in needs-human", stuckAt(), domain.HumanApproved{Job: jobID, By: "pablogore", At: at(3)}, decide.ErrIllegalTransition},
+				{"refuses a person's OK in needs-human", stuckAt(), domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(3)}, decide.ErrIllegalTransition},
 				{"refuses the slice's merge in needs-human", stuckAt(), merged(3), decide.ErrIllegalTransition},
 				{"refuses a stop request in needs-human", stuckAt(), stop("pablogore", 3), decide.ErrIllegalTransition},
 				{"refuses a missing event in needs-human", stuckAt(), nil, decide.ErrIllegalTransition},

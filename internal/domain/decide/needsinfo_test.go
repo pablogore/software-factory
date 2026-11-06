@@ -16,7 +16,7 @@ func needsInfo() domain.ResultSubmitted {
 // askingJob is a job waiting for an answer to intake's question.
 func askingJob() domain.Job {
 	job := newJob()
-	job.Stage, job.InfoFrom = domain.StageNeedsInfo, "intake"
+	job.Stage, job.InfoFrom, job.WaitSeq = domain.StageNeedsInfo, "intake", 1
 	return job
 }
 
@@ -119,7 +119,7 @@ func TestNeedsInfo(t *testing.T) {
 
 			rows := []eventRow{
 				{"refuses a result", needsInfo()},
-				{"refuses a person's approval", domain.HumanApproved{Job: jobID, By: "pablogore", At: at(2)}},
+				{"refuses a person's approval", domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}},
 				{"refuses a gate OK", domain.GatePassed{Job: jobID, At: at(2)}},
 			}
 			specs.Table(s, rows, func(r eventRow) string { return r.name }, func(ctx *specs.Context, r eventRow) {

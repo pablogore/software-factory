@@ -25,7 +25,7 @@ func fuzzEvents() []domain.Event {
 		evs = append(evs, st.ev)
 	}
 	evs = append(evs, changes("security-deep", 1), domain.GateFailed{Job: jobID, At: at(1)}, domain.SpecgateFailed{Job: jobID, At: at(1)}, exceptionAsked(1),
-		domain.SpecRejected{Job: jobID, Rejections: 1, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", At: at(1)},
+		domain.SpecRejected{Job: jobID, Rejections: 1, At: at(1)}, domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(1)},
 		message(domain.AuthorPerson, true, 1), message(domain.AuthorPerson, false, 1),
 		message(domain.AuthorBot, true, 1), message(domain.AuthorCI, true, 1),
 		direction(domain.AuthorPerson, true, 1), direction(domain.AuthorPerson, false, 1), direction(domain.AuthorBot, true, 1),
@@ -162,7 +162,7 @@ func FuzzStopped(f *testing.F) {
 		kinds := []domain.AuthorKind{domain.AuthorPerson, domain.AuthorBot, domain.AuthorCI, ""}
 		m := domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: by,
 			AuthorKind: kinds[int(event)%len(kinds)], Allowed: allowed, Text: text, At: at(1)}
-		evs := append(fuzzEvents(), stop(by, 1), domain.HumanApproved{Job: jobID, By: by, At: at(1)}, m)
+		evs := append(fuzzEvents(), stop(by, 1), domain.HumanApproved{Job: jobID, By: by, WaitSeq: 1, At: at(1)}, m)
 		ev := evs[int(event)%len(evs)]
 
 		out, _ := decide.Decide(job, ev, defaultPipeline())
@@ -192,7 +192,7 @@ func FuzzDropped(f *testing.F) {
 		kinds := []domain.AuthorKind{domain.AuthorPerson, domain.AuthorBot, domain.AuthorCI, ""}
 		m := domain.MessageReceived{Job: jobID, Provider: "github", Thread: "pr/88", Author: by,
 			AuthorKind: kinds[int(event)%len(kinds)], Allowed: allowed, Direction: marked, Text: text, At: at(1)}
-		evs := append(fuzzEvents(), stop(by, 1), domain.HumanApproved{Job: jobID, By: by, At: at(1)}, m)
+		evs := append(fuzzEvents(), stop(by, 1), domain.HumanApproved{Job: jobID, By: by, WaitSeq: 1, At: at(1)}, m)
 		ev := evs[int(event)%len(evs)]
 
 		out, _ := decide.Decide(job, ev, defaultPipeline())
