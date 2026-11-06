@@ -114,7 +114,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
-			job.SpecException, job.SpecEscalated, job.Reason = e.SpecException, e.SpecEscalated, e.Reason
+			job.SpecException, job.SpecEscalated, job.Reason, job.Cause = e.SpecException, e.SpecEscalated, e.Reason, e.Cause
 		case domain.MergeRequested:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", nil, nil, nil
 			job = leftNeedsHuman(job)
@@ -136,7 +136,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 // leftNeedsHuman forgets why the job was in needs-human, so a later stop for
 // a person never inherits an old cause.
 func leftNeedsHuman(job domain.Job) domain.Job {
-	job.SpecException, job.SpecEscalated, job.Reason = false, false, ""
+	job.SpecException, job.SpecEscalated, job.Reason, job.Cause = false, false, "", ""
 	return job
 }
 
@@ -177,14 +177,14 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 		}
 		// No pipeline has a triage stage yet (E02), so a blocked build waits
 		// for a person, whose feedback sends it back to build.
-		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: blocked(e.Role, r.Summary), At: e.At}}, nil
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: blocked(e.Role, r.Summary), Cause: domain.CauseBlocked, At: e.At}}, nil
 	case domain.ReviewResult:
 		return reviewed(job, e, r, p, i)
 	case domain.ApproveResult:
 		if r.Decision == domain.ApproveApprove {
 			return next(job, p, i, e.At), nil
 		}
-		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: escalated(e.Role, r.Reasons), At: e.At}}, nil
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: escalated(e.Role, r.Reasons), Cause: domain.CauseEscalated, At: e.At}}, nil
 	}
 	return nil, fmt.Errorf("%w: %s result from %q in stage %q", ErrUnsupported, stage.Kind, e.Role, job.Stage)
 }
@@ -308,7 +308,7 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 	}
 	if job.Round >= stage.MaxRounds {
 		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, stage.MaxRounds, strings.Join(inOrder(stage.Roles, blocking), ", "))
-		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}), nil
+		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseChanges, At: e.At}), nil
 	}
 	return append(evs,
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: rerun(p, stage.Roles, changes), At: e.At},
@@ -403,13 +403,13 @@ func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) 
 		return nil, illegal(job, e)
 	}
 	if e.Exception {
-		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "spec asks for a length exception", SpecException: true, At: e.At}}, nil
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "spec asks for a length exception", Cause: domain.CauseSpecException, SpecException: true, At: e.At}}, nil
 	}
 	n := job.SpecRejections + 1
 	evs := []domain.Event{domain.SpecRejected{Job: job.ID, Rejections: n, At: e.At}}
 	if n >= maxSpecRejections {
 		reason := fmt.Sprintf("spec rejected by specgate %d times", n)
-		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, SpecEscalated: true, At: e.At}), nil
+		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseSpecEscalated, SpecEscalated: true, At: e.At}), nil
 	}
 	return append(evs, domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At}), nil
 }
@@ -429,7 +429,7 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 	}
 	if limit := p.Stages[r].MaxRounds; job.Round >= limit {
 		reason := fmt.Sprintf("gate failed in the last round (%d of %d)", job.Round, limit)
-		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, At: e.At}}, nil
+		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseGateFailed, At: e.At}}, nil
 	}
 	return []domain.Event{
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: slices.Clone(job.Reviewers), At: e.At},
