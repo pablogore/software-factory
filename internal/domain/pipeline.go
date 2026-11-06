@@ -164,16 +164,24 @@ func (p Pipeline) Label() string {
 // reserved, stages run build, then review, then exactly one approve, then only
 // tasks, every review goes back to an earlier stage, lists roles and allows at
 // least one round and at most the max_rounds cap when it sets max_rounds, every
-// role a stage lists is well formed, listed once in the stage and exists, and
-// every limit set is between 1 and its cap.
+// role a stage lists is well formed, listed once in the stage and exists, each
+// loaded role name is unique, every role a stage lists or takes by default has
+// the stage's kind and answers for that stage only, and every limit set is
+// between 1 and its cap.
 func (p Pipeline) Validate(roles []Role) error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", p.Label(), err)
 	}
-	known := make(map[string]bool, len(roles))
+	known := make(map[string]Role, len(roles))
 	for _, r := range roles {
-		known[r.Name] = true
+		// Two files with one name would leave which one runs to load order.
+		if _, ok := known[r.Name]; ok {
+			return fmt.Errorf("%s: %w: role %+q is loaded twice", p.Label(), ErrInvalidValue, r.Name)
+		}
+		known[r.Name] = r
 	}
+	// The stage each role answers for, so no role signs off two stages.
+	owner := make(map[string]string, len(roles))
 	builds := 0
 	for _, st := range p.Stages {
 		if st.Kind == KindBuild {
@@ -231,8 +239,18 @@ func (p Pipeline) Validate(roles []Role) error {
 			if slices.Contains(st.Roles[:i], role) {
 				return fmt.Errorf("stage %s: %w: role %q is listed twice", st.Name, ErrInvalidValue, role)
 			}
-			if !known[role] {
+			if _, ok := known[role]; !ok {
 				return fmt.Errorf("stage %s: %w: role %q is not loaded", st.Name, ErrInvalidValue, role)
+			}
+			if err := claimRole(st, role, known, owner); err != nil {
+				return err
+			}
+		}
+		// The default role a roleless stage takes on load is held to the same
+		// rules; with no role file it has the stage's kind by definition.
+		if role, ok := DefaultRole(st.Kind); ok && len(st.Roles) == 0 {
+			if err := claimRole(st, role, known, owner); err != nil {
+				return err
 			}
 		}
 		if st.Kind == KindReview && st.MaxRounds != nil && *st.MaxRounds < 1 {
@@ -246,6 +264,20 @@ func (p Pipeline) Validate(roles []Role) error {
 	if !approved {
 		return fmt.Errorf("%s: %w: approve stage", p.Label(), ErrMissingField)
 	}
+	return nil
+}
+
+// claimRole records that role answers for st, naming both when the role's
+// loaded file has another kind or the role already answers for another stage:
+// either would let one role, say the builder, approve its own work.
+func claimRole(st Stage, role string, known map[string]Role, owner map[string]string) error {
+	if r, ok := known[role]; ok && r.Kind != st.Kind {
+		return fmt.Errorf("stage %s: %w: role %+q has kind %s, want %s", st.Name, ErrInvalidValue, role, r.Kind, st.Kind)
+	}
+	if prev, ok := owner[role]; ok {
+		return fmt.Errorf("stage %s: %w: role %+q is also in stage %s", st.Name, ErrInvalidValue, role, prev)
+	}
+	owner[role] = st.Name
 	return nil
 }
 
