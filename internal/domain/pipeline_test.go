@@ -43,6 +43,10 @@ func TestPipeline(t *testing.T) {
 				{"rejects two build stages", func(p *domain.Pipeline) {
 					p.Stages = append(p.Stages, domain.Stage{Name: "build2", Kind: domain.KindBuild})
 				}, domain.ErrInvalidValue, "pipeline default: invalid value: 2 build stages, want exactly 1"},
+				{"leaves no blank for a pipeline without a name", func(p *domain.Pipeline) {
+					p.Name = ""
+					p.Stages = []domain.Stage{p.Stages[0], p.Stages[3]}
+				}, domain.ErrInvalidValue, "pipeline: invalid value: 0 build stages, want exactly 1"},
 				{"names a review without on_changes", func(p *domain.Pipeline) {
 					p.Stages[2].OnChanges = ""
 				}, domain.ErrMissingField, "stage review: missing field: on_changes"},

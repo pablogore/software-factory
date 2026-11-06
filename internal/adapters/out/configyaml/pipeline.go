@@ -35,7 +35,7 @@ func LoadPipeline(data []byte, roles []domain.Role) (domain.Pipeline, error) {
 	for i := range f.Stages {
 		st, err := parseStage(&f.Stages[i])
 		if err != nil {
-			return domain.Pipeline{}, fmt.Errorf("pipeline %s: stages[%d]: %w", f.Name, i, err)
+			return domain.Pipeline{}, fmt.Errorf("%s: stages[%d]: %w", p.Label(), i, err)
 		}
 		p.Stages = append(p.Stages, st)
 	}
