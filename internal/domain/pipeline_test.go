@@ -55,6 +55,18 @@ func TestPipeline(t *testing.T) {
 				{"rejects an unknown kind", func(p *domain.Pipeline) {
 					p.Stages[0] = domain.Stage{Name: "deploy", Kind: "deploy"}
 				}, domain.ErrInvalidValue, `stage deploy: invalid value: kind "deploy"`},
+				{"names a review with max_rounds 0", func(p *domain.Pipeline) {
+					p.Stages[2].MaxRounds = 0
+				}, domain.ErrInvalidValue, "stage review: invalid value: max_rounds 0, want at least 1"},
+				{"names a review with negative max_rounds", func(p *domain.Pipeline) {
+					p.Stages[2].MaxRounds = -1
+				}, domain.ErrInvalidValue, "stage review: invalid value: max_rounds -1, want at least 1"},
+				{"names the repeated stage", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages, domain.Stage{Name: "intake", Kind: domain.KindIntake})
+				}, domain.ErrInvalidValue, "stage intake: invalid value: stage name is repeated"},
+				{"names a review that lists no roles", func(p *domain.Pipeline) {
+					p.Stages[2].Roles = nil
+				}, domain.ErrMissingField, "stage review: missing field: parallel"},
 			}
 			specs.Table(s, rows, func(r pipelineRow) string {
 				return r.name
