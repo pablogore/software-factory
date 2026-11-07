@@ -39,8 +39,11 @@ type bases interface {
 
 // diffs lists the files a worktree changed against base, the commit its
 // branch was made from, and the files its index marks so that no diff shows
-// their changes.
+// their changes, and reads a file as base has it and as the worktree has it,
+// by its path from the repo root.
 type diffs interface {
 	Changes(ctx context.Context, dir, base string) ([]domain.FileChange, error)
 	Flagged(ctx context.Context, dir string) ([]domain.FlaggedFile, error)
+	AtBase(ctx context.Context, dir, base, file string) (string, error)
+	InWorktree(ctx context.Context, dir, file string) (string, error)
 }

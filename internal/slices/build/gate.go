@@ -37,9 +37,9 @@ type Gate struct {
 // and the diff rules on what the job changed since the base commit recorded
 // for it, and decides GatePassed or GateFailed with the run on it: a broken
 // rule, such as a protected path modified, a file outside the build role's
-// allowed paths or a file the index hides changes of, fails the gate even
-// when the checks pass, its reason kept
-// in the run. It
+// allowed paths, a file the index hides changes of, a test file deleted or
+// a skip mark added to one, fails the gate even when the checks pass, its
+// reason kept in the run. It
 // returns the events the job saved: the ChecksRan and the move to the next
 // stage, or back to build in a new round, or to triage in the last one. When
 // the checks cannot be run, or the job changed while they ran, nothing is
@@ -111,7 +111,37 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 		return nil, fmt.Errorf("gate: diff of %q: %w", id, err)
 	}
 	reasons = append(reasons, ProtectedTouched(changes)...)
-	return append(reasons, OutsideAllowed(changes, Roles(p))...), nil
+	reasons = append(reasons, OutsideAllowed(changes, Roles(p))...)
+	reasons = append(reasons, TestsDeleted(changes)...)
+	marks, err := g.marksAdded(ctx, dir, base, changes)
+	if err != nil {
+		return nil, fmt.Errorf("gate: tests of %q: %w", id, err)
+	}
+	return append(reasons, marks...), nil
+}
+
+// marksAdded is MarksAdded for each test file changes add or modify, read
+// as base has it and as the worktree at dir has it, uncommitted or not.
+func (g *Gate) marksAdded(ctx context.Context, dir, base string, changes []domain.FileChange) ([]string, error) {
+	var reasons []string
+	for _, c := range changes {
+		if c.Kind == domain.ChangeDeleted || !IsTestFile(c.Path) {
+			continue
+		}
+		var before string
+		if c.Kind == domain.ChangeModified {
+			var err error
+			if before, err = g.Diffs.AtBase(ctx, dir, base, c.Path); err != nil {
+				return nil, err
+			}
+		}
+		after, err := g.Diffs.InWorktree(ctx, dir, c.Path)
+		if err != nil {
+			return nil, err
+		}
+		reasons = append(reasons, MarksAdded(c.Path, before, after)...)
+	}
+	return reasons, nil
 }
 
 // HiddenByIndex is one reason for each flag in flagged: the gate can't

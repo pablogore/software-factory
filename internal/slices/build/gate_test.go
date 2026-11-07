@@ -43,7 +43,7 @@ func (worktrees) Prepare(_ context.Context, job domain.JobID) (ports.Worktree, e
 
 // diffs answers every diff with changes, or with err, and records against
 // what base it was asked; it answers the index's flags with flagged, or with
-// flagErr.
+// flagErr, and a file's content with before and after, or with readErr.
 type diffs struct {
 	changes []domain.FileChange
 	err     error
@@ -51,6 +51,9 @@ type diffs struct {
 	base    string
 	flagged []domain.FlaggedFile
 	flagErr error
+	before  map[string]string
+	after   map[string]string
+	readErr error
 }
 
 func (d *diffs) Changes(_ context.Context, dir, base string) ([]domain.FileChange, error) {
@@ -60,6 +63,14 @@ func (d *diffs) Changes(_ context.Context, dir, base string) ([]domain.FileChang
 
 func (d *diffs) Flagged(context.Context, string) ([]domain.FlaggedFile, error) {
 	return d.flagged, d.flagErr
+}
+
+func (d *diffs) AtBase(_ context.Context, _, _, file string) (string, error) {
+	return d.before[file], d.readErr
+}
+
+func (d *diffs) InWorktree(_ context.Context, _, file string) (string, error) {
+	return d.after[file], d.readErr
 }
 
 // checks answers every run with run, or with err, and records where and
@@ -245,6 +256,7 @@ func TestGate(t *testing.T) {
 				ctx.Expect(last.Run.Violations).ToEqual([]string{
 					"the diff modifies the protected path Makefile",
 					"the diff deletes the protected path internal/arch_test.go",
+					"the diff deletes the test file internal/arch_test.go",
 				})
 			})
 
@@ -402,6 +414,81 @@ func TestGate(t *testing.T) {
 				broken := errors.New("git: index file corrupt")
 				c := &checks{run: passing}
 				g, store := newGateDiff(ctx, domain.StageGate, 1, c, &diffs{flagErr: broken})
+
+				_, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.MatchError(broken))
+				ctx.Expect(c.calls).ToEqual(0)
+				job, _, err := store.Load(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual(domain.StageGate)
+			})
+		})
+
+		s.When("the diff deletes tests or adds marks that skip them", func(s *specs.Spec) {
+			skipped := &diffs{
+				changes: []domain.FileChange{
+					{Path: "internal/slices/build/gate_test.go", Kind: domain.ChangeDeleted},
+					{Path: "internal/domain/decide_test.go", Kind: domain.ChangeModified},
+					{Path: "ui/app.spec.ts", Kind: domain.ChangeAdded},
+					{Path: "README.md", Kind: domain.ChangeModified},
+				},
+				before: map[string]string{"internal/domain/decide_test.go": "func TestA(t *testing.T) {}\n"},
+				after: map[string]string{
+					"internal/domain/decide_test.go": "func TestA(t *testing.T) { t.Skip(\"later\") }\n",
+					"ui/app.spec.ts":                 "it.only('renders', () => {})\n",
+					"README.md":                      "use t.Skip and it.only\n",
+				},
+			}
+
+			s.It("fails even though the checks pass, naming each file and the mark added", func(ctx *specs.Context) {
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, skipped)
+
+				evs, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "RoundStarted", "StageEntered"})
+				hist, err := store.History(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				last, ok := build.LastChecks(hist)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(last.Run.Violations).ToEqual([]string{
+					"the diff deletes the test file internal/slices/build/gate_test.go",
+					"the diff adds t.Skip to the test file internal/domain/decide_test.go",
+					"the diff adds .only to the test file ui/app.spec.ts",
+				})
+			})
+
+			s.It("passes a test file that keeps the marks the base had, or loses some", func(ctx *specs.Context) {
+				kept := &diffs{
+					changes: []domain.FileChange{
+						{Path: "a_test.go", Kind: domain.ChangeModified},
+						{Path: "b.test.js", Kind: domain.ChangeModified},
+					},
+					before: map[string]string{
+						"a_test.go": "t.Skip(\"flaky\")\nfunc TestA(t *testing.T) {}\n",
+						"b.test.js": "it.skip('x')\nit.only('y')\n",
+					},
+					after: map[string]string{
+						"a_test.go": "func TestA(t *testing.T) {}\nt.Skip(\"flaky\")\nfunc TestB(t *testing.T) {}\n",
+						"b.test.js": "it.skip('x')\nit('y')\n",
+					},
+				}
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, kept)
+
+				_, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				job, _, err := store.Load(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual("review")
+			})
+
+			s.It("saves nothing and runs no checks when a test file cannot be read", func(ctx *specs.Context) {
+				broken := errors.New("git: bad object")
+				c := &checks{run: passing}
+				d := &diffs{changes: []domain.FileChange{{Path: "a_test.go", Kind: domain.ChangeModified}}, readErr: broken}
+				g, store := newGateDiff(ctx, domain.StageGate, 1, c, d)
 
 				_, err := g.Run(bg, "j-1")
 

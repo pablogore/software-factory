@@ -1,12 +1,15 @@
 // Package gitdiff lists the files a job's worktree changed against its base,
-// and those its index hides changes of, for the gate's diff rules.
+// and those its index hides changes of, and reads a file as either has it,
+// for the gate's diff rules.
 package gitdiff
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/pablogore/software-factory/internal/domain"
@@ -79,6 +82,43 @@ func (Differ) Flagged(ctx context.Context, dir string) ([]domain.FlaggedFile, er
 		}
 	}
 	return flagged, nil
+}
+
+// AtBase is the content of file, by its path from the repo root, in base,
+// the full object name of a commit, as Changes takes it.
+func (Differ) AtBase(ctx context.Context, dir, base, file string) (string, error) {
+	if !objectName(base) {
+		return "", fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
+	}
+	return git(ctx, dir, "cat-file", "blob", base+":"+file)
+}
+
+// InWorktree is the content of file, by its path from the repo root, in the
+// worktree at dir, committed or not. A symlink reads as its target, as git
+// keeps it, so AtBase and InWorktree compare alike and nothing outside the
+// worktree is read.
+func (Differ) InWorktree(ctx context.Context, dir, file string) (string, error) {
+	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(strings.TrimSpace(top), filepath.FromSlash(file))
+	info, err := os.Lstat(p)
+	if err != nil {
+		return "", fmt.Errorf("gitdiff: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(p)
+		if err != nil {
+			return "", fmt.Errorf("gitdiff: %w", err)
+		}
+		return target, nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", fmt.Errorf("gitdiff: %w", err)
+	}
+	return string(data), nil
 }
 
 // objectName reports whether s is a full SHA-1 or SHA-256 object name in
