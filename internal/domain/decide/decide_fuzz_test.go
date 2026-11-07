@@ -22,7 +22,8 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // unknown limit, budget raises from every kind of author, without a name,
 // for an issue cap and to no amount, a completed merge, a failed one, a spent
 // budget, a refused external action with and without a key, a failed
-// attempt with and without a reason, triage's RETRY
+// attempt with and without a reason, an agent's progress with and without a
+// message, triage's RETRY
 // and ESCALATE, one from another role and every missing or nil event of
 // nilEvents.
 func fuzzEvents() []domain.Event {
@@ -50,6 +51,7 @@ func fuzzEvents() []domain.Event {
 		domain.CapRaiseRequested{Job: jobID, By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Cap: domain.CapSlices, Value: 8, WaitSeq: 1, At: at(1)},
 		refused(1), domain.ActionFailed{Job: jobID, Key: " ", Kind: "comment", Error: "403 forbidden", At: at(1)},
 		failedAttempt(1), domain.AttemptFailed{Job: jobID, Role: "builder", Reason: " ", At: at(1)},
+		progressed("running the tests", 1), progressed("", 1),
 		mergeFailed("conflict in go.sum", 1), triageRetry(1), triageEscalate(1),
 		result("builder", 1, domain.TriageResult{Decision: domain.TriageRetry, Brief: triageBrief}))
 	for _, r := range nilEvents() {
