@@ -4,9 +4,13 @@
 // which runs what it is given first come first served, starts them in that
 // order.
 //
-// The queue looks for room again when issues are added and when the work of
-// one of its issues starts or ends; work others hand to the scheduler holds
-// the queue back until then.
+// An issue whose "Depends on #N" lines name an issue not merged or closed
+// waits, with the reason, and the next ready one in the order goes ahead of
+// it (see Depends).
+//
+// The queue looks for room again, and at the dependencies, when issues are
+// added and when the work of one of its issues starts or ends; work others
+// hand to the scheduler holds the queue back until then.
 package queue
 
 import (
@@ -37,9 +41,10 @@ type Runner interface {
 type Queue struct {
 	sched  Scheduler
 	order  Order
+	deps   Issues
 	runner Runner
 
-	// mu guards waiting, handed and seen, so two looks for room never hand
+	// mu guards waiting, handed, held and seen, so two looks for room never hand
 	// over the same issue.
 	mu sync.Mutex
 	// waiting is kept sorted by order.
@@ -48,13 +53,22 @@ type Queue struct {
 	// one is handed over while nothing else waits there, so it is the next
 	// one taken.
 	handed *Issue
-	seen   map[int]bool
+	// held is why each waiting issue its dependencies hold was passed over
+	// at the last look for room.
+	held map[int]string
+	seen map[int]bool
 }
 
-// New returns an empty queue that takes issues in order, through runner,
-// onto sched.
-func New(sched Scheduler, order Order, runner Runner) *Queue {
-	return &Queue{sched: sched, order: order, runner: runner, seen: map[int]bool{}}
+// Hold is a waiting issue its dependencies hold, and why.
+type Hold struct {
+	Issue  Issue
+	Reason string
+}
+
+// New returns an empty queue that takes issues in order, once deps reports
+// their dependencies finished, through runner, onto sched.
+func New(sched Scheduler, order Order, deps Issues, runner Runner) *Queue {
+	return &Queue{sched: sched, order: order, deps: deps, runner: runner, held: map[int]string{}, seen: map[int]bool{}}
 }
 
 // Add puts issues in the queue, each in its place by the order, and hands
@@ -85,18 +99,40 @@ func (q *Queue) Waiting() []Issue {
 	return append([]Issue{*q.handed}, q.waiting...)
 }
 
-// feed hands the next issue to the scheduler when nothing waits there for a
-// slot. Once that issue starts, its work feeds the one after it, so issues
-// fill every free slot and then one more waits for the next. q.mu must be
-// held.
+// Held lists, in order, the waiting issues their dependencies held at the
+// last look for room, each with the dependencies it waits for.
+func (q *Queue) Held() []Hold {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out []Hold
+	for _, is := range q.waiting {
+		if why, ok := q.held[is.Number]; ok {
+			out = append(out, Hold{Issue: is, Reason: why})
+		}
+	}
+	return out
+}
+
+// feed hands the next issue its dependencies do not hold to the scheduler
+// when nothing waits there for a slot. Once that issue starts, its work
+// feeds the one after it, so issues fill every free slot and then one more
+// waits for the next. q.mu must be held.
 func (q *Queue) feed(ctx context.Context) {
-	if len(q.waiting) > 0 && q.handed == nil && q.sched.Waiting() == 0 {
-		is := q.waiting[0]
-		q.waiting = q.waiting[1:]
+	if q.handed != nil || q.sched.Waiting() != 0 {
+		return
+	}
+	for i, is := range q.waiting {
+		if why := hold(ctx, q.deps, is); why != "" {
+			q.held[is.Number] = why
+			continue
+		}
+		delete(q.held, is.Number)
+		q.waiting = slices.Delete(q.waiting, i, i+1)
 		q.handed = &is
 		job, w := q.runner.Work(is)
 		done := q.sched.Submit(ctx, job, q.wrap(is, w))
 		go q.await(ctx, is, done)
+		return
 	}
 }
 
