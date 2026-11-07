@@ -26,6 +26,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "attempt-demo" {
+		if err := attemptDemo(context.Background(), os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "factoryd attempt-demo:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	fmt.Fprintln(os.Stderr, "factoryd: nothing to run yet; see docs/factoryd/README.md")
 	os.Exit(2)
 }
