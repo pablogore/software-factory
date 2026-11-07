@@ -2,14 +2,9 @@ package ports
 
 import (
 	"context"
-	"errors"
 
 	"github.com/pablogore/software-factory/internal/domain"
 )
-
-// ErrUncommittedChanges means a job's worktree has changes no commit holds,
-// so cleaning it would lose them. Callers compare with errors.Is.
-var ErrUncommittedChanges = errors.New("worktree has uncommitted changes")
 
 // Worktree is a job's own checkout of the repo and the branch it works on.
 type Worktree struct {
@@ -25,7 +20,8 @@ type Workspace interface {
 	// base. When the job's worktree already exists it is reused as it is.
 	Prepare(ctx context.Context, job domain.JobID) (Worktree, error)
 	// Clean removes the job's worktree and its local branch, leaving the
-	// base and other jobs alone. A worktree with uncommitted changes is
-	// left as it is, with ErrUncommittedChanges.
+	// base and other jobs alone. Uncommitted changes are first saved in a
+	// backup commit that outlives the branch; if saving them fails nothing
+	// is removed and the error is returned.
 	Clean(ctx context.Context, job domain.JobID) error
 }
