@@ -179,6 +179,19 @@ func (NeedsHuman) EventName() string { return "NeedsHuman" }
 // JobID implements Event.
 func (e NeedsHuman) JobID() JobID { return e.Job }
 
+// BudgetExhausted records that the job was about to launch an agent with
+// its whole budget already spent, so the agent never ran.
+type BudgetExhausted struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (BudgetExhausted) EventName() string { return "BudgetExhausted" }
+
+// JobID implements Event.
+func (e BudgetExhausted) JobID() JobID { return e.Job }
+
 // ActionFailed records that the destination refused one of the job's
 // external actions for permission or validation, so trying it again would
 // fail the same way. Key and Kind name the action and Error is the

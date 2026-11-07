@@ -19,8 +19,8 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // so answers) and direction marks from every kind of author, with and without a name, stop requests with and without a
 // name, overrides from every kind of author and without a name or a reason,
 // limit overrides from every kind of author, without a name and with an
-// unknown limit, a completed merge, a refused external action with and
-// without a key and every missing or nil event of nilEvents.
+// unknown limit, a completed merge, a spent budget, a refused external action
+// with and without a key and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
@@ -33,7 +33,7 @@ func fuzzEvents() []domain.Event {
 		direction(domain.AuthorPerson, true, 1), direction(domain.AuthorPerson, false, 1), direction(domain.AuthorBot, true, 1),
 		signed(message(domain.AuthorPerson, true, 1), ""), signed(message(domain.AuthorPerson, false, 1), " "),
 		signed(direction(domain.AuthorPerson, true, 1), " \t"), signed(direction(domain.AuthorBot, true, 1), ""),
-		stop("pablogore", 1), stop("", 1), merged(1), needsInfo(), blockedBuild("cannot reach the API", 1), rejectIntake("duplicate of #12", 1),
+		stop("pablogore", 1), stop("", 1), merged(1), needsInfo(), budgetSpent(1), blockedBuild("cannot reach the API", 1), rejectIntake("duplicate of #12", 1),
 		override(domain.AuthorPerson, true, 1), override(domain.AuthorPerson, false, 1), override(domain.AuthorBot, true, 1), override(domain.AuthorCI, true, 1),
 		domain.OverrideRequested{Job: jobID, By: " ", AuthorKind: domain.AuthorPerson, Allowed: true, Reason: overrideReason, At: at(1)},
 		domain.OverrideRequested{Job: jobID, By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Reason: "", At: at(1)},

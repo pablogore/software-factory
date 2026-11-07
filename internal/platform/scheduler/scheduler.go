@@ -7,6 +7,10 @@
 // reply, so new work filling every slot never makes someone wait for an
 // answer. New work never takes it.
 //
+// Before launching any work the scheduler asks how much its job has spent:
+// a job that spent its whole budget never runs its agent, and its slot goes
+// at once to the next work in line.
+//
 // Choosing what to hand over next is not the scheduler's concern: it runs
 // what it is given.
 package scheduler
@@ -16,10 +20,26 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/pablogore/software-factory/internal/domain"
 )
 
 // ErrConcurrency means New was asked for fewer than one slot.
 var ErrConcurrency = errors.New("concurrency must be at least 1")
+
+// ErrBudget means New was given a budget that is not above 0, or no cost
+// source to check it against.
+var ErrBudget = errors.New("budget must be above 0, with a cost source")
+
+// ErrBudgetExhausted means the job had spent its whole budget when its work
+// was about to launch, so the agent never ran. Whoever submitted the work
+// records domain.BudgetExhausted for the job, which stops it in needs-human.
+var ErrBudgetExhausted = errors.New("budget exhausted")
+
+// CostSource tells how much a job has spent so far, in USD.
+type CostSource interface {
+	Spent(ctx context.Context, job domain.JobID) (float64, error)
+}
 
 // Work runs one agent. Its error is handed back to whoever submitted it;
 // to the scheduler, success and failure both free the slot.
@@ -27,6 +47,7 @@ type Work func(ctx context.Context) error
 
 type item struct {
 	ctx  context.Context
+	job  domain.JobID
 	work Work
 	done chan error
 }
@@ -34,7 +55,9 @@ type item struct {
 // Scheduler runs at most its concurrency of Work at once, plus one reply
 // in the reserved slot.
 type Scheduler struct {
-	slots int
+	slots  int
+	budget float64
+	costs  CostSource
 
 	// mu guards running, reserved and line, so a freed slot and a new
 	// submission never both take the same slot.
@@ -44,30 +67,35 @@ type Scheduler struct {
 	line     []item
 }
 
-// New returns a scheduler with concurrency slots, all free.
-func New(concurrency int) (*Scheduler, error) {
+// New returns a scheduler with concurrency slots, all free, that launches
+// a job's work only while costs says the job spent less than budget USD.
+func New(concurrency int, budget float64, costs CostSource) (*Scheduler, error) {
 	if concurrency < 1 {
 		return nil, fmt.Errorf("scheduler: %d: %w", concurrency, ErrConcurrency)
 	}
-	return &Scheduler{slots: concurrency}, nil
+	if !(budget > 0) || costs == nil {
+		return nil, fmt.Errorf("scheduler: USD %v: %w", budget, ErrBudget)
+	}
+	return &Scheduler{slots: concurrency, budget: budget, costs: costs}, nil
 }
 
-// Submit hands w over to run with ctx. It never blocks: w starts now if a
-// slot is free, or waits in line behind earlier work. The returned channel
-// receives w's error once it has run.
-func (s *Scheduler) Submit(ctx context.Context, w Work) <-chan error {
-	it := item{ctx: ctx, work: w, done: make(chan error, 1)}
+// Submit hands w, work for job, over to run with ctx. It never blocks: w
+// starts now if a slot is free, or waits in line behind earlier work. The
+// returned channel receives w's error once it has run, or ErrBudgetExhausted
+// when it never ran.
+func (s *Scheduler) Submit(ctx context.Context, job domain.JobID, w Work) <-chan error {
+	it := item{ctx: ctx, job: job, work: w, done: make(chan error, 1)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.take(it)
 	return it.done
 }
 
-// SubmitReply hands over w, the work that answers a person's reply. It
-// never blocks: w starts now in the reserved slot if it is free; otherwise
-// it is handled like any work handed to Submit.
-func (s *Scheduler) SubmitReply(ctx context.Context, w Work) <-chan error {
-	it := item{ctx: ctx, work: w, done: make(chan error, 1)}
+// SubmitReply hands over w, the work for job that answers a person's reply.
+// It never blocks: w starts now in the reserved slot if it is free;
+// otherwise it is handled like any work handed to Submit.
+func (s *Scheduler) SubmitReply(ctx context.Context, job domain.JobID, w Work) <-chan error {
+	it := item{ctx: ctx, job: job, work: w, done: make(chan error, 1)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.reserved {
@@ -110,7 +138,7 @@ func (s *Scheduler) Waiting() int {
 // run runs it and every piece of work that inherits its slot after it.
 func (s *Scheduler) run(it item) {
 	for {
-		err := it.work(it.ctx)
+		err := s.launch(it)
 		next, ok := s.free()
 		// The slot is handed on before it.done is sent, so whoever waits
 		// for a result already sees the next work running.
@@ -125,11 +153,25 @@ func (s *Scheduler) run(it item) {
 // runReserved runs it in the reserved slot. The slot is never handed to
 // work in line, so it is free again for the next reply.
 func (s *Scheduler) runReserved(it item) {
-	err := it.work(it.ctx)
+	err := s.launch(it)
 	s.mu.Lock()
 	s.reserved = false
 	s.mu.Unlock()
 	it.done <- err
+}
+
+// launch runs it's work unless its job already spent its whole budget. The
+// spend is asked for now, not when the work was handed over, since the job
+// may have spent more while it waited in line.
+func (s *Scheduler) launch(it item) error {
+	spent, err := s.costs.Spent(it.ctx, it.job)
+	if err != nil {
+		return fmt.Errorf("scheduler: spend of job %q: %w", it.job, err)
+	}
+	if spent >= s.budget {
+		return fmt.Errorf("scheduler: job %q spent USD %.2f of %.2f: %w", it.job, spent, s.budget, ErrBudgetExhausted)
+	}
+	return it.work(it.ctx)
 }
 
 // free hands the finished slot to the oldest waiting work, or frees it when

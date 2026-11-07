@@ -51,6 +51,7 @@ func TestOverride(t *testing.T) {
 				{"after specgate's escalation it is refused, naming the cause", domain.CauseSpecEscalated, nil, decide.ErrOverrideRefused},
 				{"on a length exception it is refused, naming the cause", domain.CauseSpecException, nil, decide.ErrOverrideRefused},
 				{"after a refused external action it is refused, naming the cause", domain.CauseActionFailed, nil, decide.ErrOverrideRefused},
+				{"after a spent budget it is refused, naming the cause", domain.CauseBudget, nil, decide.ErrOverrideRefused},
 			}
 			specs.Table(s, rows, func(r overrideRow) string { return r.name }, func(ctx *specs.Context, r overrideRow) {
 				job := waitingFor(ctx, r.cause)
