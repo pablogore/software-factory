@@ -32,6 +32,6 @@ func (s *Store) Plant(_ context.Context, job domain.Job, evs ...domain.Event) er
 		s.versions[job.ID] = 1
 	}
 	s.jobs[job.ID] = data
-	s.events[job.ID] = append(s.events[job.ID], envs...)
+	s.append(job.ID, envs)
 	return nil
 }

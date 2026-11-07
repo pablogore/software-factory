@@ -1,6 +1,6 @@
-// Package sqlite implements ports.JobStore and ports.EventLog on SQLite with
-// the pure-Go modernc.org/sqlite driver, so factoryd builds with
-// CGO_ENABLED=0.
+// Package sqlite implements ports.JobStore, ports.EventLog and
+// ports.EventFeed on SQLite with the pure-Go modernc.org/sqlite driver, so
+// factoryd builds with CGO_ENABLED=0.
 package sqlite
 
 import (
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
@@ -34,9 +35,14 @@ CREATE TABLE IF NOT EXISTS events (
 	data   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, seq);
+CREATE TABLE IF NOT EXISTS processed (
+	subscriber TEXT NOT NULL,
+	seq        INTEGER NOT NULL,
+	PRIMARY KEY (subscriber, seq)
+);
 `
 
-// Store is a JobStore and EventLog backed by one SQLite file.
+// Store is a JobStore, EventLog and EventFeed backed by one SQLite file.
 type Store struct {
 	db        *sql.DB
 	maxReason int
@@ -265,6 +271,58 @@ func exists(ctx context.Context, q querier, id domain.JobID) error {
 	}
 	if err != nil {
 		return fmt.Errorf("sqlite: history of %q: %w", id, err)
+	}
+	return nil
+}
+
+// Pending implements ports.EventFeed. The events table's seq is the feed's
+// Seq: AUTOINCREMENT never reuses one, so saved order is seq order.
+func (s *Store) Pending(ctx context.Context, subscriber string, names []string) ([]ports.Saved, error) {
+	saved := []ports.Saved{}
+	if len(names) == 0 {
+		return saved, nil
+	}
+	args := []any{subscriber}
+	for _, n := range names {
+		args = append(args, n)
+	}
+	q := `SELECT seq, name, at, data FROM events e
+		WHERE NOT EXISTS (SELECT 1 FROM processed p WHERE p.subscriber = ? AND p.seq = e.seq)
+		AND name IN (?` + strings.Repeat(", ?", len(names)-1) + `)
+		ORDER BY seq`
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: pending for %q: %w", subscriber, err)
+	}
+	defer func() { _ = rows.Close() }() // rows.Err reports what matters
+	for rows.Next() {
+		var sv ports.Saved
+		var env eventjson.Envelope
+		var at, data string
+		if err := rows.Scan(&sv.Seq, &env.Name, &at, &data); err != nil {
+			return nil, fmt.Errorf("sqlite: pending for %q: %w", subscriber, err)
+		}
+		if env.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
+			return nil, fmt.Errorf("sqlite: time of event %d: %w", sv.Seq, err)
+		}
+		env.Data = []byte(data)
+		if sv.Event, err = eventjson.Decode(env); err != nil {
+			return nil, fmt.Errorf("sqlite: event %d: %w", sv.Seq, err)
+		}
+		sv.At = env.At
+		saved = append(saved, sv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: pending for %q: %w", subscriber, err)
+	}
+	return saved, nil
+}
+
+// MarkProcessed implements ports.EventFeed.
+func (s *Store) MarkProcessed(ctx context.Context, subscriber string, seq ports.Seq) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO processed (subscriber, seq) VALUES (?, ?) ON CONFLICT DO NOTHING`, subscriber, int64(seq))
+	if err != nil {
+		return fmt.Errorf("sqlite: mark event %d processed by %q: %w", seq, subscriber, err)
 	}
 	return nil
 }
