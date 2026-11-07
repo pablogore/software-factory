@@ -1,0 +1,7 @@
+# The agents a role can name in its `agent`, each with the command that
+# launches it over ACP. {model} in args or env becomes the role's `model`.
+agents:
+  claude:
+    command: claude-code-acp
+    env:
+      ANTHROPIC_MODEL: "{model}"

@@ -1,0 +1,7 @@
+name: builder
+kind: build
+description: Implements one slice's spec and tests it against its acceptance criteria
+prompt: roles/builder.md
+agent: claude
+model: opus
+mode: blocking
