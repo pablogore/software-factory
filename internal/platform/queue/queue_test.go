@@ -220,8 +220,8 @@ func TestQueue(t *testing.T) {
 				ctx.Expect(numbers(q.Waiting())).ToEqual([]int{1})
 				ctx.Expect(r.started()).To(specs.BeEmpty())
 				close(release)
-				<-busy
-				<-waits
+				ctx.Expect(<-busy).To(specs.BeNil())
+				ctx.Expect(<-waits).To(specs.BeNil())
 				// The queue looks for room again when issues are added.
 				q.Add(context.Background())
 				r.awaitStart(ctx, 1)
