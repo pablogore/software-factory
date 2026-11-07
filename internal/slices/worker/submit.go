@@ -19,7 +19,11 @@ import (
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
-// Submitter takes results from agents.
+// Submitter takes results from agents. It is the single delivery point for
+// every way an agent hands in a result: the MCP submit_result tool and the
+// `factory worker submit-result` CLI both end here. The one-use guarantee of
+// job tokens holds only because of that, so a new way to submit results must
+// call Submit and never decide a ResultSubmitted on its own.
 type Submitter struct {
 	Tokens    tokens
 	Jobs      jobs
