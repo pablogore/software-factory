@@ -1,5 +1,5 @@
-// Package memstore is the in-memory fake of ports.JobStore and
-// ports.EventLog for slice tests. It passes the same contract suite as the
+// Package memstore is the in-memory fake of ports.JobStore, ports.EventLog
+// and ports.EventFeed for slice tests. It passes the same contract suite as the
 // SQLite store (internal/adapters/out/sqlite).
 package memstore
 
@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/eventjson"
@@ -22,8 +23,15 @@ type Store struct {
 	mu        sync.Mutex
 	jobs      map[domain.JobID][]byte
 	versions  map[domain.JobID]ports.Version
-	events    map[domain.JobID][]eventjson.Envelope
+	log       []logged // every job's events in saved order; Seq is index+1
+	processed map[string]map[ports.Seq]bool
 	maxReason int
+}
+
+// logged is one saved event and the job it belongs to.
+type logged struct {
+	job domain.JobID
+	env eventjson.Envelope
 }
 
 // Option sets how New configures the store.
@@ -40,7 +48,7 @@ func New(opts ...Option) (*Store, error) {
 	s := &Store{
 		jobs:      map[domain.JobID][]byte{},
 		versions:  map[domain.JobID]ports.Version{},
-		events:    map[domain.JobID][]eventjson.Envelope{},
+		processed: map[string]map[ports.Seq]bool{},
 		maxReason: eventjson.DefaultMaxReason,
 	}
 	for _, opt := range opts {
@@ -135,7 +143,7 @@ func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p dom
 	}
 	s.jobs[id] = data
 	s.versions[id] = v + 1
-	s.events[id] = append(s.events[id], envs...)
+	s.append(id, envs)
 	return evs, v + 1, nil
 }
 
@@ -146,13 +154,52 @@ func (s *Store) History(_ context.Context, id domain.JobID) ([]ports.Record, err
 	if _, ok := s.jobs[id]; !ok {
 		return nil, fmt.Errorf("memstore: %q: %w", id, ports.ErrJobNotFound)
 	}
-	recs := make([]ports.Record, 0, len(s.events[id]))
-	for _, env := range s.events[id] {
-		ev, err := eventjson.Decode(env)
+	recs := []ports.Record{}
+	for _, l := range s.log {
+		if l.job != id {
+			continue
+		}
+		ev, err := eventjson.Decode(l.env)
 		if err != nil {
 			return nil, fmt.Errorf("memstore: job %q: %w", id, err)
 		}
-		recs = append(recs, ports.Record{Event: ev, At: env.At})
+		recs = append(recs, ports.Record{Event: ev, At: l.env.At})
 	}
 	return recs, nil
+}
+
+func (s *Store) append(id domain.JobID, envs []eventjson.Envelope) {
+	for _, env := range envs {
+		s.log = append(s.log, logged{job: id, env: env})
+	}
+}
+
+// Pending implements ports.EventFeed.
+func (s *Store) Pending(_ context.Context, subscriber string, names []string) ([]ports.Saved, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	saved := []ports.Saved{}
+	for i, l := range s.log {
+		seq := ports.Seq(i + 1)
+		if !slices.Contains(names, l.env.Name) || s.processed[subscriber][seq] {
+			continue
+		}
+		ev, err := eventjson.Decode(l.env)
+		if err != nil {
+			return nil, fmt.Errorf("memstore: event %d: %w", seq, err)
+		}
+		saved = append(saved, ports.Saved{Seq: seq, Record: ports.Record{Event: ev, At: l.env.At}})
+	}
+	return saved, nil
+}
+
+// MarkProcessed implements ports.EventFeed.
+func (s *Store) MarkProcessed(_ context.Context, subscriber string, seq ports.Seq) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.processed[subscriber] == nil {
+		s.processed[subscriber] = map[ports.Seq]bool{}
+	}
+	s.processed[subscriber][seq] = true
+	return nil
 }
