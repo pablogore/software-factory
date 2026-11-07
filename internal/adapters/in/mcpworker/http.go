@@ -1,8 +1,8 @@
 // Package mcpworker serves the worker surface of factoryd to the agents that
 // work on jobs, with the session's job token. For now it is the HTTP route
-// `factory worker submit-result` calls and the MCP tool submit_result, both
-// over one Submitter; it serves nothing else, so a job token gets no other
-// operation from it (06-interfaz-y-observabilidad.md).
+// `factory worker submit-result` calls and the MCP tools submit_result and
+// progress, all over one Submitter; it serves nothing else, so a job token
+// gets no other operation from it (06-interfaz-y-observabilidad.md).
 package mcpworker
 
 import (
@@ -25,9 +25,11 @@ const MaxResultBytes = 1 << 20
 // ResultPath is the route a job's result is posted to; {job} is its ID.
 const ResultPath = "/worker/jobs/{job}/result"
 
-// Submitter decides a result on a job with the token it came with.
+// Submitter decides a result, or records a progress message, on a job with
+// the token it came with.
 type Submitter interface {
 	Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
+	Progress(ctx context.Context, token string, job domain.JobID, text string) ([]domain.Event, error)
 }
 
 // Accepted is the answer to a result that was decided: the job and the

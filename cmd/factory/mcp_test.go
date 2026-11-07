@@ -33,6 +33,11 @@ func (f factoryd) tool(ctx *specs.Context, job domain.JobID, token, result strin
 }
 
 func (f factoryd) callTool(job domain.JobID, token, result string) (string, bool, error) {
+	return f.call("submit_result", job, token, result)
+}
+
+// call calls tool on job's MCP server with token and args.
+func (f factoryd) call(tool string, job domain.JobID, token, args string) (string, bool, error) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil)
 	cs, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
 		Endpoint:             f.url + "/worker/jobs/" + string(job) + "/mcp",
@@ -43,7 +48,7 @@ func (f factoryd) callTool(job domain.JobID, token, result string) (string, bool
 		return "", false, err
 	}
 	defer func() { _ = cs.Close() }()
-	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "submit_result", Arguments: json.RawMessage(result)})
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: tool, Arguments: json.RawMessage(args)})
 	if err != nil {
 		return "", false, err
 	}
@@ -180,6 +185,75 @@ func TestSubmitResultTool(t *testing.T) {
 			ctx.Expect(errs).To(specs.BeEmpty())
 			ctx.Expect(recorded).ToEqual(1)
 			ctx.Expect(f.events(ctx, "j-1")).ToEqual([]string{"StageEntered"})
+		})
+	})
+}
+
+// progress calls progress on job's MCP server with token and message.
+func (f factoryd) progress(ctx *specs.Context, job domain.JobID, token, message string) (string, bool) {
+	args, err := json.Marshal(map[string]string{"message": message})
+	ctx.Expect(err).To(specs.BeNil())
+	text, isErr, err := f.call("progress", job, token, string(args))
+	ctx.Expect(err).To(specs.BeNil())
+	return text, isErr
+}
+
+// progressed lists the role and text of each progress message job id saved.
+func (f factoryd) progressed(ctx *specs.Context, id domain.JobID) []string {
+	hist, err := f.store.History(context.Background(), id)
+	ctx.Expect(err).To(specs.BeNil())
+	msgs := []string{}
+	for _, h := range hist {
+		if p, ok := h.Event.(domain.AgentProgressed); ok {
+			msgs = append(msgs, p.Role+": "+p.Text)
+		}
+	}
+	return msgs
+}
+
+func TestProgressTool(t *testing.T) {
+	specs.Describe(t, "the MCP tool progress", func(s *specs.Spec) {
+		s.It("records each message as an event of the job, with the token's role, in order, and submit_result still works", func(ctx *specs.Context) {
+			f := start(ctx)
+			text, isErr := f.progress(ctx, "j-1", f.tokens["j-1"], "reading the spec")
+			ctx.Expect(isErr).ToEqual(false)
+			ctx.Expect(text).ToEqual("progress recorded for job j-1: AgentProgressed")
+			_, isErr = f.progress(ctx, "j-1", f.tokens["j-1"], "running the tests")
+			ctx.Expect(isErr).ToEqual(false)
+			ctx.Expect(f.progressed(ctx, "j-1")).ToEqual([]string{"builder: reading the spec", "builder: running the tests"})
+			ctx.Expect(f.events(ctx, "j-2")).To(specs.BeEmpty())
+
+			text, isErr = f.tool(ctx, "j-1", f.tokens["j-1"], `{"status":"READY"}`)
+			ctx.Expect(isErr).ToEqual(false)
+			ctx.Expect(text).ToEqual("result recorded for job j-1: StageEntered")
+			ctx.Expect(f.events(ctx, "j-1")).ToEqual([]string{"AgentProgressed", "AgentProgressed", "StageEntered"})
+		})
+
+		s.It("refuses an empty message with an error the agent reads, and records nothing", func(ctx *specs.Context) {
+			f := start(ctx)
+			text, isErr := f.progress(ctx, "j-1", f.tokens["j-1"], "")
+			ctx.Expect(isErr).ToEqual(true)
+			ctx.Expect(text).To(specs.StartWith("refused (422): worker: progress: "))
+			ctx.Expect(text).To(specs.Contain("progress without a message: missing field"))
+			ctx.Expect(f.events(ctx, "j-1")).To(specs.BeEmpty())
+		})
+
+		s.It("refuses a message over the longest length with an error the agent reads, and records nothing", func(ctx *specs.Context) {
+			f := start(ctx)
+			text, isErr := f.progress(ctx, "j-1", f.tokens["j-1"], strings.Repeat("x", domain.MaxProgressText+1))
+			ctx.Expect(isErr).ToEqual(true)
+			ctx.Expect(text).To(specs.StartWith("refused (422): worker: progress: "))
+			ctx.Expect(text).To(specs.Contain(fmt.Sprintf("invalid value: message of %d characters, over %d", domain.MaxProgressText+1, domain.MaxProgressText)))
+			ctx.Expect(f.events(ctx, "j-1")).To(specs.BeEmpty())
+		})
+
+		s.It("refuses another job's token and records nothing", func(ctx *specs.Context) {
+			f := start(ctx)
+			text, isErr := f.progress(ctx, "j-1", f.tokens["j-2"], "hello")
+			ctx.Expect(isErr).ToEqual(true)
+			ctx.Expect(text).To(specs.StartWith("refused (403): "))
+			ctx.Expect(f.events(ctx, "j-1")).To(specs.BeEmpty())
+			ctx.Expect(f.events(ctx, "j-2")).To(specs.BeEmpty())
 		})
 	})
 }
