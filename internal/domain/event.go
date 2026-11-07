@@ -82,9 +82,11 @@ func (SpecRejected) EventName() string { return "SpecRejected" }
 // JobID implements Event.
 func (e SpecRejected) JobID() JobID { return e.Job }
 
-// GatePassed records that the deterministic gate (checks) passed on the branch.
+// GatePassed records that the deterministic gate (checks) passed on the
+// branch; Run is the checks run it judged.
 type GatePassed struct {
 	Job JobID     `json:"job"`
+	Run ChecksRun `json:"run"`
 	At  time.Time `json:"at"`
 }
 
@@ -94,9 +96,11 @@ func (GatePassed) EventName() string { return "GatePassed" }
 // JobID implements Event.
 func (e GatePassed) JobID() JobID { return e.Job }
 
-// GateFailed records that the deterministic gate (checks) failed on the branch.
+// GateFailed records that the deterministic gate (checks) failed on the
+// branch; Run is the checks run it judged.
 type GateFailed struct {
 	Job JobID     `json:"job"`
+	Run ChecksRun `json:"run"`
 	At  time.Time `json:"at"`
 }
 
@@ -105,6 +109,21 @@ func (GateFailed) EventName() string { return "GateFailed" }
 
 // JobID implements Event.
 func (e GateFailed) JobID() JobID { return e.Job }
+
+// ChecksRan keeps with the job the checks run the gate judged in Round, so
+// the builder of the next round reads its log and a person sees why.
+type ChecksRan struct {
+	Job   JobID     `json:"job"`
+	Round int       `json:"round"`
+	Run   ChecksRun `json:"run"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (ChecksRan) EventName() string { return "ChecksRan" }
+
+// JobID implements Event.
+func (e ChecksRan) JobID() JobID { return e.Job }
 
 // StageEntered records that the job moved to a pipeline stage or to one of
 // the gates (StageSpecgate, StageGate).

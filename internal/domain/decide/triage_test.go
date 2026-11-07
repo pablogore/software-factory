@@ -191,7 +191,7 @@ func TestTriage(t *testing.T) {
 				evs, err := decide.Decide(job, gateFailed(4), defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "gate failed in the last round (4 of 4)",
+				ctx.Expect(evs).ToEqual([]domain.Event{ran(4, 4, failingRun), domain.NeedsHuman{Job: jobID, Reason: "gate failed in the last round (4 of 4)",
 					Question: "Triage already retried this job 1 of 1 times. Send it back to build with your feedback, or stop it?",
 					Cause:    domain.CauseGateFailed, At: at(4)}})
 			})
