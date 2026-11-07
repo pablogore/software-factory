@@ -1,5 +1,5 @@
-// Package sqlite implements ports.JobStore, ports.EventLog, ports.EventFeed
-// and ports.DeadEvents on SQLite with the pure-Go modernc.org/sqlite driver, so
+// Package sqlite implements ports.JobStore, ports.EventLog, ports.EventFeed,
+// ports.DeadEvents and ports.Outbox on SQLite with the pure-Go modernc.org/sqlite driver, so
 // factoryd builds with CGO_ENABLED=0.
 package sqlite
 
@@ -58,10 +58,22 @@ CREATE TABLE IF NOT EXISTS dead_events (
 	last_error TEXT NOT NULL,
 	PRIMARY KEY (subscriber, seq)
 );
+CREATE TABLE IF NOT EXISTS outbox (
+	seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+	key          TEXT NOT NULL UNIQUE,
+	job_id       TEXT NOT NULL REFERENCES jobs(id),
+	kind         TEXT NOT NULL,
+	payload      TEXT NOT NULL,
+	delivered    INTEGER NOT NULL DEFAULT 0,
+	attempts     INTEGER NOT NULL DEFAULT 0,
+	last_error   TEXT NOT NULL DEFAULT '',
+	next_attempt TEXT NOT NULL DEFAULT '',
+	failed       INTEGER NOT NULL DEFAULT 0
+);
 `
 
-// Store is a JobStore, EventLog, EventFeed and DeadEvents backed by one
-// SQLite file.
+// Store is a JobStore, EventLog, EventFeed, DeadEvents and Outbox backed by
+// one SQLite file.
 type Store struct {
 	db        *sql.DB
 	maxReason int
@@ -152,8 +164,14 @@ func load(ctx context.Context, q querier, id domain.JobID) (domain.Job, ports.Ve
 }
 
 // Apply implements ports.JobStore: the job is read, decided and saved with
-// Decide's events in one transaction, rolled back on the first failure.
-func (s *Store) Apply(ctx context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event) (_ []domain.Event, _ ports.Version, err error) {
+// Decide's events and the actions asked for in one transaction, rolled back
+// on the first failure.
+func (s *Store) Apply(ctx context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event, acts ...ports.Action) (_ []domain.Event, _ ports.Version, err error) {
+	for _, a := range acts {
+		if err := a.Validate(); err != nil {
+			return nil, 0, fmt.Errorf("sqlite: job %q: %w", id, err)
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("sqlite: begin apply %q: %w", id, err)
@@ -185,6 +203,11 @@ func (s *Store) Apply(ctx context.Context, id domain.JobID, v ports.Version, p d
 	}
 	for _, ev := range evs {
 		if err := insert(ctx, tx, id, ev); err != nil {
+			return nil, 0, err
+		}
+	}
+	for _, a := range acts {
+		if err := enqueue(ctx, tx, id, a); err != nil {
 			return nil, 0, err
 		}
 	}

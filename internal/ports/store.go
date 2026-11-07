@@ -40,7 +40,13 @@ type JobStore interface {
 	// since v, it fails with ErrVersionConflict. It returns Decide's events
 	// and the job's new version; when Decide returns none, nothing is saved
 	// and the version stays v.
-	Apply(ctx context.Context, id domain.JobID, v Version, p domain.Pipeline, ev domain.Event) ([]domain.Event, Version, error)
+	//
+	// acts are the external actions the state change asks for. They are saved
+	// to the Outbox in the same transaction, pending, so they exist only if
+	// the state does. An action whose Key is already saved, or repeats one
+	// in acts, is kept once and is not an error; one that fails Validate
+	// saves nothing.
+	Apply(ctx context.Context, id domain.JobID, v Version, p domain.Pipeline, ev domain.Event, acts ...Action) ([]domain.Event, Version, error)
 }
 
 // Record is one saved event in a job's history. At is the event's own time:
