@@ -1,5 +1,5 @@
 // Package memstore is the in-memory fake of ports.JobStore, ports.EventLog,
-// ports.EventFeed and ports.DeadEvents for slice tests. It passes the same contract suite as the
+// ports.EventFeed, ports.DeadEvents and ports.Outbox for slice tests. It passes the same contract suite as the
 // SQLite store (internal/adapters/out/sqlite).
 package memstore
 
@@ -28,7 +28,11 @@ type Store struct {
 	log       []logged // every job's events in saved order; Seq is index+1
 	processed map[string]map[ports.Seq]bool
 	// failed holds each subscriber's failed deliveries, retrying and dead.
-	failed    map[string]map[ports.Seq]ports.Delivery
+	failed map[string]map[ports.Seq]ports.Delivery
+	// outbox holds every job's actions in saved order; queued finds one by
+	// its key.
+	outbox    []ports.QueuedAction
+	queued    map[string]int
 	maxReason int
 }
 
@@ -54,6 +58,7 @@ func New(opts ...Option) (*Store, error) {
 		versions:  map[domain.JobID]ports.Version{},
 		processed: map[string]map[ports.Seq]bool{},
 		failed:    map[string]map[ports.Seq]ports.Delivery{},
+		queued:    map[string]int{},
 		maxReason: eventjson.DefaultMaxReason,
 	}
 	for _, opt := range opts {
@@ -107,9 +112,14 @@ func (s *Store) load(id domain.JobID) (domain.Job, ports.Version, error) {
 }
 
 // Apply implements ports.JobStore. Like the SQLite store it decides on the
-// job as saved, never one the caller hands in, and everything is encoded
-// before anything is kept, so a failure keeps nothing.
-func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event) ([]domain.Event, ports.Version, error) {
+// job as saved, never one the caller hands in, and everything is encoded and
+// every action checked before anything is kept, so a failure keeps nothing.
+func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event, acts ...ports.Action) ([]domain.Event, ports.Version, error) {
+	for _, a := range acts {
+		if err := a.Validate(); err != nil {
+			return nil, 0, fmt.Errorf("memstore: job %q: %w", id, err)
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.jobs[id]; !ok {
@@ -149,7 +159,20 @@ func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p dom
 	s.jobs[id] = data
 	s.versions[id] = v + 1
 	s.append(id, envs)
+	s.enqueue(id, acts)
 	return evs, v + 1, nil
+}
+
+// enqueue keeps each of acts pending for job id, unless its key is kept
+// already.
+func (s *Store) enqueue(id domain.JobID, acts []ports.Action) {
+	for _, a := range acts {
+		if _, ok := s.queued[a.Key]; ok {
+			continue
+		}
+		s.queued[a.Key] = len(s.outbox)
+		s.outbox = append(s.outbox, ports.QueuedAction{Job: id, Action: a})
+	}
 }
 
 // History implements ports.EventLog.
