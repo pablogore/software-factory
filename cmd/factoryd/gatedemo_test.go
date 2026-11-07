@@ -77,6 +77,58 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
 		})
 
+		s.It("with -db, fails a commit that deletes one test and skips another, naming each, and passes once it is reverted", func(ctx *specs.Context) {
+			bg := context.Background()
+			repo := ctx.Testing().TempDir()
+			test := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "a_test.go"), []byte(test), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "b_test.go"), []byte(test), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "init", "-q", "-b", "main")
+			git(ctx, repo, "add", ".")
+			git(ctx, repo, "commit", "-q", "-m", "base")
+			db := filepath.Join(ctx.Testing().TempDir(), "factory.db")
+			args := []string{"-dir", repo, "-base", "main", "-db", db, "-checks", "true"}
+			ctx.Expect(gateDemo(bg, args, &bytes.Buffer{})).To(specs.BeNil())
+			wt := filepath.Join(repo, ".worktrees", "gate-demo")
+			git(ctx, wt, "rm", "-q", "a_test.go")
+			skipped := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tt.Skip()\n}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(wt, "b_test.go"), []byte(skipped), 0o600)).To(specs.BeNil())
+			git(ctx, wt, "commit", "-q", "-am", "drop the tests")
+
+			var failed bytes.Buffer
+			ctx.Expect(gateDemo(bg, args, &failed)).To(specs.BeNil())
+
+			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the diff deletes the test file a_test.go"))
+			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the diff adds t.Skip to the test file b_test.go"))
+			ctx.Expect(failed.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+
+			git(ctx, wt, "revert", "--no-edit", "HEAD")
+			// The job went back to build, so the reverted worktree is gated as a
+			// new job against the same base.
+			var passed bytes.Buffer
+			ctx.Expect(gateDemo(bg, []string{"-dir", wt, "-base", "main", "-checks", "true"}, &passed)).To(specs.BeNil())
+
+			ctx.Expect(passed.String()).To(specs.Not(specs.Contain("rule broken")))
+			ctx.Expect(passed.String()).To(specs.Contain("the gate passed"))
+		})
+
+		s.It("fails a new test file not yet committed that adds .only, naming it", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme\n"), 0o600)).To(specs.BeNil())
+			git(ctx, dir, "init", "-q", "-b", "main")
+			git(ctx, dir, "add", ".")
+			git(ctx, dir, "commit", "-q", "-m", "base")
+			ctx.Expect(os.MkdirAll(filepath.Join(dir, "ui"), 0o750)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "ui", "app.test.ts"), []byte("it.only('renders', () => {})\n"), 0o600)).To(specs.BeNil())
+
+			var out bytes.Buffer
+			err := gateDemo(context.Background(), []string{"-dir", dir, "-checks", "true"}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).To(specs.Contain("rule broken: the diff adds .only to the test file ui/app.test.ts"))
+			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+		})
+
 		s.It("refuses a role file that is not a build role", func(ctx *specs.Context) {
 			role := filepath.Join(ctx.Testing().TempDir(), "reviewer.yaml")
 			ctx.Expect(os.WriteFile(role, []byte("name: reviewer-code\nkind: review\nmode: blocking\n"), 0o600)).To(specs.BeNil())

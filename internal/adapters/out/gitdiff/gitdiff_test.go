@@ -214,6 +214,54 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "sub/inner.txt", Kind: domain.ChangeAdded}})
 		})
 
+		s.It("reads a file as the base commit has it, whatever the worktree did to it", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			write(ctx, dir, "sub/a_test.go", "committed\n")
+			must(ctx, dir, "add", ".")
+			must(ctx, dir, "commit", "-q", "-m", "job")
+			write(ctx, dir, "README.md", "changed\n")
+
+			readme, err := gitdiff.Differ{}.AtBase(bg, filepath.Join(dir, "sub"), fork, "README.md")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(readme).ToEqual("README.md\n")
+			_, err = gitdiff.Differ{}.AtBase(bg, dir, fork, "sub/a_test.go")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+		})
+
+		s.It("refuses a ref as the base to read a file at", func(ctx *specs.Context) {
+			dir, _ := newRepo(ctx)
+
+			_, err := gitdiff.Differ{}.AtBase(bg, dir, "HEAD", "README.md")
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+		})
+
+		s.It("reads a file as the worktree has it, uncommitted or untracked, by its path from the root", func(ctx *specs.Context) {
+			dir, _ := newRepo(ctx)
+			write(ctx, dir, "README.md", "changed\n")
+			write(ctx, dir, "sub/new_test.go", "t.Skip()\n")
+
+			readme, err := gitdiff.Differ{}.InWorktree(bg, filepath.Join(dir, "sub"), "README.md")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(readme).ToEqual("changed\n")
+			untracked, err := gitdiff.Differ{}.InWorktree(bg, dir, "sub/new_test.go")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(untracked).ToEqual("t.Skip()\n")
+		})
+
+		s.It("reads a symlink in the worktree as its target, as git keeps it", func(ctx *specs.Context) {
+			dir, _ := newRepo(ctx)
+			outside := filepath.Join(ctx.Testing().TempDir(), "outside_test.go")
+			write(ctx, filepath.Dir(outside), "outside_test.go", "t.Skip()\n")
+			ctx.Expect(os.Symlink(outside, filepath.Join(dir, "link_test.go"))).To(specs.BeNil())
+
+			got, err := gitdiff.Differ{}.InWorktree(bg, dir, "link_test.go")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(outside)
+		})
+
 		s.It("fails for a base commit the repo does not have", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 

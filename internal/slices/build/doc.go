@@ -12,5 +12,7 @@
 // or deletes a protected path, or adds a makefile variant or a file under
 // .github/, fails the gate, so a builder cannot change what it is judged by.
 // So does an index that marks a file skip-worktree or assume-unchanged,
-// since it hides that file's changes from the diff.
+// since it hides that file's changes from the diff. A diff that deletes or
+// moves a test file, or adds .skip, .only or t.Skip to one, fails it too, so
+// checks never pass only because tests stopped running.
 package build
