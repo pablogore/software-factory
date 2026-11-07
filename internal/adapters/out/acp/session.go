@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/ports"
@@ -18,13 +20,21 @@ type session struct {
 	spec     ports.SessionSpec
 	dir      string
 	cmd      *exec.Cmd
+	stdin    io.Closer
 	stdout   *os.File
 	conn     *conn
 	id       string
 	loadable bool
+	// exited ends once the agent process has exited and been reaped.
+	exited chan struct{}
 
-	mu        sync.Mutex
-	turn      *turn
+	mu   sync.Mutex
+	turn *turn
+	// reason is why factoryd stops the session, once it does: the stop
+	// reason a running turn ends with, whatever the agent answers.
+	reason    string
+	timer     *time.Timer
+	stopOnce  sync.Once
 	closeOnce sync.Once
 	// closed ends when Close starts, so no event waits on a reader then.
 	closed chan struct{}
@@ -37,6 +47,8 @@ var _ ports.Session = (*session)(nil)
 type turn struct {
 	ctx context.Context
 	out chan domain.AgentProgressed
+	// done ends once out is closed.
+	done chan struct{}
 }
 
 type textContent struct {
@@ -51,7 +63,7 @@ func (s *session) Prompt(ctx context.Context, msg string) (<-chan domain.AgentPr
 		s.mu.Unlock()
 		return nil, fmt.Errorf("acp: prompt: %w", ports.ErrTurnRunning)
 	}
-	t := &turn{ctx: ctx, out: make(chan domain.AgentProgressed, 16)}
+	t := &turn{ctx: ctx, out: make(chan domain.AgentProgressed, 16), done: make(chan struct{})}
 	s.turn = t
 	s.mu.Unlock()
 
@@ -75,6 +87,8 @@ type promptResult struct {
 }
 
 // end reports the agent's answer to the turn's prompt and closes the turn.
+// A turn of a session factoryd stopped ends with factoryd's reason, also
+// when the agent had to be killed and never answered.
 func (s *session) end(t *turn, res json.RawMessage, err error) {
 	var r promptResult
 	if err == nil {
@@ -82,7 +96,15 @@ func (s *session) end(t *turn, res json.RawMessage, err error) {
 			err = fmt.Errorf("acp: session/prompt result: %w", derr)
 		}
 	}
+	s.mu.Lock()
+	reason := s.reason
+	s.mu.Unlock()
 	switch {
+	case reason != "":
+		if err == nil && r.Usage != nil {
+			s.emit(t, domain.AgentProgressed{Kind: domain.ProgressUsage, InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens})
+		}
+		s.emit(t, domain.AgentProgressed{Kind: domain.ProgressEnded, StopReason: reason})
 	case err != nil:
 		s.emit(t, domain.AgentProgressed{Kind: domain.ProgressEnded, Error: err.Error()})
 	default:
@@ -95,13 +117,20 @@ func (s *session) end(t *turn, res json.RawMessage, err error) {
 	s.turn = nil
 	s.mu.Unlock()
 	close(t.out)
+	close(t.done)
 }
 
 // emit dates ev and names the job and role, then hands it to the turn. A
 // consumer that does not read holds the agent's output back; one whose ctx
-// ended, or whose session is closing, gets nothing more.
+// ended, or whose session is closing, gets nothing more than the channel
+// still has room for, so a closing session's last events are not lost.
 func (s *session) emit(t *turn, ev domain.AgentProgressed) {
 	ev.Job, ev.Role, ev.At = s.spec.Job, s.spec.Role, s.agent.clock.Now()
+	select {
+	case t.out <- ev:
+		return
+	default:
+	}
 	select {
 	case t.out <- ev:
 	case <-t.ctx.Done():
@@ -151,13 +180,43 @@ func (s *session) notified(method string, params json.RawMessage) {
 	}
 }
 
-// Cancel sends ACP's session/cancel; the agent then answers the prompt with
-// the cancelled stop reason.
+// Cancel stops the session as cancelled.
 func (s *session) Cancel() error {
-	if err := s.conn.notify("session/cancel", map[string]string{"sessionId": s.id}); err != nil {
-		return fmt.Errorf("acp: cancel: %w", err)
-	}
+	s.stop(domain.StopCancelled)
 	return nil
+}
+
+// stop ends the session for reason, first asking the agent: ACP's
+// session/cancel for the running turn, then closing its stdin so it exits.
+// Whatever is left after the grace period is killed by Close. Stopping again
+// waits for the first stop and changes nothing.
+func (s *session) stop(reason string) {
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		if s.reason == "" {
+			s.reason = reason
+		}
+		t := s.turn
+		s.mu.Unlock()
+
+		expired := make(chan struct{})
+		grace := time.AfterFunc(s.agent.grace(), func() { close(expired) })
+		defer grace.Stop()
+		// A connection already closed has no agent left to ask.
+		_ = s.conn.notify("session/cancel", map[string]string{"sessionId": s.id})
+		if t != nil {
+			select {
+			case <-t.done:
+			case <-expired:
+			}
+		}
+		_ = s.stdin.Close()
+		select {
+		case <-s.exited:
+		case <-expired:
+		}
+		_ = s.Close()
+	})
 }
 
 // Resume loads the session again with ACP's session/load, which only agents
@@ -180,13 +239,19 @@ func (s *session) Resume(ctx context.Context) error {
 	return nil
 }
 
-// Close kills the agent and waits for it, then stops reading its output, so
-// a running turn ends with ErrSessionClosed.
+// Close kills the agent's process group and waits for the agent, then stops
+// reading its output, so a running turn ends with ErrSessionClosed, or with
+// the reason the session was stopped for.
 func (s *session) Close() error {
 	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		if s.timer != nil {
+			s.timer.Stop()
+		}
+		s.mu.Unlock()
 		close(s.closed)
-		_ = s.cmd.Process.Kill()
-		_ = s.cmd.Wait()
+		killGroup(s.cmd)
+		<-s.exited
 		_ = s.stdout.Close()
 		<-s.conn.done
 	})

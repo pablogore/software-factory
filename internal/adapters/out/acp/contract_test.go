@@ -199,16 +199,37 @@ func agentContract(s *specs.Spec, newAgent newAgentFunc) {
 	})
 
 	s.When("the session is cancelled", func(s *specs.Spec) {
-		s.It("the agent is asked to cancel its session", func(ctx *specs.Context) {
+		s.It("the agent is asked to cancel its session, and the session ends", func(ctx *specs.Context) {
 			a, received := newAgent(ctx, acpfake.Script{})
 			sess := start(ctx, a, spec(ctx))
 
 			ctx.Expect(sess.Cancel()).To(specs.BeNil())
-			// The agent reads in order: once it answered a later prompt, it
-			// has seen the cancel.
-			ch, err := sess.Prompt(bg, "after")
+
+			ctx.Expect(received().Cancels).ToEqual(1)
+			_, err := sess.Prompt(bg, "after")
+			ctx.Expect(err).To(specs.MatchError(ports.ErrSessionClosed))
+		})
+
+		s.It("the running turn ends as cancelled", func(ctx *specs.Context) {
+			a, _ := newAgent(ctx, acpfake.Script{Turns: []acpfake.Turn{{Updates: []acpfake.Update{{Message: "Working."}}, Hang: true}}})
+			sess := start(ctx, a, spec(ctx))
+			ch, err := sess.Prompt(bg, "build")
 			ctx.Expect(err).To(specs.BeNil())
-			drain(ctx, ch)
+
+			ctx.Expect(sess.Cancel()).To(specs.BeNil())
+
+			ctx.Expect(drain(ctx, ch)).ToEqual([]domain.AgentProgressed{
+				progress(domain.AgentProgressed{Kind: domain.ProgressMessage, Text: "Working."}),
+				progress(domain.AgentProgressed{Kind: domain.ProgressEnded, StopReason: domain.StopCancelled}),
+			})
+		})
+
+		s.It("cancelling again is a no-op", func(ctx *specs.Context) {
+			a, received := newAgent(ctx, acpfake.Script{})
+			sess := start(ctx, a, spec(ctx))
+
+			ctx.Expect(sess.Cancel()).To(specs.BeNil())
+			ctx.Expect(sess.Cancel()).To(specs.BeNil())
 
 			ctx.Expect(received().Cancels).ToEqual(1)
 		})

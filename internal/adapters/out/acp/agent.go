@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/ports"
@@ -19,12 +20,22 @@ import (
 // protocolVersion is the ACP version the client speaks.
 const protocolVersion = 1
 
+// DefaultGrace is how long a session waits for its agent to stop when asked
+// before it kills it, when Config.Grace is not set.
+const DefaultGrace = 5 * time.Second
+
 // Config is how an agent is launched: its command, its arguments and the
-// environment it gets on top of factoryd's.
+// environment it gets on top of factoryd's, and how long its sessions last.
 type Config struct {
 	Command string
 	Args    []string
 	Env     []string
+	// Timeout is how long a session may run from its start before it is
+	// ended as a cancelled one is; zero means it never times out.
+	Timeout time.Duration
+	// Grace is how long the agent has to stop when a session is cancelled
+	// or times out; zero means DefaultGrace.
+	Grace time.Duration
 }
 
 // Agent launches one process of the configured agent per session.
@@ -56,6 +67,7 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 	cmd := exec.Command(a.cfg.Command, a.cfg.Args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), a.cfg.Env...)
+	ownGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("acp: stdin: %w", err)
@@ -74,14 +86,31 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 	}
 	_ = w.Close()
 
-	sess := &session{agent: a, spec: s, dir: dir, cmd: cmd, stdout: out, closed: make(chan struct{})}
+	sess := &session{agent: a, spec: s, dir: dir, cmd: cmd, stdin: stdin, stdout: out, closed: make(chan struct{}), exited: make(chan struct{})}
+	go func() {
+		_ = cmd.Wait()
+		close(sess.exited)
+	}()
 	sess.conn = newConn(stdin, sess.notified)
 	go sess.conn.read(out)
 	if err := sess.open(ctx); err != nil {
 		_ = sess.Close()
 		return nil, err
 	}
+	if a.cfg.Timeout > 0 {
+		sess.mu.Lock()
+		sess.timer = time.AfterFunc(a.cfg.Timeout, func() { sess.stop(domain.StopTimedOut) })
+		sess.mu.Unlock()
+	}
 	return sess, nil
+}
+
+// grace is how long the agent has to stop when asked.
+func (a *Agent) grace() time.Duration {
+	if a.cfg.Grace > 0 {
+		return a.cfg.Grace
+	}
+	return DefaultGrace
 }
 
 type initializeResult struct {

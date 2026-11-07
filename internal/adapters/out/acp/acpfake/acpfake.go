@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/acp"
 )
@@ -20,6 +22,7 @@ import (
 const (
 	envScript = "FACTORY_ACPFAKE_SCRIPT"
 	envRecord = "FACTORY_ACPFAKE_RECORD"
+	envChild  = "FACTORY_ACPFAKE_CHILD"
 )
 
 // Script is what the fake agent does.
@@ -28,6 +31,12 @@ type Script struct {
 	LoadSession bool `json:"load_session,omitempty"`
 	// NoHTTPMCP leaves out the HTTP MCP capability.
 	NoHTTPMCP bool `json:"no_http_mcp,omitempty"`
+	// Child makes the agent launch a child process that sleeps, as agents
+	// that run tools do, when it creates its session.
+	Child bool `json:"child,omitempty"`
+	// IgnoreCancel makes the agent ignore session/cancel and keep running
+	// when its stdin ends, so only killing it stops it.
+	IgnoreCancel bool `json:"ignore_cancel,omitempty"`
 	// Turns answers the prompts in order; a prompt past the last ends at
 	// once with end_turn.
 	Turns []Turn `json:"turns,omitempty"`
@@ -42,6 +51,9 @@ type Turn struct {
 	StopReason string `json:"stop_reason,omitempty"`
 	// Exit makes the agent exit after its updates, without answering.
 	Exit bool `json:"exit,omitempty"`
+	// Hang makes the agent work on after its updates until it is cancelled,
+	// then answer with the cancelled stop reason.
+	Hang bool `json:"hang,omitempty"`
 }
 
 // Update is one session/update: a message chunk, or a tool call when
@@ -83,6 +95,8 @@ type Received struct {
 	Cancels         int         `json:"cancels"`
 	// Loads holds the session id of each session/load.
 	Loads []string `json:"loads"`
+	// Children holds the pid of each child process the agent launched.
+	Children []int `json:"children"`
 }
 
 // sessionID is the id the fake gives its only session.
@@ -115,6 +129,9 @@ func Serve(in io.Reader, out io.Writer, sc Script, record func(Received) error) 
 		var m message
 		if err := dec.Decode(&m); err != nil {
 			if errors.Is(err, io.EOF) {
+				if sc.IgnoreCancel {
+					time.Sleep(time.Hour)
+				}
 				return nil
 			}
 			return fmt.Errorf("acpfake: read: %w", err)
@@ -132,13 +149,22 @@ type fake struct {
 	got    Received
 	turns  int
 	seen   map[string]bool
+	// hanging is the prompt of a Hang turn, waiting for a cancel.
+	hanging *message
 }
 
 func (f *fake) handle(m message) error {
 	if len(m.ID) == 0 {
 		if m.Method == "session/cancel" {
 			f.got.Cancels++
-			return f.record(f.got)
+			if err := f.record(f.got); err != nil {
+				return err
+			}
+			if f.hanging != nil && !f.sc.IgnoreCancel {
+				p := f.hanging
+				f.hanging = nil
+				return f.answer(*p, map[string]string{"stopReason": "cancelled"})
+			}
 		}
 		return nil
 	}
@@ -171,6 +197,13 @@ func (f *fake) handle(m message) error {
 			return f.fail(m, err)
 		}
 		f.got.Cwd, f.got.MCPServers, f.got.Session = p.Cwd, p.MCPServers, sessionID
+		if f.sc.Child {
+			pid, err := child()
+			if err != nil {
+				return f.fail(m, err)
+			}
+			f.got.Children = append(f.got.Children, pid)
+		}
 		if err := f.record(f.got); err != nil {
 			return err
 		}
@@ -228,6 +261,10 @@ func (f *fake) prompt(m message) error {
 	if t.Exit {
 		return errExit
 	}
+	if t.Hang {
+		f.hanging = &m
+		return nil
+	}
 	res := map[string]any{"stopReason": "end_turn"}
 	if t.StopReason != "" {
 		res["stopReason"] = t.StopReason
@@ -279,12 +316,33 @@ func (f *fake) write(m message) error {
 	return nil
 }
 
-// Requested tells whether this process was launched to be the fake agent.
+// child launches this binary again as a child process that only sleeps,
+// and leaves it running.
+func child() (int, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return 0, fmt.Errorf("acpfake: own binary: %w", err)
+	}
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), envChild+"=1")
+	if err := cmd.Start(); err != nil {
+		return 0, fmt.Errorf("acpfake: child: %w", err)
+	}
+	return cmd.Process.Pid, nil
+}
+
+// Requested tells whether this process was launched to be the fake agent,
+// or one of its children.
 func Requested() bool { return os.Getenv(envScript) != "" }
 
 // Run plays the script it was launched with on stdin and stdout and returns
-// the exit code, recording to the file Config named.
+// the exit code, recording to the file Config named. A child of the fake
+// sleeps until it is killed.
 func Run() int {
+	if os.Getenv(envChild) != "" {
+		time.Sleep(time.Hour)
+		return 0
+	}
 	var sc Script
 	if err := json.Unmarshal([]byte(os.Getenv(envScript)), &sc); err != nil {
 		fmt.Fprintln(os.Stderr, "acpfake: script:", err)
