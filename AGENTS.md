@@ -36,6 +36,7 @@ Hexagonal + vertical slices. See `docs/factoryd/07-arquitectura.md`.
   - `github.com/getsyntegrity/go-specs` (tests only, pinned);
   - `go.yaml.in/yaml/v3` (only in config adapters such as `internal/adapters/out/configyaml`);
   - `modernc.org/sqlite` (only in `internal/adapters/out/sqlite`; pure Go, no cgo).
+  - `github.com/modelcontextprotocol/go-sdk` (only in `internal/adapters/in/mcpworker` and, later, `mcpoperator`): the official MCP SDK.
 
   Any other new dependency must be justified in the PR description and goes to a person; prefer pure-Go (no cgo) libraries.
 - Errors: wrap with `%w`, compare with `errors.Is/As`. No panics outside `main`.
