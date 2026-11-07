@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/ports"
@@ -156,10 +157,11 @@ func check(t Trigger) error {
 // JobID is the job a request gets: the same provider, thread and id always
 // give the same one, so the store's refusal of a second job with it is what
 // stops a repeat. Each part is length-prefixed, so no two different
-// requests hash the same text.
+// requests hash the same text, and 128 bits of the hash are kept, so no two
+// collide by chance either.
 func JobID(t Trigger) domain.JobID {
 	sum := sha256.Sum256(fmt.Appendf(nil, "%d:%s%d:%s%d:%s", len(t.Provider), t.Provider, len(t.Thread), t.Thread, len(t.ID), t.ID))
-	return domain.JobID("ticket-" + hex.EncodeToString(sum[:8]))
+	return domain.JobID("ticket-" + hex.EncodeToString(sum[:16]))
 }
 
 // confirmation is the reply that tells the thread its job exists. Its key
@@ -176,10 +178,12 @@ func confirmation(job domain.Job) (ports.Action, error) {
 	return ports.Action{Key: string(job.ID) + "/ticket/confirm", Kind: ActionReply, Payload: string(payload)}, nil
 }
 
-// title is the request's first non-blank line, cut to maxTitle runes.
+// title is the request's first non-blank line, cut to maxTitle runes, with
+// no control or bidi characters, so it shows as the one line it is wherever
+// it is printed.
 func title(text string) string {
 	for _, line := range lines(text) {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(strings.Map(printable, line))
 		if line == "" {
 			continue
 		}
@@ -189,4 +193,16 @@ func title(text string) string {
 		return line
 	}
 	return ""
+}
+
+// printable turns a control character, such as a tab, into a space and drops
+// a bidi control, which could make the title read as other text.
+func printable(r rune) rune {
+	switch {
+	case unicode.Is(unicode.Bidi_Control, r):
+		return -1
+	case unicode.IsControl(r):
+		return ' '
+	}
+	return r
 }
