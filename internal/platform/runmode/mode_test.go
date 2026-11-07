@@ -212,6 +212,13 @@ func alone(n int, stage string) runmode.IssueReport {
 	}
 }
 
+// noDeps is a fake queue.Issues for issues that depend on none.
+type noDeps struct{}
+
+func (noDeps) Finished(_ context.Context, n int) (bool, error) {
+	return false, fmt.Errorf("issue #%d: %w", n, queue.ErrNoIssue)
+}
+
 // open is a fake queue.Issues: the issues it lists are open, every other
 // one is merged or closed.
 type open []int
@@ -231,12 +238,12 @@ type fixture struct {
 }
 
 func newFixture(ctx *specs.Context, order queue.Order, reps reports) fixture {
-	return newFixtureOpen(ctx, order, reps, open{})
+	return newFixtureOpen(ctx, order, reps, noDeps{})
 }
 
-// newFixtureOpen is newFixture with the issues in deps open, so the queue
-// holds those depending on them.
-func newFixtureOpen(ctx *specs.Context, order queue.Order, reps reports, deps open) fixture {
+// newFixtureOpen is newFixture with deps answering for the issues the queue
+// depends on, so it holds those depending on open ones.
+func newFixtureOpen(ctx *specs.Context, order queue.Order, reps reports, deps queue.Issues) fixture {
 	f := fixture{r: newRunner(), sched: newScheduler(ctx, 1, costs{}), outbox: &outbox{}, inbox: &inbox{}}
 	f.brake = runmode.NewBrake(f.sched)
 	f.q = queue.New(f.brake, order, deps, f.r)

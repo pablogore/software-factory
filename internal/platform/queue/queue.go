@@ -4,9 +4,10 @@
 // which runs what it is given first come first served, starts them in that
 // order.
 //
-// An issue whose "Depends on #N" lines name an issue not merged or closed
-// waits, with the reason, and the next ready one in the order goes ahead of
-// it (see Depends).
+// An issue whose "Depends on #N" lines, or the tech lead's AFTER lines
+// (see Order.After), name an issue not merged or closed waits, with the
+// reason, and the next ready one in the order goes ahead of it (see
+// Depends).
 //
 // The queue looks for room again, and at the dependencies, when issues are
 // added and when the work of one of its issues starts or ends; work others
@@ -122,7 +123,7 @@ func (q *Queue) feed(ctx context.Context) {
 		return
 	}
 	for i, is := range q.waiting {
-		if why := hold(ctx, q.deps, is); why != "" {
+		if why := hold(ctx, q.deps, is, q.order.After[is.Number]); why != "" {
 			q.held[is.Number] = why
 			continue
 		}

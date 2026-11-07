@@ -190,3 +190,119 @@ func TestQueueDependencies(t *testing.T) {
 		})
 	})
 }
+
+// after is the order of a plan with only AFTER lines, `AFTER: #n #deps...`
+// for each entry.
+func after(lines map[int][]int) queue.Order { return queue.Order{After: lines} }
+
+// The cases marked "main" are those of `factory/bin/job queue` on main for
+// plan.md's AFTER lines (cmd_queue's hold rows and the plan step of
+// test_e2e.py).
+func TestQueueAfter(t *testing.T) {
+	specs.Describe(t, "queue.Queue with the tech lead's AFTER lines", func(s *specs.Spec) {
+		s.When("an issue's AFTER names an open one", func(s *specs.Spec) {
+			s.It("is not taken and waits for it, from plan.md (main)", func(ctx *specs.Context) {
+				r := newRunner()
+				q := queue.New(newScheduler(ctx, 3, costs{}), after(map[int][]int{3: {2}}), newTracker(2), r)
+				q.Add(context.Background(), dependent(3, ""))
+				ctx.Expect(r.started()).To(specs.BeEmpty())
+				ctx.Expect(numbers(q.Waiting())).ToEqual([]int{3})
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(3, ""), Reason: "espera #2 (plan.md)"}})
+			})
+
+			s.It("holds only the first issue of the line, not the ones it waits for (main)", func(ctx *specs.Context) {
+				r := newRunner()
+				q := queue.New(newScheduler(ctx, 1, costs{}), after(map[int][]int{3: {2}}), newTracker(2), r)
+				q.Add(context.Background(), dependent(2, ""), dependent(3, ""))
+				r.awaitStart(ctx, 2)
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(3, ""), Reason: "espera #2 (plan.md)"}})
+				ctx.Expect(r.end(ctx, 2, nil)).To(specs.BeNil())
+				ctx.Expect(r.started()).ToEqual([]int{2})
+			})
+
+			s.It("names each one still open, in the line's order (main sorts them)", func(ctx *specs.Context) {
+				r := newRunner()
+				deps := newTracker(5, 1, 4)
+				deps.finish(1)
+				q := queue.New(newScheduler(ctx, 1, costs{}), after(map[int][]int{9: {5, 1, 4}}), deps, r)
+				q.Add(context.Background(), dependent(9, ""))
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(9, ""), Reason: "espera #5 (plan.md), #4 (plan.md)"}})
+			})
+		})
+
+		s.When("an issue has dependencies in its body and in plan.md", func(s *specs.Spec) {
+			s.It("waits for all of them, and names the plan's ones as such", func(ctx *specs.Context) {
+				r := newRunner()
+				q := queue.New(newScheduler(ctx, 1, costs{}), after(map[int][]int{3: {2, 1}}), newTracker(1, 2), r)
+				q.Add(context.Background(), dependent(3, "Depends on #1"))
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(3, "Depends on #1"), Reason: "espera #1, #2 (plan.md)"}})
+			})
+
+			s.It("is taken only once those of both are merged or closed", func(ctx *specs.Context) {
+				r := newRunner()
+				deps := newTracker(1, 2)
+				q := queue.New(newScheduler(ctx, 1, costs{}), after(map[int][]int{3: {2}}), deps, r)
+				q.Add(context.Background(), dependent(3, "Depends on #1"))
+				deps.finish(1)
+				q.Add(context.Background())
+				ctx.Expect(r.started()).To(specs.BeEmpty())
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(3, "Depends on #1"), Reason: "espera #2 (plan.md)"}})
+				deps.finish(2)
+				q.Add(context.Background())
+				r.awaitStart(ctx, 3)
+				ctx.Expect(q.Held()).To(specs.BeEmpty())
+				ctx.Expect(r.end(ctx, 3, nil)).To(specs.BeNil())
+			})
+
+			s.It("names a dependency both list once, as the body's", func(ctx *specs.Context) {
+				r := newRunner()
+				q := queue.New(newScheduler(ctx, 1, costs{}), after(map[int][]int{3: {1}}), newTracker(1), r)
+				q.Add(context.Background(), dependent(3, "Depends on #1"))
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(3, "Depends on #1"), Reason: "espera #1"}})
+			})
+		})
+
+		s.When("an issue's AFTER names one that does not exist", func(s *specs.Spec) {
+			s.It("waits and is shown as an unknown dependency from plan.md (main went ahead)", func(ctx *specs.Context) {
+				r := newRunner()
+				q := queue.New(newScheduler(ctx, 2, costs{}), after(map[int][]int{3: {404}}), newTracker(), r)
+				q.Add(context.Background(), dependent(3, ""))
+				ctx.Expect(r.started()).To(specs.BeEmpty())
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(3, ""), Reason: "espera dependencia desconocida #404 (plan.md)"}})
+			})
+		})
+
+		s.When("an issue's AFTER names one that cannot be read for now", func(s *specs.Spec) {
+			s.It("waits without calling it unknown and reads it again at the next poll", func(ctx *specs.Context) {
+				r := newRunner()
+				deps := newTracker(2)
+				deps.fail(2, true)
+				q := queue.New(newScheduler(ctx, 2, costs{}), after(map[int][]int{3: {2}}), deps, r)
+				q.Add(context.Background(), dependent(3, ""))
+				ctx.Expect(r.started()).To(specs.BeEmpty())
+				ctx.Expect(q.Held()).ToEqual([]queue.Hold{{Issue: dependent(3, ""), Reason: "espera #2 (plan.md)"}})
+				deps.fail(2, false)
+				deps.finish(2)
+				q.Add(context.Background())
+				r.awaitStart(ctx, 3)
+				ctx.Expect(q.Held()).To(specs.BeEmpty())
+				ctx.Expect(r.end(ctx, 3, nil)).To(specs.BeNil())
+			})
+		})
+
+		s.When("the issue an AFTER names is merged (main)", func(s *specs.Spec) {
+			s.It("takes the one waiting for it next, although the order put it first", func(ctx *specs.Context) {
+				r := newRunner()
+				deps := newTracker(2)
+				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{TechLead: []int{3, 2}, After: map[int][]int{3: {2}}}, deps, r)
+				q.Add(context.Background(), dependent(2, ""), dependent(3, ""))
+				r.awaitStart(ctx, 2)
+				deps.finish(2)
+				ctx.Expect(r.end(ctx, 2, nil)).To(specs.BeNil())
+				r.awaitStart(ctx, 3)
+				ctx.Expect(r.end(ctx, 3, nil)).To(specs.BeNil())
+				ctx.Expect(r.started()).ToEqual([]int{2, 3})
+			})
+		})
+	})
+}
