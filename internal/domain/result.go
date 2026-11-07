@@ -156,6 +156,42 @@ func (TaskResult) Kind() Kind { return KindTask }
 // Validate implements Result.
 func (TaskResult) Validate() error { return nil }
 
+// TriageDecision is the verdict of a triage role.
+type TriageDecision string
+
+// Triage decisions.
+const (
+	TriageRetry    TriageDecision = "RETRY"
+	TriageEscalate TriageDecision = "ESCALATE"
+)
+
+// TriageResult gives a job that hit a wall one more round, with Brief as the
+// builder's instructions, or sends it to a person with Question, one closed
+// question (yes/no or a few options) they can answer in a line.
+type TriageResult struct {
+	Decision TriageDecision `json:"decision"`
+	Brief    string         `json:"brief,omitempty"`
+	Question string         `json:"question,omitempty"`
+}
+
+// Kind implements Result.
+func (TriageResult) Kind() Kind { return KindTriage }
+
+// Validate implements Result. A RETRY needs its brief and an ESCALATE its
+// question, since each is all the next one to act gets.
+func (r TriageResult) Validate() error {
+	if err := oneOf("decision", r.Decision, TriageRetry, TriageEscalate); err != nil {
+		return err
+	}
+	if r.Decision == TriageRetry && Blank(r.Brief) {
+		return fmt.Errorf("%w: brief", ErrMissingField)
+	}
+	if r.Decision == TriageEscalate && Blank(r.Question) {
+		return fmt.Errorf("%w: question", ErrMissingField)
+	}
+	return nil
+}
+
 func oneOf[T ~string](field string, v T, allowed ...T) error {
 	if v == "" {
 		return fmt.Errorf("%w: %s", ErrMissingField, field)

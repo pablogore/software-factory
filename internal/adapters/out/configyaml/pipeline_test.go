@@ -70,6 +70,13 @@ func TestLoadPipeline(t *testing.T) {
 			ctx.Expect(p.SpecRejections()).ToEqual(1)
 		})
 
+		s.It("loads triage_retries 0, which turns triage off", func(ctx *specs.Context) {
+			p, err := configyaml.LoadPipeline([]byte(shortFlow+"limits:\n  triage_retries: 0\n"), loadedRoles(ctx))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.TriageRetries()).ToEqual(0)
+		})
+
 		s.It("loads every limit at its cap", func(ctx *specs.Context) {
 			data := shortFlow + "limits:\n  spec_rejections: 10\n  human_reworks: 10\n  triage_retries: 3\n  max_rounds: 10\n"
 
@@ -269,7 +276,7 @@ func TestLoadPipeline(t *testing.T) {
 				{
 					"names a triage_retries that is text",
 					"name: p\nstages: [build]\nlimits:\n  triage_retries: two\n",
-					`pipeline p: limits: invalid value: line 4: triage_retries "two", want a whole number of 1 or more`,
+					`pipeline p: limits: invalid value: line 4: triage_retries "two", want a whole number of 0 or more`,
 				},
 				{
 					"names a human_reworks that is neither a number nor unlimited",

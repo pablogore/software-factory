@@ -141,8 +141,11 @@ func parseLimits(n *yaml.Node) (domain.Limits, error) {
 		var x int
 		if v.Kind != yaml.ScalarNode || v.Tag != "!!int" || v.Decode(&x) != nil {
 			want := "want a whole number of 1 or more"
-			if key == "human_reworks" {
+			switch key {
+			case "human_reworks":
 				want += " or unlimited"
+			case "triage_retries":
+				want = "want a whole number of 0 or more"
 			}
 			return l, fmt.Errorf("%w: line %d: %s %q, %s", domain.ErrInvalidValue, v.Line, key, v.Value, want)
 		}

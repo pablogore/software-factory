@@ -62,6 +62,11 @@ func TestResult(t *testing.T) {
 				{"approve ESCALATE", domain.ApproveResult{Decision: domain.ApproveEscalate}, true},
 				{"approve MERGE", domain.ApproveResult{Decision: "MERGE"}, false},
 				{"task with files", domain.TaskResult{Produces: []string{"CHANGELOG.md"}}, true},
+				{"triage RETRY with a brief", domain.TriageResult{Decision: domain.TriageRetry, Brief: "rebase on the base first"}, true},
+				{"triage RETRY without a brief", domain.TriageResult{Decision: domain.TriageRetry, Brief: "  "}, false},
+				{"triage ESCALATE with a question", domain.TriageResult{Decision: domain.TriageEscalate, Question: "Keep the old flag? yes/no"}, true},
+				{"triage ESCALATE without a question", domain.TriageResult{Decision: domain.TriageEscalate}, false},
+				{"triage SKIP", domain.TriageResult{Decision: "SKIP", Brief: "x"}, false},
 			}
 			specs.Table(s, rows, func(r verdictRow) string {
 				return r.name
@@ -79,6 +84,7 @@ func TestResult(t *testing.T) {
 				domain.ReviewResult{}.Kind(),
 				domain.ApproveResult{}.Kind(),
 				domain.TaskResult{}.Kind(),
+				domain.TriageResult{}.Kind(),
 			}
 			ctx.Expect(got).ToEqual(domain.Kinds)
 		})

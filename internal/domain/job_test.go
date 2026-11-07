@@ -39,11 +39,11 @@ func TestJob(t *testing.T) {
 
 func TestKind(t *testing.T) {
 	specs.Describe(t, "Kind", func(s *specs.Spec) {
-		s.It("accepts the six kinds", func(ctx *specs.Context) {
+		s.It("accepts the seven kinds", func(ctx *specs.Context) {
 			for _, k := range domain.Kinds {
 				ctx.Expect(k.Validate()).To(specs.BeNil())
 			}
-			ctx.Expect(domain.Kinds).To(specs.HaveLen(6))
+			ctx.Expect(domain.Kinds).To(specs.HaveLen(7))
 		})
 
 		s.It("rejects an unknown kind", func(ctx *specs.Context) {
@@ -68,6 +68,7 @@ func TestJobValidate(t *testing.T) {
 		s.It("accepts a job that keeps every invariant", func(ctx *specs.Context) {
 			ctx.Expect(valid().Validate()).To(specs.BeNil())
 			ctx.Expect(domain.Job{ID: "job-1", Stage: "build", Round: 1}.Validate()).To(specs.BeNil())
+			ctx.Expect(domain.Job{ID: "job-1", Stage: domain.StageTriage, Round: 3, Wall: domain.CauseGateFailed}.Validate()).To(specs.BeNil())
 		})
 
 		rows := []invalidJobRow{
@@ -77,6 +78,8 @@ func TestJobValidate(t *testing.T) {
 			{"refuses needs-human without a cause", func(j *domain.Job) { j.Cause = "" }, domain.ErrMissingField, "cause"},
 			{"refuses an unknown cause", func(j *domain.Job) { j.Cause = "bored" }, domain.ErrInvalidValue, "cause"},
 			{"refuses an unknown cause outside needs-human", func(j *domain.Job) { j.Stage, j.Cause = "build", "bored" }, domain.ErrInvalidValue, "cause"},
+			{"refuses triage without the wall it hit", func(j *domain.Job) { j.Stage, j.Cause = domain.StageTriage, "" }, domain.ErrMissingField, "wall"},
+			{"refuses triage with an unknown wall", func(j *domain.Job) { j.Stage, j.Cause, j.Wall = domain.StageTriage, "", "bored" }, domain.ErrInvalidValue, "wall"},
 		}
 		specs.Table(s, rows, func(r invalidJobRow) string { return r.name }, func(ctx *specs.Context, r invalidJobRow) {
 			job := valid()

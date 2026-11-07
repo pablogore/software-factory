@@ -26,6 +26,7 @@ var results = map[domain.Kind]reflect.Type{
 	domain.KindReview:  reflect.TypeFor[domain.ReviewResult](),
 	domain.KindApprove: reflect.TypeFor[domain.ApproveResult](),
 	domain.KindTask:    reflect.TypeFor[domain.TaskResult](),
+	domain.KindTriage:  reflect.TypeFor[domain.TriageResult](),
 }
 
 func encodeResultSubmitted(e domain.ResultSubmitted) ([]byte, error) {

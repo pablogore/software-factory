@@ -165,12 +165,14 @@ func (e RoundStarted) JobID() JobID { return e.Job }
 
 // NeedsHuman records that the job stops until a person acts, and why: Cause
 // is one of HumanCauses, and what a person's OK or feedback does is decided
-// from it alone; Reason is the same cause in words for a person.
+// from it alone; Reason is the same cause in words for a person. After a
+// wall, Question is the closed question the person answers, data only.
 type NeedsHuman struct {
-	Job    JobID      `json:"job"`
-	Reason string     `json:"reason"`
-	Cause  HumanCause `json:"cause"`
-	At     time.Time  `json:"at"`
+	Job      JobID      `json:"job"`
+	Reason   string     `json:"reason"`
+	Question string     `json:"question,omitempty"`
+	Cause    HumanCause `json:"cause"`
+	At       time.Time  `json:"at"`
 }
 
 // EventName implements Event.
@@ -178,6 +180,54 @@ func (NeedsHuman) EventName() string { return "NeedsHuman" }
 
 // JobID implements Event.
 func (e NeedsHuman) JobID() JobID { return e.Job }
+
+// TriageRequested records that the job hit a wall (a builder BLOCKED, a gate
+// failed or CHANGES in the last round, a failed merge) with triage retries
+// left, so triage looks at it before a person does. Cause is the one the job
+// waits in needs-human with if triage escalates, and Reason says it in words.
+type TriageRequested struct {
+	Job    JobID      `json:"job"`
+	Reason string     `json:"reason"`
+	Cause  HumanCause `json:"cause"`
+	At     time.Time  `json:"at"`
+}
+
+// EventName implements Event.
+func (TriageRequested) EventName() string { return "TriageRequested" }
+
+// JobID implements Event.
+func (e TriageRequested) JobID() JobID { return e.Job }
+
+// TriageRetried records that triage gave the job one more round; the build
+// stage gets Brief, Role's instructions, as input. Brief is agent-written
+// text, data only.
+type TriageRetried struct {
+	Job   JobID     `json:"job"`
+	Role  string    `json:"role"`
+	Brief string    `json:"brief"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (TriageRetried) EventName() string { return "TriageRetried" }
+
+// JobID implements Event.
+func (e TriageRetried) JobID() JobID { return e.Job }
+
+// MergeFailed records that the merge the job asked for did not go through,
+// such as a conflict with the base or a gate failing after syncing. Reason
+// is the merge's own answer, data only: Decide never parses it or routes on it.
+type MergeFailed struct {
+	Job    JobID     `json:"job"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (MergeFailed) EventName() string { return "MergeFailed" }
+
+// JobID implements Event.
+func (e MergeFailed) JobID() JobID { return e.Job }
 
 // BudgetExhausted records that the job was about to launch an agent with
 // its whole budget already spent, so the agent never ran.

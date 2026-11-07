@@ -9,7 +9,7 @@ import (
 // ReservedStageNames are the stages a job is in outside its pipeline, plus its
 // terminal states. A pipeline stage with one of these names would be mistaken
 // for them.
-var ReservedStageNames = []string{"stopped", StageMerge, StageNeedsHuman, StageNeedsInfo, StageDone, "rejected"}
+var ReservedStageNames = []string{"stopped", StageMerge, StageNeedsHuman, StageNeedsInfo, StageDone, "rejected", StageTriage}
 
 // Pipeline is the flow a job follows: an ordered list of stages (04-roles.md).
 // Roles are the roles its stages list, as loaded; decide reads a reviewer's
@@ -29,6 +29,11 @@ const DefaultSpecRejections = 3
 // DefaultMaxRounds is how many rounds a review stage allows when neither the
 // stage nor limits.max_rounds sets it, the value pipelines/default.yaml uses.
 const DefaultMaxRounds = 3
+
+// DefaultTriageRetries is how many rounds triage may give a job that hit a
+// wall when the pipeline doesn't set triage_retries, as in the current
+// factory.
+const DefaultTriageRetries = 1
 
 // Limits are the pipeline's retry limits. A nil value is not set and takes
 // its default; a nil HumanReworks, set or not, is unlimited.
@@ -86,8 +91,9 @@ func ParseLimit(key, value string) (n int, unlimited bool, err error) {
 	return n, false, nil
 }
 
-// Validate checks that every limit that is set is at least 1 and at most its
-// PipelineCap, naming the key.
+// Validate checks that every limit that is set is at least 1, or 0 for
+// triage_retries, which turns triage off, and at most its PipelineCap, naming
+// the key.
 func (l Limits) Validate() error {
 	for _, v := range []struct {
 		key string
@@ -98,14 +104,22 @@ func (l Limits) Validate() error {
 		{"triage_retries", l.TriageRetries},
 		{"max_rounds", l.MaxRounds},
 	} {
-		if v.n != nil && *v.n < 1 {
-			return fmt.Errorf("limits: %w: %s %d, want at least 1", ErrInvalidValue, v.key, *v.n)
+		if v.n != nil && *v.n < minLimit(v.key) {
+			return fmt.Errorf("limits: %w: %s %d, want at least %d", ErrInvalidValue, v.key, *v.n, minLimit(v.key))
 		}
 		if v.n != nil && *v.n > PipelineCap(v.key) {
 			return fmt.Errorf("limits: %w: %s %d, want at most %d", ErrInvalidValue, v.key, *v.n, PipelineCap(v.key))
 		}
 	}
 	return nil
+}
+
+// minLimit is the least a pipeline may set limit key to.
+func minLimit(key string) int {
+	if key == "triage_retries" {
+		return 0
+	}
+	return 1
 }
 
 // SpecRejections is how many specgate rejections send a job to a person:
@@ -115,6 +129,15 @@ func (p Pipeline) SpecRejections() int {
 		return DefaultSpecRejections
 	}
 	return *p.Limits.SpecRejections
+}
+
+// TriageRetries is how many rounds triage may give a job that hit a wall:
+// limits.triage_retries, or DefaultTriageRetries when it is not set.
+func (p Pipeline) TriageRetries() int {
+	if p.Limits.TriageRetries == nil {
+		return DefaultTriageRetries
+	}
+	return *p.Limits.TriageRetries
 }
 
 // HumanReworks is how many reworks back to build a person may send from needs-human:
@@ -166,8 +189,8 @@ func (p Pipeline) Label() string {
 // least one round and at most the max_rounds cap when it sets max_rounds, every
 // role a stage lists is well formed, listed once in the stage and exists, each
 // loaded role name is unique, every role a stage lists or takes by default has
-// the stage's kind and answers for that stage only, and every limit set is
-// between 1 and its cap.
+// the stage's kind and answers for that stage only, no stage has kind
+// triage, and every limit set is between 1 (0 for triage_retries) and its cap.
 func (p Pipeline) Validate(roles []Role) error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("%s: %w", p.Label(), err)
@@ -285,6 +308,9 @@ func claimRole(st Stage, role string, known map[string]Role, owner map[string]st
 // approve, then only tasks, given the kinds seen before it.
 func checkOrder(st Stage, built, reviewed, approved bool) error {
 	switch {
+	case st.Kind == KindTriage:
+		// Triage runs on a wall, outside the flow, never as one of its steps.
+		return fmt.Errorf("stage %s: %w: triage runs outside the pipeline", st.Name, ErrInvalidValue)
 	case approved && st.Kind == KindApprove:
 		return fmt.Errorf("stage %s: %w: second approve stage, want exactly 1", st.Name, ErrInvalidValue)
 	case approved && st.Kind == KindReview:
