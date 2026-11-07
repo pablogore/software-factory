@@ -62,10 +62,12 @@ var stopWords = map[string]map[domain.IssueCap]string{
 	"es": {
 		domain.CapSlices: "el issue llegó a %v slices, el tope es %v",
 		domain.CapUSD:    "el issue gastó USD %v, el tope es USD %v",
+		domain.CapBudget: "el job gastó USD %v, su presupuesto es USD %v",
 	},
 	"en": {
 		domain.CapSlices: "the issue reached %v slices, the cap is %v",
 		domain.CapUSD:    "the issue spent USD %v, the cap is USD %v",
+		domain.CapBudget: "the job spent USD %v, its budget is USD %v",
 	},
 }
 
@@ -115,7 +117,7 @@ func TestStarter(t *testing.T) {
 				ctx.Expect(await(ctx, running)).To(specs.BeNil())
 				ctx.Expect(sixth.Load()).To(specs.BeFalse())
 
-				want := runmode.Stop{Issue: 1, Title: "Issue 1", Cap: domain.CapSlices, Limit: 5, Reached: 5}
+				want := runmode.Stop{Issue: 1, Title: "Issue 1", Cap: domain.CapSlices, Limit: 5, Reached: 5, WaitSeq: 1}
 				acts := out.saved()
 				ctx.Expect(len(acts)).ToEqual(1)
 				ctx.Expect(acts[0].Job).ToEqual(domain.JobID("1-s5"))
@@ -142,7 +144,7 @@ func TestStarter(t *testing.T) {
 				})
 				ctx.Expect(errors.Is(err, runmode.ErrCapped)).To(specs.BeTrue())
 				ctx.Expect(out.saved()[0].Payload).To(specs.Contain(`"cap":"issue-usd","limit":8,"reached":8.5`))
-				ctx.Expect(in.all()[out.saved()[0].Key]).ToEqual(runmode.Stop{Issue: 3, Title: "Issue 3", Cap: domain.CapUSD, Limit: 8, Reached: 8.5})
+				ctx.Expect(in.all()[out.saved()[0].Key]).ToEqual(runmode.Stop{Issue: 3, Title: "Issue 3", Cap: domain.CapUSD, Limit: 8, Reached: 8.5, WaitSeq: 1})
 			})
 		})
 
