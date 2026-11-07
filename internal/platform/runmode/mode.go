@@ -10,6 +10,9 @@
 // channel words in its language, to the thread the issue came from, through the
 // outbox, and to the inbox.
 //
+// In every mode, Starter keeps an issue past its caps (Caps) from starting
+// another slice, and tells why the same way; the other issues go on.
+//
 // Nothing calls it yet: the daemon will subscribe Mode.Handle to the bus.
 package runmode
 
