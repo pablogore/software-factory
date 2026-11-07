@@ -36,8 +36,9 @@ type Gate struct {
 // Run runs the checks in the worktree of job id, which must be at the gate,
 // and the diff rules on what the job changed since the base commit recorded
 // for it, and decides GatePassed or GateFailed with the run on it: a broken
-// rule, such as a protected path modified or a file outside the build role's
-// allowed paths, fails the gate even when the checks pass, its reason kept
+// rule, such as a protected path modified, a file outside the build role's
+// allowed paths or a file the index hides changes of, fails the gate even
+// when the checks pass, its reason kept
 // in the run. It
 // returns the events the job saved: the ChecksRan and the move to the next
 // stage, or back to build in a new round, or to triage in the last one. When
@@ -90,11 +91,17 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 const NoBase = "no base commit was recorded when the job's worktree was made, so its diff can't be judged"
 
 // diffRules is a reason for each diff rule the worktree at dir breaks
-// against job id's recorded base, or NoBase when it has none.
+// against job id's recorded base, or NoBase when it has none, after one for
+// each index flag that hides a file's changes from that diff.
 func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p domain.Pipeline) ([]string, error) {
+	flagged, err := g.Diffs.Flagged(ctx, dir)
+	if err != nil {
+		return nil, fmt.Errorf("gate: index of %q: %w", id, err)
+	}
+	reasons := HiddenByIndex(flagged)
 	base, err := g.Bases.Base(ctx, id)
 	if errors.Is(err, ports.ErrNoBase) {
-		return []string{NoBase}, nil
+		return append(reasons, NoBase), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("gate: base of %q: %w", id, err)
@@ -103,7 +110,18 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 	if err != nil {
 		return nil, fmt.Errorf("gate: diff of %q: %w", id, err)
 	}
-	return append(ProtectedTouched(changes), OutsideAllowed(changes, Roles(p))...), nil
+	reasons = append(reasons, ProtectedTouched(changes)...)
+	return append(reasons, OutsideAllowed(changes, Roles(p))...), nil
+}
+
+// HiddenByIndex is one reason for each flag in flagged: the gate can't
+// trust an index that hides changes, whatever the file.
+func HiddenByIndex(flagged []domain.FlaggedFile) []string {
+	var reasons []string
+	for _, f := range flagged {
+		reasons = append(reasons, "the index marks "+f.Path+" "+string(f.Flag)+", which hides its changes from the gate")
+	}
+	return reasons
 }
 
 // LastChecks is the latest checks run kept in a job's history: after a

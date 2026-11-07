@@ -1,5 +1,5 @@
 // Package gitdiff lists the files a job's worktree changed against its base,
-// for the gate's diff rules.
+// and those its index hides changes of, for the gate's diff rules.
 package gitdiff
 
 import (
@@ -53,6 +53,32 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 		changes = append(changes, domain.FileChange{Path: p, Kind: domain.ChangeAdded})
 	}
 	return changes, nil
+}
+
+// Flagged lists the files the index of the worktree at dir marks
+// skip-worktree or assume-unchanged, one entry per flag: git diff and git
+// status skip their worktree changes, so Changes can't see them.
+func (Differ) Flagged(ctx context.Context, dir string) ([]domain.FlaggedFile, error) {
+	// -v tags each file as -t does, with S for skip-worktree, and in
+	// lowercase when it is assume-unchanged.
+	out, err := git(ctx, dir, "ls-files", "-v", "--full-name", "-z", "--", ":/")
+	if err != nil {
+		return nil, err
+	}
+	var flagged []domain.FlaggedFile
+	for _, f := range nulFields(out) {
+		tag, p, ok := strings.Cut(f, " ")
+		if !ok || len(tag) != 1 {
+			return nil, fmt.Errorf("gitdiff: unexpected git ls-files output %q: %w", f, domain.ErrInvalidValue)
+		}
+		if strings.EqualFold(tag, "S") {
+			flagged = append(flagged, domain.FlaggedFile{Path: p, Flag: domain.FlagSkipWorktree})
+		}
+		if tag != strings.ToUpper(tag) {
+			flagged = append(flagged, domain.FlaggedFile{Path: p, Flag: domain.FlagAssumeUnchanged})
+		}
+	}
+	return flagged, nil
 }
 
 // objectName reports whether s is a full SHA-1 or SHA-256 object name in

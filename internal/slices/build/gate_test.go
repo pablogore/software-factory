@@ -42,17 +42,24 @@ func (worktrees) Prepare(_ context.Context, job domain.JobID) (ports.Worktree, e
 }
 
 // diffs answers every diff with changes, or with err, and records against
-// what base it was asked.
+// what base it was asked; it answers the index's flags with flagged, or with
+// flagErr.
 type diffs struct {
 	changes []domain.FileChange
 	err     error
 	dir     string
 	base    string
+	flagged []domain.FlaggedFile
+	flagErr error
 }
 
 func (d *diffs) Changes(_ context.Context, dir, base string) ([]domain.FileChange, error) {
 	d.dir, d.base = dir, base
 	return d.changes, d.err
+}
+
+func (d *diffs) Flagged(context.Context, string) ([]domain.FlaggedFile, error) {
+	return d.flagged, d.flagErr
 }
 
 // checks answers every run with run, or with err, and records where and
@@ -253,10 +260,33 @@ func TestGate(t *testing.T) {
 			})
 		})
 
-		s.It("passes a diff that only adds files under protected paths or touches others", func(ctx *specs.Context) {
+		s.It("fails a diff that adds a makefile variant or a file under .github/, naming each", func(ctx *specs.Context) {
+			d := &diffs{changes: []domain.FileChange{
+				{Path: ".github/workflows/new.yml", Kind: domain.ChangeAdded},
+				{Path: "GNUmakefile", Kind: domain.ChangeAdded},
+				{Path: "docs/factoryd/09-nuevo.md", Kind: domain.ChangeAdded},
+				{Path: "makefile", Kind: domain.ChangeAdded},
+			}}
+			g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, d)
+
+			evs, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "RoundStarted", "StageEntered"})
+			hist, err := store.History(bg, "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			last, ok := build.LastChecks(hist)
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(last.Run.Violations).ToEqual([]string{
+				"the diff adds the protected path .github/workflows/new.yml",
+				"the diff adds the protected path GNUmakefile",
+				"the diff adds the protected path makefile",
+			})
+		})
+
+		s.It("passes a diff that only adds files under other protected paths or touches others", func(ctx *specs.Context) {
 			d := &diffs{changes: []domain.FileChange{
 				{Path: "docs/factoryd/09-nuevo.md", Kind: domain.ChangeAdded},
-				{Path: ".github/workflows/new.yml", Kind: domain.ChangeAdded},
 				{Path: "internal/slices/build/gate.go", Kind: domain.ChangeModified},
 				{Path: "docs/factoryd/README.md", Kind: domain.ChangeModified},
 				{Path: "cmd/Makefile", Kind: domain.ChangeDeleted},
@@ -326,6 +356,60 @@ func TestGate(t *testing.T) {
 				job, _, err := store.Load(bg, "j-1")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(job.Stage).ToEqual("review")
+			})
+		})
+
+		s.When("the worktree's index hides a file's changes", func(s *specs.Spec) {
+			hidden := []domain.FlaggedFile{
+				{Path: "README.md", Flag: domain.FlagSkipWorktree},
+				{Path: "Makefile", Flag: domain.FlagAssumeUnchanged},
+			}
+
+			s.It("fails even though the checks and the diff pass, naming each file and its flag", func(ctx *specs.Context) {
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, &diffs{flagged: hidden})
+
+				evs, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "RoundStarted", "StageEntered"})
+				hist, err := store.History(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				last, ok := build.LastChecks(hist)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(last.Run.Violations).ToEqual([]string{
+					"the index marks README.md skip-worktree, which hides its changes from the gate",
+					"the index marks Makefile assume-unchanged, which hides its changes from the gate",
+				})
+			})
+
+			s.It("names the flags too when no base commit was recorded", func(ctx *specs.Context) {
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, &diffs{flagged: hidden[:1]})
+				g.Bases = bases{err: ports.ErrNoBase}
+
+				_, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				hist, err := store.History(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				last, _ := build.LastChecks(hist)
+				ctx.Expect(last.Run.Violations).ToEqual([]string{
+					"the index marks README.md skip-worktree, which hides its changes from the gate",
+					build.NoBase,
+				})
+			})
+
+			s.It("saves nothing and runs no checks when the index cannot be read", func(ctx *specs.Context) {
+				broken := errors.New("git: index file corrupt")
+				c := &checks{run: passing}
+				g, store := newGateDiff(ctx, domain.StageGate, 1, c, &diffs{flagErr: broken})
+
+				_, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.MatchError(broken))
+				ctx.Expect(c.calls).ToEqual(0)
+				job, _, err := store.Load(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual(domain.StageGate)
 			})
 		})
 
