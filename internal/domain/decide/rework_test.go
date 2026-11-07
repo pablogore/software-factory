@@ -65,9 +65,10 @@ func toSpec(cause domain.HumanCause) bool {
 	return cause == domain.CauseSpecEscalated || cause == domain.CauseSpecException
 }
 
-// buildBound is causeRows whose feedback sends the job back to build.
+// buildBound is causeRows whose feedback sends the job back to build; after
+// a spent budget feedback sends it nowhere.
 func buildBound() []causeRow {
-	return slices.DeleteFunc(causeRows(), func(r causeRow) bool { return toSpec(r.cause) })
+	return slices.DeleteFunc(causeRows(), func(r causeRow) bool { return toSpec(r.cause) || r.cause == domain.CauseBudget })
 }
 
 // specBound is causeRows whose feedback sends the job back to spec.

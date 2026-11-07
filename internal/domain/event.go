@@ -179,6 +179,19 @@ func (NeedsHuman) EventName() string { return "NeedsHuman" }
 // JobID implements Event.
 func (e NeedsHuman) JobID() JobID { return e.Job }
 
+// BudgetExhausted records that the job was about to launch an agent with
+// its whole budget already spent, so the agent never ran.
+type BudgetExhausted struct {
+	Job JobID     `json:"job"`
+	At  time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (BudgetExhausted) EventName() string { return "BudgetExhausted" }
+
+// JobID implements Event.
+func (e BudgetExhausted) JobID() JobID { return e.Job }
+
 // NeedsInfo records that the job waits for a person to answer a question
 // from stage From, which gets the answer.
 type NeedsInfo struct {

@@ -18,7 +18,7 @@ var ErrIllegalTransition = errors.New("illegal transition")
 // ErrUnsupported means the result or message is legal in this stage but its
 // outcome is not decided yet. Among agent results it covers only task results
 // (#76); otherwise only a person's message outside needs-human, needs-info
-// and done.
+// and done, and a person's feedback on a job stopped for its budget.
 var ErrUnsupported = errors.New("unsupported result")
 
 // ErrOtherJob means the event is addressed to a different job than the one
@@ -102,6 +102,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return specgateFailed(job, e, p)
 	case domain.GateFailed:
 		return gateFailed(job, e, p)
+	case domain.BudgetExhausted:
+		return budgetExhausted(job, e, p)
 	case domain.HumanApproved:
 		if domain.Blank(e.By) {
 			return nil, fmt.Errorf("decide: approval without who gave it: %w", domain.ErrMissingField)
@@ -439,8 +441,9 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 // feedback decides a person's feedback in needs-human from the job's recorded
 // cause, never from Reason or the text: after specgate's escalation or on a
 // length exception the spec is rewritten with it (not read from the rejection
-// count, which can be stale), and after every other cause the job goes back to
-// build with it. A missing or unknown cause fails closed, and the switch
+// count, which can be stale), after a spent budget it is refused and the job
+// keeps waiting, and after every other cause the job goes back to build with
+// it. A missing or unknown cause fails closed, and the switch
 // refuses by default, so a future cause is never routed by accident. Once the
 // job has used every rework its human_reworks allows (a person's override for
 // this job, else the pipeline's), feedback back to build is refused; feedback
@@ -459,6 +462,10 @@ func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 			return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
 		}
 		return reworked(job, e, p)
+	case domain.CauseBudget:
+		// Resuming after a person answers is not decided yet, so the job
+		// keeps waiting rather than spending more.
+		return nil, fmt.Errorf("%w: feedback in needs-human, cause %q", ErrUnsupported, job.Cause)
 	}
 	return nil, fmt.Errorf("decide: feedback in needs-human, cause %q: %w", job.Cause, domain.ErrInvalidValue)
 }
@@ -681,6 +688,15 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: slices.Clone(job.Reviewers), At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: p.Stages[b].Name, At: e.At},
 	}, nil
+}
+
+// budgetExhausted stops a job in a pipeline stage, the only stages that
+// launch agents, until a person acts.
+func budgetExhausted(job domain.Job, e domain.BudgetExhausted, p domain.Pipeline) ([]domain.Event, error) {
+	if !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage }) {
+		return nil, illegal(job, e)
+	}
+	return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "budget exhausted", Cause: domain.CauseBudget, At: e.At}}, nil
 }
 
 // next enters the stage after stage i, or requests the merge after the last.
