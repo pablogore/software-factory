@@ -7,6 +7,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,38 @@ type Submitter struct {
 	// mu runs one submission at a time, so a token is revoked after its
 	// result is saved before another submission can check it.
 	mu sync.Mutex
+	// outcomes keeps, by the hash of a valid token, what its submissions
+	// came to since Take last read them, so an attempt knows whether its
+	// session's turn handed in a result.
+	outcomes map[[sha256.Size]byte]Outcome
+}
+
+// Outcome is what a token's submissions came to: Saved once one result was
+// saved, else Refused, the error the last one was refused with, or nil when
+// none was made.
+type Outcome struct {
+	Saved   bool
+	Refused error
+}
+
+// Take returns token's Outcome since the last Take and forgets it.
+func (s *Submitter) Take(token string) Outcome {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := sha256.Sum256([]byte(token))
+	o := s.outcomes[key]
+	delete(s.outcomes, key)
+	return o
+}
+
+// record keeps err as token's last refusal, or that its result was saved
+// when err is nil. Only tokens Authorize took are kept, so a caller with no
+// valid token adds nothing; a saved one is revoked, so nothing follows it.
+func (s *Submitter) record(token string, err error) {
+	if s.outcomes == nil {
+		s.outcomes = map[[sha256.Size]byte]Outcome{}
+	}
+	s.outcomes[sha256.Sum256([]byte(token))] = Outcome{Saved: err == nil, Refused: err}
 }
 
 // Submit decodes data as a result of the kind token was issued for, checks
@@ -37,7 +70,8 @@ type Submitter struct {
 // stage entry the job has left is a jobtoken error; a result that does not
 // decode or validate wraps domain.ErrMissingField or domain.ErrInvalidValue,
 // naming what is wrong; one the job's stage does not take is Decide's error.
-// In every case nothing is saved.
+// In every case nothing is saved, and once the token is authorized its
+// Outcome keeps the error for Take.
 func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -45,6 +79,16 @@ func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, 
 	if err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)
 	}
+	evs, err := s.submit(ctx, g, job, data)
+	s.record(token, err)
+	if err != nil {
+		return nil, err
+	}
+	s.Tokens.Revoke(token)
+	return evs, nil
+}
+
+func (s *Submitter) submit(ctx context.Context, g jobtoken.Grant, job domain.JobID, data []byte) ([]domain.Event, error) {
 	j, v, err := s.Jobs.Load(ctx, job)
 	if err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)
@@ -69,7 +113,6 @@ func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, 
 	if err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)
 	}
-	s.Tokens.Revoke(token)
 	return evs, nil
 }
 

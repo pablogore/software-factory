@@ -56,6 +56,7 @@ func samples() []sample {
 		{"MergeFailed", domain.MergeFailed{Job: id, Reason: "conflict with the base", At: t}},
 		{"BudgetExhausted", domain.BudgetExhausted{Job: id, Spent: 5.25, At: t}},
 		{"ActionFailed", domain.ActionFailed{Job: id, Key: "job-1/comment/1", Kind: "comment", Error: "403 forbidden", At: t}},
+		{"AttemptFailed", domain.AttemptFailed{Job: id, Role: "builder", Reason: "no result submitted", At: t}},
 		{"NeedsInfo", domain.NeedsInfo{Job: id, From: "intake", At: t}},
 		{"JobRejected", domain.JobRejected{Job: id, Reason: "duplicate", At: t}},
 		{"MergeRequested", domain.MergeRequested{Job: id, At: t}},

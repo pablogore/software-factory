@@ -155,6 +155,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return capRaised(job, e, p)
 	case domain.ActionFailed:
 		return actionFailed(job, e)
+	case domain.AttemptFailed:
+		return attemptFailed(e)
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
 			evs := []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}
@@ -708,6 +710,18 @@ func actionFailed(job domain.Job, e domain.ActionFailed) ([]domain.Event, error)
 	}
 	reason := fmt.Sprintf("external action %s %q failed: %s", e.Kind, e.Key, e.Error)
 	return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseActionFailed, At: e.At}}, nil
+}
+
+// attemptFailed only records the failed attempt in the job's history: what
+// the job does after one is not decided yet, so it stays where it is.
+func attemptFailed(e domain.AttemptFailed) ([]domain.Event, error) {
+	if err := domain.ValidateRoleName(e.Role); err != nil {
+		return nil, fmt.Errorf("decide: failed attempt: %w", err)
+	}
+	if domain.Blank(e.Reason) {
+		return nil, fmt.Errorf("decide: failed attempt without a reason: %w", domain.ErrMissingField)
+	}
+	return []domain.Event{e}, nil
 }
 
 // specgateFailed counts the rejection and sends the job back to the spec
