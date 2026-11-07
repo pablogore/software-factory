@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/backoff"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -38,24 +39,6 @@ var (
 	// or a name already taken.
 	ErrSubscriber = errors.New("invalid subscriber")
 )
-
-const (
-	// retries is how many times a failed event is tried again before it is
-	// dead.
-	retries   = 5
-	firstWait = time.Second
-	maxWait   = time.Minute
-)
-
-// wait is how long to wait after the nth failed attempt: it doubles from
-// firstWait, never past maxWait.
-func wait(n int) time.Duration {
-	w := firstWait
-	for i := 1; i < n && w < maxWait; i++ {
-		w *= 2
-	}
-	return min(w, maxWait)
-}
 
 // Handler handles one event. Returning nil marks the event processed for
 // its subscriber; an error leaves it to be retried. A handler must be
@@ -229,10 +212,10 @@ func (b *Bus) try(ctx context.Context, s subscriber, p ports.Saved, f ports.Fail
 	}
 	f.Attempts++
 	f.LastError = herr.Error()
-	f.Dead = f.Attempts > retries
+	f.Dead = f.Attempts > backoff.Retries
 	f.NextAttempt = time.Time{}
 	if !f.Dead {
-		f.NextAttempt = b.clock.Now().Add(wait(f.Attempts))
+		f.NextAttempt = b.clock.Now().Add(backoff.Wait(f.Attempts))
 	}
 	return false, b.feed.MarkFailed(ctx, s.name, p.Seq, f)
 }
