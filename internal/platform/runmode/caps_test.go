@@ -69,6 +69,12 @@ var stopWords = map[string]map[domain.IssueCap]string{
 	},
 }
 
+func newStarter(ctx *specs.Context, slots runmode.Slots, caps runmode.Caps, reps runmode.Reports, out runmode.Outbox, in runmode.StopInbox) *runmode.Starter {
+	st, err := runmode.NewStarter(slots, caps, reps, out, in)
+	ctx.Expect(err).To(specs.BeNil())
+	return st
+}
+
 func await(ctx *specs.Context, done <-chan error) error {
 	select {
 	case err := <-done:
@@ -86,7 +92,7 @@ func TestStarter(t *testing.T) {
 				bg := context.Background()
 				sched := newScheduler(ctx, 3, costs{})
 				out, in := &outbox{}, &stops{}
-				st := runmode.NewStarter(sched, runmode.Caps{}, reports{}.add(sliced(1, 1, 1, 1, 1, 1)).add(sliced(2, 1)), out, in)
+				st := newStarter(ctx, sched, runmode.DefaultCaps, reports{}.add(sliced(1, 1, 1, 1, 1, 1)).add(sliced(2, 1)), out, in)
 
 				// A job of issue #1 already runs when its replan asks for
 				// another slice.
@@ -129,7 +135,7 @@ func TestStarter(t *testing.T) {
 		s.When("an issue's jobs cost more than USD 8", func(s *specs.Spec) {
 			s.It("starts no new slice and tells the cap and the cost reached", func(ctx *specs.Context) {
 				out, in := &outbox{}, &stops{}
-				st := runmode.NewStarter(newScheduler(ctx, 1, costs{}), runmode.Caps{}, reports{}.add(sliced(3, 5, 3.5)), out, in)
+				st := newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.DefaultCaps, reports{}.add(sliced(3, 5, 3.5)), out, in)
 				_, err := st.Start(context.Background(), domain.NextSliceRequested{Job: "3-s2", Initiative: "3", At: epoch}, "3-s3", func(context.Context) error {
 					ctx.Errorf("the slice started")
 					return nil
@@ -145,23 +151,41 @@ func TestStarter(t *testing.T) {
 				bg := context.Background()
 				reps := reports{}.add(sliced(1, 1, 1)).add(sliced(2, 0.5, 9))
 				out := &outbox{}
-				st := runmode.NewStarter(newScheduler(ctx, 1, costs{}), runmode.Caps{Slices: 2, USD: 20}, reps, out, &stops{})
+				st := newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.Caps{Slices: 2, USD: 20}, reps, out, &stops{})
 
 				_, err := st.Start(bg, domain.NextSliceRequested{Job: "1-s2", Initiative: "1", At: epoch}, "1-s3", func(context.Context) error { return nil })
 				ctx.Expect(errors.Is(err, runmode.ErrCapped)).To(specs.BeTrue())
 				ctx.Expect(out.saved()[0].Payload).To(specs.Contain(`"cap":"issue-slices","limit":2,"reached":2`))
 
-				st = runmode.NewStarter(newScheduler(ctx, 1, costs{}), runmode.Caps{Slices: 10, USD: 20}, reps, &outbox{}, &stops{})
+				st = newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.Caps{Slices: 10, USD: 20}, reps, &outbox{}, &stops{})
 				done, err := st.Start(bg, domain.NextSliceRequested{Job: "2-s2", Initiative: "2", At: epoch}, "2-s3", func(context.Context) error { return nil })
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(await(ctx, done)).To(specs.BeNil())
 			})
 		})
 
+		s.When("the run's config sets a cap under 1", func(s *specs.Spec) {
+			s.It("fails naming the cap", func(ctx *specs.Context) {
+				for _, c := range []struct {
+					caps runmode.Caps
+					key  string
+				}{
+					{runmode.Caps{Slices: 0, USD: 8}, "cap slices is 0"},
+					{runmode.Caps{Slices: 5, USD: 0}, "cap usd is 0"},
+					{runmode.Caps{Slices: 5, USD: 0.5}, "cap usd is 0.5"},
+				} {
+					st, err := runmode.NewStarter(newScheduler(ctx, 1, costs{}), c.caps, reports{}, &outbox{}, &stops{})
+					ctx.Expect(st).To(specs.BeNil())
+					ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+					ctx.Expect(err.Error()).To(specs.Contain(c.key))
+				}
+			})
+		})
+
 		s.When("the stop is published again", func(s *specs.Spec) {
 			s.It("keeps it once", func(ctx *specs.Context) {
 				out, in := &outbox{}, &stops{}
-				st := runmode.NewStarter(newScheduler(ctx, 1, costs{}), runmode.Caps{}, reports{}.add(sliced(1, 1, 1, 1, 1, 1)), out, in)
+				st := newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.DefaultCaps, reports{}.add(sliced(1, 1, 1, 1, 1, 1)), out, in)
 				ev := domain.NextSliceRequested{Job: "1-s5", Initiative: "1", At: epoch}
 				for range 2 {
 					_, err := st.Start(context.Background(), ev, "1-s6", func(context.Context) error { return nil })
@@ -174,7 +198,7 @@ func TestStarter(t *testing.T) {
 
 		s.When("the report of the job cannot be read", func(s *specs.Spec) {
 			s.It("starts nothing and returns the error", func(ctx *specs.Context) {
-				st := runmode.NewStarter(newScheduler(ctx, 1, costs{}), runmode.Caps{}, reports{}, &outbox{}, &stops{})
+				st := newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.DefaultCaps, reports{}, &outbox{}, &stops{})
 				_, err := st.Start(context.Background(), domain.NextSliceRequested{Job: "9", Initiative: "9", At: epoch}, "9-s2", func(context.Context) error {
 					ctx.Errorf("the slice started")
 					return nil

@@ -10,6 +10,10 @@
 // channel words in its language, to the thread the issue came from, through the
 // outbox, and to the inbox.
 //
+// In the auto mode (NewAuto) an issue that ends does not brake: the run goes
+// on until a job or an initiative stops for a person, or the run reaches one
+// of its caps (Limits), and the summary tells which.
+//
 // In every mode, Starter keeps an issue past its caps (Caps) from starting
 // another slice, and tells why the same way; the other issues go on.
 //
@@ -21,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
@@ -69,6 +74,11 @@ type Mode struct {
 	reports Reports
 	outbox  Outbox
 	inbox   Inbox
+
+	// auto is nil in the default mode; mu guards it, so the bus may hand
+	// events over from several goroutines.
+	mu   sync.Mutex
+	auto *tally
 }
 
 // New returns the default mode: it puts brake on, which must be the
@@ -107,12 +117,23 @@ func (m *Mode) Handle(ctx context.Context, ev domain.Event) error {
 		return fmt.Errorf("runmode: report of issue #%d without job %q: %w", r.Issue.Number, ev.JobID(), domain.ErrMissingField)
 	}
 	job := r.Jobs[i].Job
-	if !Brakes(ev, job) {
+	key := fmt.Sprintf("%s/summary/%s/%d", job.ID, ev.EventName(), at(ev).UnixNano())
+	var stop *RunStop
+	if m.auto != nil {
+		m.mu.Lock()
+		reached, brakes := m.auto.count(ev, job, r, key)
+		m.mu.Unlock()
+		if !brakes {
+			return nil
+		}
+		stop = reached
+	} else if !Brakes(ev, job) {
 		return nil
 	}
 	m.brake.Engage()
 
 	s := Summarize(r, job.ID, m.queue.Waiting(), m.queue.Held(), m.order)
+	s.RunStop = stop
 	payload, err := json.Marshal(struct {
 		Origin  domain.Origin `json:"origin"`
 		Summary Summary       `json:"summary"`
@@ -120,7 +141,6 @@ func (m *Mode) Handle(ctx context.Context, ev domain.Event) error {
 	if err != nil {
 		return fmt.Errorf("runmode: summary of issue #%d: %w", s.Issue, err)
 	}
-	key := fmt.Sprintf("%s/summary/%s/%d", job.ID, ev.EventName(), at(ev).UnixNano())
 	if err := m.outbox.Enqueue(ctx, job.ID, ports.Action{Key: key, Kind: ActionSummary, Payload: string(payload)}); err != nil {
 		return fmt.Errorf("runmode: summary of issue #%d: %w", s.Issue, err)
 	}
