@@ -34,11 +34,13 @@ type Gate struct {
 
 // Run runs the checks in the worktree of job id, which must be at the gate,
 // and the diff rules on what the job changed since Base, and decides
-// GatePassed or GateFailed with the run on it: a broken rule fails the gate
-// even when the checks pass, its reason kept in the run. It returns the
-// events the job saved: the ChecksRan and the move to the next stage, or back
-// to build in a new round, or to triage in the last one. When the checks
-// cannot be run, or the job changed while they ran, nothing is saved.
+// GatePassed or GateFailed with the run on it: a broken rule, such as a
+// protected path modified or a file outside the build role's allowed paths,
+// fails the gate even when the checks pass, its reason kept in the run. It
+// returns the events the job saved: the ChecksRan and the move to the next
+// stage, or back to build in a new round, or to triage in the last one. When
+// the checks cannot be run, or the job changed while they ran, nothing is
+// saved.
 func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error) {
 	if len(g.Command) == 0 {
 		return nil, fmt.Errorf("gate: %w: checks command", domain.ErrMissingField)
@@ -70,6 +72,7 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 		return nil, fmt.Errorf("gate: checks of %q: %w", id, err)
 	}
 	run.Violations = append(run.Violations, ProtectedTouched(changes)...)
+	run.Violations = append(run.Violations, OutsideAllowed(changes, Roles(p))...)
 	var ev domain.Event = domain.GatePassed{Job: id, Run: run, At: g.Clock.Now()}
 	if !run.Passed() {
 		ev = domain.GateFailed{Job: id, Run: run, At: g.Clock.Now()}

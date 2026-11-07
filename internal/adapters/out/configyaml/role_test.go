@@ -199,6 +199,19 @@ func TestLoadRole(t *testing.T) {
 			})
 		})
 
+		s.It("loads the paths a build role may touch", func(ctx *specs.Context) {
+			r, err := configyaml.LoadRole([]byte("name: builder\nkind: build\nmode: blocking\nallowed_paths: [internal/slices/build/, \"docs/*.md\"]\n"))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.AllowedPaths).ToEqual([]string{"internal/slices/build/", "docs/*.md"})
+		})
+
+		s.It("refuses allowed_paths on a review role", func(ctx *specs.Context) {
+			_, err := configyaml.LoadRole([]byte("name: reviewer-code\nkind: review\nmode: blocking\nallowed_paths: [internal/]\n"))
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+		})
+
 		s.When("a key is misspelled", func(s *specs.Spec) {
 			rows := []brokenRow{
 				{

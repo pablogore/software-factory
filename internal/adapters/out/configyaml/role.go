@@ -28,7 +28,8 @@ type roleFile struct {
 	Budget      budgetFile `yaml:"budget"`
 	// AlwaysRerun is a node, not a bool, so a value that isn't true or false
 	// fails with an error naming the role instead of a bare decode error.
-	AlwaysRerun yaml.Node `yaml:"always_rerun"`
+	AlwaysRerun  yaml.Node `yaml:"always_rerun"`
+	AllowedPaths []string  `yaml:"allowed_paths"`
 }
 
 type whenFile struct {
@@ -63,6 +64,7 @@ func LoadRole(data []byte) (domain.Role, error) {
 		Model:       f.Model,
 		Mode:        domain.Mode(f.Mode),
 	}
+	r.AllowedPaths = f.AllowedPaths
 	for _, c := range f.When.Any {
 		r.When.Any = append(r.When.Any, domain.Condition{
 			Paths:       c.Paths,

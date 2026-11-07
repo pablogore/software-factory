@@ -93,6 +93,39 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
 		})
 
+		s.It("lists an untracked file as added, after the diff, and leaves out ignored ones", func(ctx *specs.Context) {
+			dir := newRepo(ctx)
+			write(ctx, dir, ".gitignore", "*.log\n")
+			must(ctx, dir, "add", ".gitignore")
+			must(ctx, dir, "commit", "-q", "-m", "ignore logs")
+			write(ctx, dir, "README.md", "changed\n")
+			write(ctx, dir, "notes/new.txt", "new\n")
+			write(ctx, dir, "build.log", "ignored\n")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, base)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: ".gitignore", Kind: domain.ChangeAdded},
+				{Path: "README.md", Kind: domain.ChangeModified},
+				{Path: "notes/new.txt", Kind: domain.ChangeAdded},
+			})
+		})
+
+		s.It("lists untracked files by their path from the repo root when dir is a subfolder", func(ctx *specs.Context) {
+			dir := newRepo(ctx)
+			write(ctx, dir, "top.txt", "new\n")
+			write(ctx, dir, "sub/inner.txt", "new\n")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, filepath.Join(dir, "sub"), base)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: "sub/inner.txt", Kind: domain.ChangeAdded},
+				{Path: "top.txt", Kind: domain.ChangeAdded},
+			})
+		})
+
 		s.It("lists a rename as a deletion and an addition", func(ctx *specs.Context) {
 			dir := newRepo(ctx)
 			must(ctx, dir, "mv", "Makefile", "Makefile.old")
