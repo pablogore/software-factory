@@ -143,7 +143,7 @@ func newRound(ctx context.Context, store *memstore.Store, tokens *jobtoken.Token
 			return "", err
 		}
 	}
-	if _, _, err := store.Apply(ctx, id, v, p, domain.GateFailed{Job: id, At: now}); err != nil {
+	if _, _, err := store.Apply(ctx, id, v, p, domain.GateFailed{Job: id, Run: domain.ChecksRun{Command: "demo checks", ExitCode: 1}, At: now}); err != nil {
 		return "", err
 	}
 	if job, _, err = store.Load(ctx, id); err != nil {

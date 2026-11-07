@@ -102,7 +102,7 @@ func TestSubmitResultTool(t *testing.T) {
 			{"a token of an earlier round", func(ctx *specs.Context, f factoryd) string {
 				for _, ev := range []domain.Event{
 					domain.ResultSubmitted{Job: "j-1", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at},
-					domain.GateFailed{Job: "j-1", At: at},
+					domain.GateFailed{Job: "j-1", Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at},
 				} {
 					_, v, err := f.store.Load(context.Background(), "j-1")
 					ctx.Expect(err).To(specs.BeNil())

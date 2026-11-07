@@ -43,6 +43,7 @@ var codecs = func() map[string]codec {
 	add(register[domain.SpecRejected]())
 	add(register[domain.GatePassed]())
 	add(register[domain.GateFailed]())
+	add(register[domain.ChecksRan]())
 	add(register[domain.StageEntered]())
 	add(register[domain.ReviewPassed]())
 	add(register[domain.ChangesRequested]())

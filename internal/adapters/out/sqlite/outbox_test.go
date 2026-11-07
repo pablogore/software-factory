@@ -159,7 +159,7 @@ func outboxContract(s *specs.Spec, newStore func(ctx *specs.Context) outboxStore
 			_, _, err := st.Apply(bg, jobID, v, pipeline(), built(domain.BuildReady, 1))
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, _, err = st.Apply(bg, jobID, v, pipeline(), domain.GatePassed{Job: jobID, At: at(2)}, comment("job-1/comment/1"))
+			_, _, err = st.Apply(bg, jobID, v, pipeline(), domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(2)}, comment("job-1/comment/1"))
 
 			ctx.Expect(err).To(specs.MatchError(ports.ErrVersionConflict))
 			ctx.Expect(actions(ctx, st, jobID)).To(specs.BeEmpty())
@@ -219,7 +219,7 @@ func outboxContract(s *specs.Spec, newStore func(ctx *specs.Context) outboxStore
 			again := comment("job-1/comment/1")
 			again.Payload = `{"body":"build ready again"}`
 
-			_, _, err = st.Apply(bg, jobID, v, pipeline(), domain.GatePassed{Job: jobID, At: at(2)}, again)
+			_, _, err = st.Apply(bg, jobID, v, pipeline(), domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(2)}, again)
 
 			ctx.Expect(err).To(specs.BeNil())
 			got, _, err := st.Load(bg, jobID)

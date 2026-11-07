@@ -154,7 +154,7 @@ func TestDecideRerun(t *testing.T) {
 			ctx.Expect(job.Reviewers).ToEqual(secCode)
 
 			step(result("builder", 4, domain.BuildResult{Status: domain.BuildReady}))
-			step(domain.GatePassed{Job: jobID, At: at(5)})
+			step(domain.GatePassed{Job: jobID, Run: passingRun, At: at(5)})
 			ctx.Expect(job.Stage).ToEqual("review")
 			ctx.Expect(job.Reviewers).ToEqual(secCode)
 

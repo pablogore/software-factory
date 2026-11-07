@@ -130,7 +130,7 @@ func TestDirection(t *testing.T) {
 			approval := domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}
 			rows := []eventRow{
 				{"refuses the build starting again", result("builder", 2, domain.BuildResult{Status: domain.BuildReady})},
-				{"refuses a passing gate", domain.GatePassed{Job: jobID, At: at(2)}},
+				{"refuses a passing gate", domain.GatePassed{Job: jobID, Run: passingRun, At: at(2)}},
 				{"refuses a person's approval", approval},
 				{"refuses a completed merge", merged(2)},
 				{"refuses a person's feedback", message(domain.AuthorPerson, true, 2)},
