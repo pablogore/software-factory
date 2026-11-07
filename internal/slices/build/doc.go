@@ -16,6 +16,7 @@
 // moves a test file, or adds .skip, .only or t.Skip to one, fails it too, so
 // checks never pass only because tests stopped running. With a test count
 // command, a package with fewer tests in the job's head than in a copy of
-// its base commit fails it as well, however the tests went; with none, the
-// run notes that the rule did not run.
+// its base commit fails it as well, however the tests went: with go test
+// -json, a subtest deleted or skipped, such as a go-specs It or table row,
+// is one fewer. With none, the run notes that the rule did not run.
 package build

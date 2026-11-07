@@ -80,7 +80,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("gate-demo", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "the repo to run the checks in, as the job's worktree; with -db, the repo the job's worktree is made in")
 	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
-	count := fs.String("count", "", "the test count command, such as go test -list . ./..., split and run like -checks in the worktree and in a copy of the base commit; with none the rule doesn't run")
+	count := fs.String("count", "", "the test count command, such as go test -json -count=1 ./... (or go test -list . ./..., which sees no subtests), split and run like -checks in the worktree and in a copy of the base commit; with none the rule doesn't run")
 	base := fs.String("base", "HEAD", "the base whose commit, recorded when the job is made, the job's diff is taken against; HEAD judges only uncommitted changes")
 	roleFile := fs.String("role", "", "a build role file (roles/<name>.yaml) for the build stage, e.g. one with allowed_paths")
 	db := fs.String("db", "", "a SQLite file keeping the job between runs: the first makes its worktree in -dir off -base, the next gates it")

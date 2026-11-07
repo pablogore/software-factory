@@ -144,6 +144,53 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(passed.String()).To(specs.Contain("the gate passed"))
 		})
 
+		s.It("with -db and -count go test -json, fails a commit that deletes a subtest or skips one, naming its package, and passes once it is restored", func(ctx *specs.Context) {
+			bg := context.Background()
+			repo := ctx.Testing().TempDir()
+			// Subtests, as go-specs runs each It and table row; st.Skip is
+			// not a mark the diff rules see, as SkipIt isn't.
+			subtests := func(body string) []byte {
+				return []byte("package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n" + body + "}\n")
+			}
+			both := "\tt.Run(\"one\", func(st *testing.T) {})\n\tt.Run(\"two\", func(st *testing.T) {})\n"
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/x\n\ngo 1.27\n"), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "x_test.go"), subtests(both), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "init", "-q", "-b", "main")
+			git(ctx, repo, "add", ".")
+			git(ctx, repo, "commit", "-q", "-m", "base")
+			db := filepath.Join(ctx.Testing().TempDir(), "factory.db")
+			args := []string{"-dir", repo, "-base", "main", "-db", db, "-checks", "true", "-count", "go test -json -count=1 ./..."}
+			ctx.Expect(gateDemo(bg, args, &bytes.Buffer{})).To(specs.BeNil())
+			wt := filepath.Join(repo, ".worktrees", "gate-demo")
+			wtArgs := []string{"-dir", wt, "-base", "main", "-checks", "true", "-count", "go test -json -count=1 ./..."}
+			drop := "the package example.com/x has 2 tests, 3 at the base commit"
+
+			ctx.Expect(os.WriteFile(filepath.Join(wt, "x_test.go"), subtests("\tt.Run(\"one\", func(st *testing.T) {})\n"), 0o600)).To(specs.BeNil())
+			git(ctx, wt, "commit", "-q", "-am", "drop a subtest")
+			var deleted bytes.Buffer
+			ctx.Expect(gateDemo(bg, args, &deleted)).To(specs.BeNil())
+
+			ctx.Expect(deleted.String()).To(specs.Contain("rule broken: " + drop))
+			ctx.Expect(deleted.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+
+			skip := "\tt.Run(\"one\", func(st *testing.T) {})\n\tt.Run(\"two\", func(st *testing.T) { st.Skip() })\n"
+			ctx.Expect(os.WriteFile(filepath.Join(wt, "x_test.go"), subtests(skip), 0o600)).To(specs.BeNil())
+			git(ctx, wt, "commit", "-q", "-am", "skip a subtest")
+			var skipped bytes.Buffer
+			ctx.Expect(gateDemo(bg, wtArgs, &skipped)).To(specs.BeNil())
+
+			ctx.Expect(skipped.String()).To(specs.Contain("rule broken: " + drop))
+			ctx.Expect(skipped.String()).To(specs.Contain("the gate failed"))
+
+			ctx.Expect(os.WriteFile(filepath.Join(wt, "x_test.go"), subtests(both), 0o600)).To(specs.BeNil())
+			git(ctx, wt, "commit", "-q", "-am", "restore")
+			var passed bytes.Buffer
+			ctx.Expect(gateDemo(bg, wtArgs, &passed)).To(specs.BeNil())
+
+			ctx.Expect(passed.String()).To(specs.Not(specs.Contain("rule broken")))
+			ctx.Expect(passed.String()).To(specs.Contain("the gate passed"))
+		})
+
 		s.It("says the test count rule did not run without -count", func(ctx *specs.Context) {
 			dir := ctx.Testing().TempDir()
 			ctx.Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme\n"), 0o600)).To(specs.BeNil())

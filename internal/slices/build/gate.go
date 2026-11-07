@@ -32,8 +32,9 @@ type Gate struct {
 	// Command is the checks command, run without a shell in the worktree.
 	Command []string
 	// CountCommand lists the tests of each package, as go test -list . ./...
-	// does, run like Command in the worktree and in a copy of the base
-	// commit from Snapshots. With none the rule doesn't run, and the run
+	// does, or runs them, as go test -json -count=1 ./... does so that each
+	// subtest that passes counts, run like Command in the worktree and in a
+	// copy of the base commit from Snapshots. With none the rule doesn't run, and the run
 	// says so in its notes.
 	CountCommand []string
 	Snapshots    snapshots

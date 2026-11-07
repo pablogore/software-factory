@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"regexp"
@@ -24,14 +25,24 @@ var testName = regexp.MustCompile(`^(Test|Benchmark|Fuzz|Example)\w*$`)
 
 // CountTests is the number of tests of each package in output, as go test
 // -list prints it: the names of a package's tests, then a line "ok <package>",
-// or "? <package> [no test files]" for one with none. Other lines, such as
-// those go prints to stderr, are left out. Names with no package line after
-// them are an ErrInvalidValue error: a count cut short can't be trusted.
+// or "? <package> [no test files]" for one with none. Lines go test -json
+// prints are read as its events instead: a package counts each test, subtest
+// included, that passed, so every It and specs.Table row of go-specs is one,
+// and a test skipped or failed is none. Other lines, such as those go prints
+// to stderr, are left out. Names with no package line after them, or a JSON
+// line that is not an event, are an ErrInvalidValue error: a count cut short
+// can't be trusted.
 func CountTests(output string) (map[string]int, error) {
 	counts := map[string]int{}
 	n := 0
 	for line := range strings.Lines(output) {
 		line = strings.TrimRight(line, "\r\n")
+		if strings.HasPrefix(line, "{") {
+			if err := countEvent(counts, line); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if testName.MatchString(line) {
 			n++
 			continue
@@ -46,6 +57,33 @@ func CountTests(output string) (map[string]int, error) {
 		return nil, fmt.Errorf("test count: %w: %d test names with no package line after them", domain.ErrInvalidValue, n)
 	}
 	return counts, nil
+}
+
+// testEvent is the part of a go test -json event the count reads.
+type testEvent struct {
+	Action  string
+	Package string
+	Test    string
+}
+
+// countEvent adds the go test -json event in line to counts: a package it
+// names is in counts, with one more test when the event is a test passing.
+// Build events name an import path rather than a package, and count nothing.
+func countEvent(counts map[string]int, line string) error {
+	var ev testEvent
+	if err := json.Unmarshal([]byte(line), &ev); err != nil || ev.Action == "" {
+		return fmt.Errorf("test count: %w: a line that is not a go test -json event: %s", domain.ErrInvalidValue, line)
+	}
+	if ev.Package == "" {
+		return nil
+	}
+	if _, ok := counts[ev.Package]; !ok {
+		counts[ev.Package] = 0
+	}
+	if ev.Action == "pass" && ev.Test != "" {
+		counts[ev.Package]++
+	}
+	return nil
 }
 
 // TestsDropped is one reason for each package, by name, that has fewer tests
