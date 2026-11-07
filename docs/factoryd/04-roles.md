@@ -52,6 +52,22 @@ stages:
 ```
 Y en la fábrica (`factory.yaml` o `.factory/` del repo): `pipeline: default`. Otra fábrica puede usar `pipeline: backend` sin ux/ui.
 
+### Archivos que puede tocar un builder (`allowed_paths`)
+Un rol `build` puede declarar los únicos archivos que su diff puede agregar, modificar o borrar, relativos a la raíz del repo. Una entrada que termina en `/` cubre todo lo que está debajo; cualquier otra es un patrón de `path.Match` (por ejemplo `internal/slices/*.go`).
+
+```yaml
+name: builder-store
+kind: build
+allowed_paths:
+  - internal/adapters/out/sqlite/
+  - internal/ports/store.go
+```
+
+- Sin `allowed_paths`, el builder no tiene límite de archivos (los paths protegidos siguen valiendo igual).
+- Solo los roles `build` lo aceptan; en otro kind es error de validación.
+- El gate falla nombrando cada archivo fuera de lo permitido, aunque los checks pasen. Los archivos nuevos sin trackear cuentan como tocados.
+- Es aparte de los **paths protegidos**, que son fijos en factoryd y no se leen de la rama: `Makefile` (y `GNUmakefile`, `makefile`), `internal/arch_test.go`, todo `.github/`, `AGENTS.md`, `.golangci.yml` y `docs/factoryd/0*.md`. En `.github/` no se puede agregar, modificar ni borrar; en los demás, agregar un archivo nuevo está permitido.
+
 ### Límites de reintento (`limits`)
 Un pipeline puede fijar cuántas veces se reintenta cada cosa antes de que el job pase a una persona. Todos son opcionales y, si se ponen, valen al menos 1, salvo `triage_retries`, que puede ser 0; una clave desconocida en `limits` es un error.
 

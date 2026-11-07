@@ -63,3 +63,8 @@ gh issue list -l factoryd --state all --limit 200 --json number,state,labels \
 ```
 
 Regla para los replans: una nota menor de un revisor queda como "conocida" en el replan o como criterio de una historia existente; se abre un issue nuevo solo si es un bug real o un agujero de seguridad.
+
+## Estado (2026-11-07)
+- Cerradas: E01 (#12) y E02 (#13). E03, E04 y E05 en curso.
+- Agregadas durante la construcción: #175 (factoryd serve arma todas las piezas), #201 (endurecer pedidos y demo del worker), #205 (rodeos al gate), y en la fábrica actual (`legacy-factory`) #124, #125, #160 y #187.
+- El avance comprometido se mide con el comando de la sección "Roadmap vs. comprometido".
