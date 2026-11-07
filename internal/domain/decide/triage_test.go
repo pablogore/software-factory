@@ -332,7 +332,7 @@ func TestTriage(t *testing.T) {
 				evs, err := decide.Decide(inTriage(), budgetSpent(2), defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "budget exhausted", Cause: domain.CauseBudget, At: at(2)}})
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "budget exhausted", Cause: domain.CauseBudget, Spent: 5, At: at(2)}})
 			})
 		})
 	})

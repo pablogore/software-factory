@@ -107,6 +107,8 @@ type costs struct{ err error }
 
 func (c costs) Spent(context.Context, domain.JobID) (float64, error) { return 0, c.err }
 
+func (c costs) Budget(context.Context, domain.JobID) (float64, error) { return 0, nil }
+
 // plenty is a fake GitHub limit source with plenty of calls left, so the
 // scheduler never holds work for the rate limit.
 type plenty struct{}

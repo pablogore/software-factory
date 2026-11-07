@@ -38,7 +38,7 @@ func TestSchedulerBudget(t *testing.T) {
 				ctx.Expect(c.started("a")).To(specs.BeFalse())
 				ctx.Expect(sch.Running()).ToEqual(0)
 				job, p := building("a")
-				evs, err := decide.Decide(job, domain.BudgetExhausted{Job: job.ID, At: time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)}, p)
+				evs, err := decide.Decide(job, domain.BudgetExhausted{Job: job.ID, Spent: 5, At: time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)}, p)
 				ctx.Expect(err).To(specs.BeNil())
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
@@ -75,6 +75,36 @@ func TestSchedulerBudget(t *testing.T) {
 				ctx.Expect(sch.Running()).ToEqual(1)
 				c.end("a", nil)
 				ctx.Expect(result(ctx, done["a"])).To(specs.BeNil())
+			})
+		})
+
+		s.When("a person raised the job's own budget to USD 8", func(s *specs.Spec) {
+			s.It("launches the agent of a job that spent USD 5 of the scheduler's 5", func(ctx *specs.Context) {
+				spent := newCosts()
+				spent.set("a", 5)
+				spent.raise("a", 8)
+				sch, c := newBudgeted(ctx, 1, spent), newCrew()
+
+				done := submit(sch, c, "a")
+
+				c.awaitStart(ctx, "a")
+				c.end("a", nil)
+				ctx.Expect(result(ctx, done["a"])).To(specs.BeNil())
+			})
+
+			s.It("never launches it once the job spent USD 8, and keeps the scheduler's budget for the others", func(ctx *specs.Context) {
+				spent := newCosts()
+				spent.set("a", 8)
+				spent.raise("a", 8)
+				spent.set("b", 5)
+				sch, c := newBudgeted(ctx, 1, spent), newCrew()
+
+				done := submit(sch, c, "a", "b")
+
+				ctx.Expect(result(ctx, done["a"])).To(specs.MatchError(scheduler.ErrBudgetExhausted))
+				ctx.Expect(result(ctx, done["b"])).To(specs.MatchError(scheduler.ErrBudgetExhausted))
+				ctx.Expect(c.started("a")).To(specs.BeFalse())
+				ctx.Expect(c.started("b")).To(specs.BeFalse())
 			})
 		})
 

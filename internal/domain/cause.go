@@ -18,7 +18,8 @@ const (
 )
 
 // CauseBudget means the job was about to launch an agent with its whole
-// budget spent. Resuming it after a person answers is not decided yet.
+// budget spent. Only a person's raise of its budget (CapRaiseRequested)
+// resumes it.
 const CauseBudget HumanCause = "budget-exhausted"
 
 // humanCauses is unexported because what a human OK may merge depends on

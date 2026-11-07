@@ -15,7 +15,8 @@
 // of its caps (Limits), and the summary tells which.
 //
 // In every mode, Starter keeps an issue past its caps (Caps) from starting
-// another slice, and tells why the same way; the other issues go on.
+// another slice, and tells why the same way; the other issues go on. Only an
+// allowed person's raise of the cap it stopped at starts it again.
 //
 // Nothing calls it yet: the daemon will subscribe Mode.Handle to the bus.
 package runmode

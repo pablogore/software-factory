@@ -10,7 +10,7 @@ import (
 )
 
 func budgetSpent(minute int) domain.BudgetExhausted {
-	return domain.BudgetExhausted{Job: jobID, At: at(minute)}
+	return domain.BudgetExhausted{Job: jobID, Spent: 5, At: at(minute)}
 }
 
 func TestDecideBudget(t *testing.T) {
@@ -24,7 +24,7 @@ func TestDecideBudget(t *testing.T) {
 				evs, err := decide.Decide(job, budgetSpent(1), defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "budget exhausted", Cause: domain.CauseBudget, At: at(1)}})
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "budget exhausted", Cause: domain.CauseBudget, Spent: 5, At: at(1)}})
 				after := decide.Apply(job, evs)
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
 				ctx.Expect(after.Reason).ToEqual("budget exhausted")

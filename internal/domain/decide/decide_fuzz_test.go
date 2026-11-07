@@ -19,9 +19,11 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // so answers) and direction marks from every kind of author, with and without a name, stop requests with and without a
 // name, overrides from every kind of author and without a name or a reason,
 // limit overrides from every kind of author, without a name and with an
-// unknown limit, a completed merge, a failed one, a spent budget, a refused
-// external action with and without a key, triage's RETRY and ESCALATE, one
-// from another role and every missing or nil event of nilEvents.
+// unknown limit, budget raises from every kind of author, without a name,
+// for an issue cap and to no amount, a completed merge, a failed one, a spent
+// budget, a refused external action with and without a key, triage's RETRY
+// and ESCALATE, one from another role and every missing or nil event of
+// nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
@@ -41,6 +43,10 @@ func fuzzEvents() []domain.Event {
 		limitOverride(domain.AuthorPerson, true, "human_reworks", "3", 1, 1), limitOverride(domain.AuthorPerson, false, "human_reworks", "3", 1, 1),
 		limitOverride(domain.AuthorBot, true, "max_rounds", "9", 1, 1), limitOverride(domain.AuthorCI, true, "max_rounds", "9", 1, 1),
 		limitOverride(domain.AuthorPerson, true, "retries", "3", 1, 1), signedLimit(limitOverride(domain.AuthorPerson, true, "max_rounds", "9", 1, 1), " "),
+		raiseBudget(domain.AuthorPerson, true, 8, 1, 1), raiseBudget(domain.AuthorPerson, false, 8, 1, 1),
+		raiseBudget(domain.AuthorBot, true, 8, 1, 1), raiseBudget(domain.AuthorCI, true, 8, 1, 1), raiseBudget(domain.AuthorPerson, true, 0, 1, 1),
+		domain.CapRaiseRequested{Job: jobID, By: " ", AuthorKind: domain.AuthorPerson, Allowed: true, Cap: domain.CapBudget, Value: 8, WaitSeq: 1, At: at(1)},
+		domain.CapRaiseRequested{Job: jobID, By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Cap: domain.CapSlices, Value: 8, WaitSeq: 1, At: at(1)},
 		refused(1), domain.ActionFailed{Job: jobID, Key: " ", Kind: "comment", Error: "403 forbidden", At: at(1)},
 		mergeFailed("conflict in go.sum", 1), triageRetry(1), triageEscalate(1),
 		result("builder", 1, domain.TriageResult{Decision: domain.TriageRetry, Brief: triageBrief}))
@@ -63,8 +69,11 @@ func fuzzEvents() []domain.Event {
 // changes nothing and is not an error, that one requests the merge only after
 // CHANGES and always with its history entry first, that a limit override not
 // from an allowed person changes nothing and is not an error, that one acts
-// only in needs-human and only by its history entry, and that a missing or nil
-// event is an error, never a panic.
+// only in needs-human and only by its history entry, that a budget raise not
+// from an allowed person changes nothing and is not an error, that one moves
+// the job only out of needs-human for a spent budget and always with its
+// history entry first, and that a missing or nil event is an error, never a
+// panic.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(i), uint8(0), uint8(1))
@@ -143,6 +152,14 @@ func FuzzDecide(f *testing.F) {
 		if o, ok := ev.(domain.LimitOverrideRequested); ok && len(first) > 0 {
 			if l, one := first[0].(domain.LimitOverridden); job.Stage != domain.StageNeedsHuman || len(first) != 1 || !one || l.By != o.By || l.Limit != o.Limit || after.Stage != job.Stage {
 				t.Fatalf("limit override in stage %q gave %v", job.Stage, first)
+			}
+		}
+		if r, ok := ev.(domain.CapRaiseRequested); ok && (!r.Allowed || r.AuthorKind != domain.AuthorPerson) && (err1 != nil || len(first) > 0) {
+			t.Fatalf("budget raise from %s (allowed %v) gave %v, %v", r.AuthorKind, r.Allowed, first, err1)
+		}
+		if r, ok := ev.(domain.CapRaiseRequested); ok && len(first) > 0 {
+			if c, one := first[0].(domain.CapRaised); job.Stage != domain.StageNeedsHuman || job.Cause != domain.CauseBudget || len(first) != 2 || !one || c.By != r.By {
+				t.Fatalf("budget raise in stage %q, cause %q gave %v", job.Stage, job.Cause, first)
 			}
 		}
 		if after.Cause != "" && after.Stage != domain.StageNeedsHuman {
