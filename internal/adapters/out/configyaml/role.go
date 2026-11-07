@@ -144,6 +144,12 @@ func checkKeys(n *yaml.Node, t reflect.Type) error {
 				return err
 			}
 		}
+	case t.Kind() == reflect.Map && n.Kind == yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 {
+			if err := checkKeys(n.Content[i], t.Elem()); err != nil {
+				return err
+			}
+		}
 	case t.Kind() == reflect.Struct && n.Kind == yaml.MappingNode:
 		for i := 0; i < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]

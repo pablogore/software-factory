@@ -40,6 +40,9 @@ type Script struct {
 	// Turns answers the prompts in order; a prompt past the last ends at
 	// once with end_turn.
 	Turns []Turn `json:"turns,omitempty"`
+	// RecordEnv names the environment variables the agent records the
+	// values of, as it was launched with them.
+	RecordEnv []string `json:"record_env,omitempty"`
 }
 
 // Turn is how the fake answers one prompt.
@@ -87,6 +90,11 @@ type MCPServer struct {
 
 // Received is what the fake agent got from the client.
 type Received struct {
+	// Args are the arguments the agent was launched with.
+	Args []string `json:"args"`
+	// Env holds the variables of Script.RecordEnv the agent was launched
+	// with, as NAME=value.
+	Env             []string    `json:"env"`
 	ProtocolVersion int         `json:"protocol_version"`
 	Cwd             string      `json:"cwd"`
 	MCPServers      []MCPServer `json:"mcp_servers"`
@@ -349,7 +357,17 @@ func Run() int {
 		return 2
 	}
 	path := os.Getenv(envRecord)
-	err := Serve(os.Stdin, os.Stdout, sc, func(r Received) error { return save(path, r) })
+	var env []string
+	for _, name := range sc.RecordEnv {
+		if v, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+v)
+		}
+	}
+	args := os.Args[1:]
+	err := Serve(os.Stdin, os.Stdout, sc, func(r Received) error {
+		r.Args, r.Env = args, env
+		return save(path, r)
+	})
 	switch {
 	case errors.Is(err, errExit):
 		return 3

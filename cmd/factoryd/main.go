@@ -6,12 +6,18 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+
+	"github.com/pablogore/software-factory/internal/adapters/out/acp/acpfake"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
+	// role-demo launches this binary again as its fake ACP agent.
+	if acpfake.Requested() {
+		os.Exit(acpfake.Run())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Println("factoryd", version)
 		return
@@ -39,6 +45,16 @@ func main() {
 		stop()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "factoryd gate-demo:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "role-demo" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		err := roleDemo(ctx, os.Args[2:], os.Stdout)
+		stop()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "factoryd role-demo:", err)
 			os.Exit(1)
 		}
 		return
