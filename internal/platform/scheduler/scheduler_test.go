@@ -112,6 +112,11 @@ func submit(s *scheduler.Scheduler, c *crew, names ...string) map[string]<-chan 
 	return done
 }
 
+// reply hands over one new agent called name as a person's reply.
+func reply(s *scheduler.Scheduler, c *crew, name string) <-chan error {
+	return s.SubmitReply(context.Background(), c.work(name))
+}
+
 func newScheduler(ctx *specs.Context, concurrency int) *scheduler.Scheduler {
 	s, err := scheduler.New(concurrency)
 	ctx.Expect(err).To(specs.BeNil())
@@ -213,6 +218,167 @@ func TestScheduler(t *testing.T) {
 				order, peak := c.snapshot()
 				ctx.Expect(order).To(specs.HaveLen(len(names)))
 				ctx.Expect(peak).ToEqual(2)
+			})
+		})
+
+		s.When("every slot is busy and a person replies", func(s *specs.Spec) {
+			s.It("runs the reply at once in the reserved slot", func(ctx *specs.Context) {
+				sch, c := newScheduler(ctx, 2), newCrew()
+				done := submit(sch, c, "a", "b")
+				c.awaitStart(ctx, "a")
+				c.awaitStart(ctx, "b")
+				r := reply(sch, c, "reply")
+				c.awaitStart(ctx, "reply")
+				ctx.Expect(sch.Running()).ToEqual(3)
+				ctx.Expect(sch.Waiting()).ToEqual(0)
+				c.end("reply", errAgent)
+				ctx.Expect(result(ctx, r)).To(specs.MatchError(errAgent))
+				ctx.Expect(sch.Running()).ToEqual(2)
+				c.end("a", nil)
+				c.end("b", nil)
+				ctx.Expect(result(ctx, done["a"])).To(specs.BeNil())
+				ctx.Expect(result(ctx, done["b"])).To(specs.BeNil())
+			})
+
+			s.It("runs the reply ahead of new work already waiting in line", func(ctx *specs.Context) {
+				sch, c := newScheduler(ctx, 2), newCrew()
+				submit(sch, c, "a", "b", "c")
+				c.awaitStart(ctx, "a")
+				c.awaitStart(ctx, "b")
+				reply(sch, c, "reply")
+				c.awaitStart(ctx, "reply")
+				ctx.Expect(c.started("c")).To(specs.BeFalse())
+				ctx.Expect(sch.Waiting()).ToEqual(1)
+				c.end("reply", nil)
+				c.end("a", nil)
+				c.awaitStart(ctx, "c")
+				c.end("b", nil)
+				c.end("c", nil)
+			})
+		})
+
+		s.When("every regular slot is busy and the reserved slot is free", func(s *specs.Spec) {
+			s.It("keeps new work waiting in line", func(ctx *specs.Context) {
+				sch, c := newScheduler(ctx, 2), newCrew()
+				submit(sch, c, "a", "b", "c")
+				c.awaitStart(ctx, "a")
+				c.awaitStart(ctx, "b")
+				ctx.Expect(c.started("c")).To(specs.BeFalse())
+				ctx.Expect(sch.Running()).ToEqual(2)
+				ctx.Expect(sch.Waiting()).ToEqual(1)
+				c.end("a", nil)
+				c.awaitStart(ctx, "c")
+				c.end("b", nil)
+				c.end("c", nil)
+			})
+
+			s.It("does not hand the freed reserved slot to new work in line", func(ctx *specs.Context) {
+				sch, c := newScheduler(ctx, 2), newCrew()
+				submit(sch, c, "a", "b")
+				c.awaitStart(ctx, "a")
+				c.awaitStart(ctx, "b")
+				r := reply(sch, c, "reply")
+				c.awaitStart(ctx, "reply")
+				submit(sch, c, "c")
+				c.end("reply", nil)
+				ctx.Expect(result(ctx, r)).To(specs.BeNil())
+				ctx.Expect(c.started("c")).To(specs.BeFalse())
+				ctx.Expect(sch.Running()).ToEqual(2)
+				ctx.Expect(sch.Waiting()).ToEqual(1)
+				c.end("a", nil)
+				c.awaitStart(ctx, "c")
+				c.end("b", nil)
+				c.end("c", nil)
+			})
+		})
+
+		s.When("a second reply arrives while the reserved slot is busy", func(s *specs.Spec) {
+			s.It("takes a free regular slot", func(ctx *specs.Context) {
+				sch, c := newScheduler(ctx, 2), newCrew()
+				submit(sch, c, "a")
+				c.awaitStart(ctx, "a")
+				reply(sch, c, "first")
+				c.awaitStart(ctx, "first")
+				reply(sch, c, "second")
+				c.awaitStart(ctx, "second")
+				ctx.Expect(sch.Running()).ToEqual(3)
+				ctx.Expect(sch.Waiting()).ToEqual(0)
+				for _, n := range []string{"a", "first", "second"} {
+					c.end(n, nil)
+				}
+			})
+
+			s.It("waits in line behind earlier work when no regular slot is free", func(ctx *specs.Context) {
+				sch, c := newScheduler(ctx, 2), newCrew()
+				submit(sch, c, "a", "b", "c")
+				c.awaitStart(ctx, "a")
+				c.awaitStart(ctx, "b")
+				reply(sch, c, "first")
+				c.awaitStart(ctx, "first")
+				second := reply(sch, c, "second")
+				ctx.Expect(c.started("second")).To(specs.BeFalse())
+				ctx.Expect(sch.Waiting()).ToEqual(2)
+				c.end("a", nil)
+				c.awaitStart(ctx, "c")
+				ctx.Expect(c.started("second")).To(specs.BeFalse())
+				c.end("b", nil)
+				c.awaitStart(ctx, "second")
+				c.end("second", nil)
+				ctx.Expect(result(ctx, second)).To(specs.BeNil())
+				c.end("first", nil)
+				c.end("c", nil)
+			})
+		})
+
+		s.When("many agents and replies are handed over with concurrency 2", func(s *specs.Spec) {
+			s.It("never runs more than three at once", func(ctx *specs.Context) {
+				sch, c := newScheduler(ctx, 2), newCrew()
+				var names []string
+				done := map[string]<-chan error{}
+				for i := range 12 {
+					n := fmt.Sprintf("agent-%d", i)
+					names = append(names, n)
+					if i%3 == 0 {
+						done[n] = reply(sch, c, n)
+					} else {
+						done[n] = sch.Submit(context.Background(), c.work(n))
+					}
+				}
+				ctx.Expect(sch.Running()).ToEqual(3)
+				// The first reply took the reserved slot and the next two
+				// the regular ones; the rest wait in line.
+				for _, n := range names[:3] {
+					c.awaitStart(ctx, n)
+				}
+				// Finish whichever agents run until all have run, checking
+				// the count after every start.
+				finished := map[string]bool{}
+				deadline := time.Now().Add(patience)
+				for len(finished) < len(names) {
+					if time.Now().After(deadline) {
+						ctx.Errorf("only %d of %d agents ran", len(finished), len(names))
+						return
+					}
+					ran := false
+					for _, n := range names {
+						if finished[n] || !c.started(n) {
+							continue
+						}
+						ctx.Expect(sch.Running()).To(specs.BeLessThanOrEqual(3))
+						c.end(n, nil)
+						ctx.Expect(result(ctx, done[n])).To(specs.BeNil())
+						finished[n] = true
+						ran = true
+						break
+					}
+					if !ran {
+						time.Sleep(time.Millisecond)
+					}
+				}
+				_, peak := c.snapshot()
+				ctx.Expect(peak).ToEqual(3)
+				ctx.Expect(sch.Running()).ToEqual(0)
+				ctx.Expect(sch.Waiting()).ToEqual(0)
 			})
 		})
 
