@@ -377,6 +377,26 @@ func TestGate(t *testing.T) {
 			})
 		})
 
+		s.It("fails a nested repo and a submodule, naming each, without reading either as a test file", func(ctx *specs.Context) {
+			d := &diffs{changes: []domain.FileChange{
+				{Path: "lib/x_test.go", Kind: domain.ChangeModified, Repo: domain.RepoSubmodule},
+				{Path: "vendorx/", Kind: domain.ChangeAdded, Repo: domain.RepoNested},
+			}, readErr: errors.New("is a directory")}
+			g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, d)
+
+			evs, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "RoundStarted", "StageEntered"})
+			hist, err := store.History(bg, "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			last, _ := build.LastChecks(hist)
+			ctx.Expect(last.Run.Violations).ToEqual([]string{
+				"the diff modifies the submodule lib/x_test.go, which no build role's allowed paths cover",
+				"the worktree has vendorx/, a folder with its own .git that hides its files from the gate",
+			})
+		})
+
 		s.When("the worktree's index hides a file's changes", func(s *specs.Spec) {
 			hidden := []domain.FlaggedFile{
 				{Path: "README.md", Flag: domain.FlagSkipWorktree},

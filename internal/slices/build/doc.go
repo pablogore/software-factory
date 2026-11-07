@@ -12,7 +12,9 @@
 // or deletes a protected path, or adds a makefile variant or a file under
 // .github/, fails the gate, so a builder cannot change what it is judged by.
 // So does an index that marks a file skip-worktree or assume-unchanged,
-// since it hides that file's changes from the diff. A diff that deletes or
+// since it hides that file's changes from the diff, and so does a nested
+// repo, or a submodule added or changed outside the build role's allowed
+// paths, since the gate doesn't look inside either. A diff that deletes or
 // moves a test file, or adds .skip, .only or t.Skip to one, fails it too, so
 // checks never pass only because tests stopped running. With a test count
 // command, a package with fewer tests in the job's head than in a copy of
