@@ -181,6 +181,39 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
 		})
 
+		s.It("flags nothing in an index that hides no changes", func(ctx *specs.Context) {
+			dir, _ := newRepo(ctx)
+
+			flagged, err := gitdiff.Differ{}.Flagged(bg, dir)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(flagged).To(specs.BeEmpty())
+		})
+
+		s.It("flags each file the index marks skip-worktree or assume-unchanged, by its path from the root", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			write(ctx, dir, "sub/inner.txt", "inner\n")
+			must(ctx, dir, "add", ".")
+			must(ctx, dir, "commit", "-q", "-m", "sub")
+			must(ctx, dir, "update-index", "--skip-worktree", "README.md", "sub/inner.txt")
+			must(ctx, dir, "update-index", "--assume-unchanged", "Makefile", "README.md")
+			write(ctx, dir, "Makefile", "hidden\n")
+
+			flagged, err := gitdiff.Differ{}.Flagged(bg, filepath.Join(dir, "sub"))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(flagged).ToEqual([]domain.FlaggedFile{
+				{Path: "Makefile", Flag: domain.FlagAssumeUnchanged},
+				{Path: "README.md", Flag: domain.FlagSkipWorktree},
+				{Path: "README.md", Flag: domain.FlagAssumeUnchanged},
+				{Path: "sub/inner.txt", Flag: domain.FlagSkipWorktree},
+			})
+			// The flags are why: the diff no longer sees the Makefile's change.
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "sub/inner.txt", Kind: domain.ChangeAdded}})
+		})
+
 		s.It("fails for a base commit the repo does not have", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 
