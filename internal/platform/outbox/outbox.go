@@ -11,6 +11,10 @@
 // way, but the retry first asks the destination whether the action was done,
 // so a comment or a push is never repeated.
 //
+// An action the destination refused for permission or validation is never
+// retried: it is failed at once and, in the same step, the job that asked
+// for it goes to needs-human.
+//
 // Nothing runs Deliver on a schedule yet: the scheduler will call it.
 package outbox
 
@@ -63,11 +67,14 @@ func (d *Deliverer) Deliver(ctx context.Context) error {
 // try hands q to the destination once and saves the outcome: delivered, or
 // one more failed attempt, which gives up past the last retry. When q's last
 // result was lost, the destination is asked first and q is delivered only if
-// it was not done. Only the outbox's errors are returned; the destination's
-// goes into the failure.
+// it was not done. A refusal fails q for good. Only the outbox's errors are
+// returned; the destination's goes into the failure.
 func (d *Deliverer) try(ctx context.Context, q ports.QueuedAction) error {
 	if q.ResultLost {
 		done, err := d.dest.Done(ctx, q.Key)
+		if errors.Is(err, ports.ErrRefused) {
+			return d.refused(ctx, q, err, true)
+		}
 		if err != nil {
 			// Still unknown whether it was done, so the next attempt asks again.
 			return d.failed(ctx, q, err, true)
@@ -80,7 +87,23 @@ func (d *Deliverer) try(ctx context.Context, q ports.QueuedAction) error {
 	if derr == nil {
 		return d.outbox.MarkActionDelivered(ctx, q.Key)
 	}
+	if errors.Is(derr, ports.ErrRefused) {
+		return d.refused(ctx, q, derr, false)
+	}
 	return d.failed(ctx, q, derr, errors.Is(derr, ports.ErrResultLost))
+}
+
+// refused saves q as failed with err, one more attempt and no retry, and
+// sends its job to needs-human in the same step. lost says whether the
+// action may have been done.
+func (d *Deliverer) refused(ctx context.Context, q ports.QueuedAction, err error, lost bool) error {
+	f := q.ActionFailure
+	f.Attempts++
+	f.LastError = err.Error()
+	f.ResultLost = lost
+	f.Failed = true
+	f.NextAttempt = time.Time{}
+	return d.outbox.MarkActionRefused(ctx, q.Key, f, d.clock.Now())
 }
 
 // failed saves one more failed attempt of q with err, rescheduled on the

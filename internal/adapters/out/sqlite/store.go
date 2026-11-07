@@ -199,13 +199,8 @@ func (s *Store) Apply(ctx context.Context, id domain.JobID, v ports.Version, p d
 		return nil, v, tx.Rollback()
 	}
 	evs = eventjson.CapReasons(evs, s.maxReason)
-	if err := save(ctx, tx, decide.Apply(job, evs)); err != nil {
+	if err := record(ctx, tx, job, evs); err != nil {
 		return nil, 0, err
-	}
-	for _, ev := range evs {
-		if err := insert(ctx, tx, id, ev); err != nil {
-			return nil, 0, err
-		}
 	}
 	for _, a := range acts {
 		if err := enqueue(ctx, tx, id, a); err != nil {
@@ -241,6 +236,19 @@ func claim(ctx context.Context, tx *sql.Tx, id domain.JobID, v ports.Version) er
 		return fmt.Errorf("sqlite: save job %q: %w", id, err)
 	}
 	return fmt.Errorf("sqlite: %q loaded at version %d, now %d: %w", id, v, cur, ports.ErrVersionConflict)
+}
+
+// record saves decide.Apply(job, evs) and evs, in the claimed job's row.
+func record(ctx context.Context, tx *sql.Tx, job domain.Job, evs []domain.Event) error {
+	if err := save(ctx, tx, decide.Apply(job, evs)); err != nil {
+		return err
+	}
+	for _, ev := range evs {
+		if err := insert(ctx, tx, job.ID, ev); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // save writes the job's new state, which must keep its invariants.
