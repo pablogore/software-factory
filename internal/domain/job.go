@@ -41,6 +41,8 @@ type Job struct {
 	Cause          HumanCause     `json:"cause,omitempty"`           // in needs-human, which of HumanCauses put the job there
 	Question       string         `json:"question,omitempty"`        // in needs-human after a wall, the closed question for the person
 	Wall           HumanCause     `json:"wall,omitempty"`            // in triage, the cause the job waits in needs-human with if triage escalates
+	Budget         float64        `json:"budget_usd,omitempty"`      // the job's own budget a person raised; 0 is the scheduler's
+	Paused         *Paused        `json:"paused,omitempty"`          // in needs-human for a spent budget, where the job was
 	WaitSeq        int            `json:"wait_seq"`                  // entries into needs-human, needs-info or done so far; a person's action names the one it answers
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
@@ -48,6 +50,17 @@ type Job struct {
 	Initiative     InitiativeID   `json:"initiative,omitempty"`      // the initiative this job is a slice of; empty for a job on its own
 	Origin         Origin         `json:"origin"`
 	Subscriptions  []Subscription `json:"subscriptions,omitempty"`
+}
+
+// Paused is where a job stopped for its spent budget was, so a person's
+// raise of the budget sends it back there: Stage, a pipeline stage or triage,
+// and in triage the Reason and Wall it had. Spent is what it had spent, which
+// the new budget must pass.
+type Paused struct {
+	Stage  string     `json:"stage"`
+	Reason string     `json:"reason,omitempty"`
+	Wall   HumanCause `json:"wall,omitempty"`
+	Spent  float64    `json:"spent_usd"`
 }
 
 // Validate checks the invariants Apply keeps on every job Decide folds: a

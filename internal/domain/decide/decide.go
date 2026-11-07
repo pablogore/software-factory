@@ -3,6 +3,7 @@ package decide
 import (
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -79,6 +80,10 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if ignored(e.Allowed, e.AuthorKind) {
 			return nil, nil
 		}
+	case domain.CapRaiseRequested:
+		if ignored(e.Allowed, e.AuthorKind) {
+			return nil, nil
+		}
 	case domain.ActionFailed:
 		// A job that ended needs no person for it: the action stays listed as
 		// failed, and delivery is not stopped by a refusal.
@@ -146,6 +151,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if job.Stage == domain.StageNeedsHuman {
 			return limitOverridden(job, e)
 		}
+	case domain.CapRaiseRequested:
+		return capRaised(job, e, p)
 	case domain.ActionFailed:
 		return actionFailed(job, e)
 	case domain.MergeCompleted:
@@ -195,6 +202,8 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Changes = append(slices.Clip(job.Changes), e.Role)
 		case domain.SpecRejected:
 			job.SpecRejections = e.Rejections
+		case domain.CapRaised:
+			job.Budget = e.Value
 		case domain.LimitOverridden:
 			job = overrideLimit(job, e)
 			// It answered the wait, so a replay of it never acts again.
@@ -210,6 +219,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.RoundStarted:
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
+			job.Paused = paused(job, e)
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
 			job.Reason, job.Cause, job.Question, job.Wall = e.Reason, e.Cause, e.Question, ""
 			job.WaitSeq++
@@ -241,8 +251,17 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 // leftNeedsHuman forgets why the job was in needs-human or triage, so a later
 // stop for a person never inherits an old cause or question.
 func leftNeedsHuman(job domain.Job) domain.Job {
-	job.Reason, job.Cause, job.Question, job.Wall = "", "", "", ""
+	job.Reason, job.Cause, job.Question, job.Wall, job.Paused = "", "", "", "", nil
 	return job
+}
+
+// paused is where job was when e stopped it for its spent budget, read before
+// e is applied; nil for every other cause, so no later wait inherits it.
+func paused(job domain.Job, e domain.NeedsHuman) *domain.Paused {
+	if e.Cause != domain.CauseBudget {
+		return nil
+	}
+	return &domain.Paused{Stage: job.Stage, Reason: job.Reason, Wall: job.Wall, Spent: e.Spent}
 }
 
 func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) ([]domain.Event, error) {
@@ -476,7 +495,7 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 // cause, never from Reason or the text: after specgate's escalation or on a
 // length exception the spec is rewritten with it (not read from the rejection
 // count, which can be stale), after a spent budget it is refused and the job
-// keeps waiting, and after every other cause the job goes back to build with
+// keeps waiting for a raise of its budget, and after every other cause the job goes back to build with
 // it. A missing or unknown cause fails closed, and the switch
 // refuses by default, so a future cause is never routed by accident. Once the
 // job has used every rework its human_reworks allows (a person's override for
@@ -497,8 +516,8 @@ func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 		}
 		return reworked(job, e, p)
 	case domain.CauseBudget:
-		// Resuming after a person answers is not decided yet, so the job
-		// keeps waiting rather than spending more.
+		// Only a raise of its budget resumes it, so the job keeps waiting
+		// rather than spending more.
 		return nil, fmt.Errorf("%w: feedback in needs-human, cause %q", ErrUnsupported, job.Cause)
 	}
 	return nil, fmt.Errorf("decide: feedback in needs-human, cause %q: %w", job.Cause, domain.ErrInvalidValue)
@@ -737,12 +756,62 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 }
 
 // budgetExhausted stops a job in a pipeline stage or in triage, the only
-// stages that launch agents, until a person acts.
+// stages that launch agents, until a person acts. What it spent is recorded,
+// since a raise of its budget must pass it.
 func budgetExhausted(job domain.Job, e domain.BudgetExhausted, p domain.Pipeline) ([]domain.Event, error) {
 	if job.Stage != domain.StageTriage && !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage }) {
 		return nil, illegal(job, e)
 	}
-	return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "budget exhausted", Cause: domain.CauseBudget, At: e.At}}, nil
+	if !positive(e.Spent) {
+		return nil, fmt.Errorf("decide: spent budget of USD %v: %w", e.Spent, domain.ErrMissingField)
+	}
+	return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "budget exhausted", Cause: domain.CauseBudget, Spent: e.Spent, At: e.At}}, nil
+}
+
+// capRaised decides an allowed person's raise of a cap on the job. Only the
+// job's own budget is the job's to raise, and only while it waits in
+// needs-human for having spent it; the issue's slices and USD are raised
+// where the issue's next slice starts. The new budget must pass what the job
+// spent, and the job goes back to the stage it was in, after the history
+// entry. Every refusal carries its code and resumes nothing.
+func capRaised(job domain.Job, e domain.CapRaiseRequested, p domain.Pipeline) ([]domain.Event, error) {
+	if domain.Blank(e.By) {
+		return nil, domain.RefuseRaise(domain.RaiseNoAuthor, "raise without who asked")
+	}
+	if err := e.Cap.Validate(); err != nil {
+		return nil, domain.RefuseRaise(domain.RaiseUnknownCap, "%v", err)
+	}
+	if !positive(e.Value) {
+		return nil, domain.RefuseRaise(domain.RaiseBadValue, "%s to %v", e.Cap, e.Value)
+	}
+	// Checked before the stage, as for any person's action, so a stale
+	// raise tells nothing about the job.
+	if e.WaitSeq == 0 || e.WaitSeq != job.WaitSeq {
+		return nil, domain.RefuseRaise(domain.RaiseStaleWait, "raise for wait %d, expected wait %d", e.WaitSeq, job.WaitSeq)
+	}
+	if e.Cap != domain.CapBudget || job.Stage != domain.StageNeedsHuman || job.Cause != domain.CauseBudget || job.Paused == nil {
+		return nil, domain.RefuseRaise(domain.RaiseNotStopped, "%s in stage %q, cause %q", e.Cap, job.Stage, job.Cause)
+	}
+	if e.Value <= job.Paused.Spent {
+		return nil, domain.RefuseRaise(domain.RaiseNotAbove, "%s to USD %v, spent USD %v", e.Cap, e.Value, job.Paused.Spent)
+	}
+	raised := domain.CapRaised{Job: job.ID, By: e.By, Cap: e.Cap, Value: e.Value, At: e.At}
+	at := *job.Paused
+	if at.Stage == domain.StageTriage {
+		if err := at.Wall.Validate(); err != nil {
+			return nil, fmt.Errorf("decide: budget raise back to triage: wall: %w", err)
+		}
+		return []domain.Event{raised, domain.TriageRequested{Job: job.ID, Reason: at.Reason, Cause: at.Wall, At: e.At}}, nil
+	}
+	if !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == at.Stage }) {
+		return nil, fmt.Errorf("decide: budget raise back to %q, not a stage of pipeline %q: %w", at.Stage, p.Name, domain.ErrInvalidValue)
+	}
+	return []domain.Event{raised, domain.StageEntered{Job: job.ID, Stage: at.Stage, At: e.At}}, nil
+}
+
+// positive reports whether v is a finite amount above 0.
+func positive(v float64) bool {
+	return v > 0 && !math.IsInf(v, 1)
 }
 
 // next enters the stage after stage i, or requests the merge after the last.
