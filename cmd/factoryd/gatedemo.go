@@ -1,19 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/configyaml"
+	"github.com/pablogore/software-factory/internal/adapters/out/gitworktree"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
+	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/slices/build"
@@ -53,17 +57,30 @@ func (r rolePipelines) Pipeline(ctx context.Context, name string) (domain.Pipeli
 	return p, nil
 }
 
+// gateStore keeps the demo job, its history and its base commit.
+type gateStore interface {
+	ports.JobStore
+	ports.EventLog
+	ports.BaseLog
+}
+
 // gateDemo puts one job of the demo pipeline at the gate in round 1, runs the
-// gate on it with dir as its worktree and prints the checks run kept with the
-// job, where the job went and what the builder of a new round gets. A build
-// role file given with -role, such as one declaring allowed_paths, is the
-// build stage's role.
+// gate on it and prints the checks run kept with the job, where the job went
+// and what the builder of a new round gets. A build role file given with
+// -role, such as one declaring allowed_paths, is the build stage's role.
+//
+// With no -db the job is made in memory with dir as its worktree, recording
+// the commit base is at as it starts. With -db the job is kept in that SQLite
+// file: the first run makes its worktree in the repo at dir off base, as
+// factoryd does, and stops so a person can work in it, move base and run it
+// again to gate it.
 func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("gate-demo", flag.ContinueOnError)
-	dir := fs.String("dir", ".", "the repo to run the checks in, as the job's worktree")
+	dir := fs.String("dir", ".", "the repo to run the checks in, as the job's worktree; with -db, the repo the job's worktree is made in")
 	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
-	base := fs.String("base", "HEAD", "the base the job's diff is taken against; HEAD judges only uncommitted changes")
+	base := fs.String("base", "HEAD", "the base whose commit, recorded when the job is made, the job's diff is taken against; HEAD judges only uncommitted changes")
 	roleFile := fs.String("role", "", "a build role file (roles/<name>.yaml) for the build stage, e.g. one with allowed_paths")
+	db := fs.String("db", "", "a SQLite file keeping the job between runs: the first makes its worktree in -dir off -base, the next gates it")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -84,16 +101,53 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	store, err := memstore.New()
+	job := domain.Job{ID: gateDemoJob, Title: "Gate demo job", Pipeline: "demo", Stage: domain.StageGate, Round: 1}
+	var store gateStore
+	var ws ports.Workspace
+	if *db == "" {
+		mem, err := memstore.New()
+		if err != nil {
+			return err
+		}
+		if err := mem.Create(ctx, job); err != nil {
+			return err
+		}
+		commit, err := revParse(ctx, abs, *base)
+		if err != nil {
+			return err
+		}
+		if err := mem.RecordBase(ctx, job.ID, commit); err != nil {
+			return err
+		}
+		store, ws = mem, dirWorkspace{abs}
+	} else {
+		lite, err := sqlite.Open(ctx, *db)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = lite.Close() }()
+		wts := gitworktree.New(abs, *base, lite)
+		saved, _, err := lite.Load(ctx, job.ID)
+		if errors.Is(err, ports.ErrJobNotFound) {
+			return makeDemoJob(ctx, lite, wts, job, *base, *dir, *db, out)
+		}
+		if err != nil {
+			return err
+		}
+		job, store, ws = saved, lite, wts
+	}
+	wt, err := ws.Prepare(ctx, job.ID)
 	if err != nil {
 		return err
 	}
-	job := domain.Job{ID: gateDemoJob, Title: "Gate demo job", Pipeline: "demo", Stage: domain.StageGate, Round: 1}
-	if err := store.Create(ctx, job); err != nil {
+	commit, err := store.Base(ctx, job.ID)
+	if errors.Is(err, ports.ErrNoBase) {
+		commit = "none"
+	} else if err != nil {
 		return err
 	}
-	g := wiring.Gate(store, rolePipelines{role}, dirWorkspace{abs}, wiring.SystemClock{}, strings.Fields(*command), *base)
-	_, _ = fmt.Fprintf(out, "job %s at the gate in round %d; running `%s` in %s and judging its diff against %s\n", job.ID, job.Round, strings.Join(g.Command, " "), abs, g.Base)
+	g := wiring.Gate(store, rolePipelines{role}, ws, store, wiring.SystemClock{}, strings.Fields(*command))
+	_, _ = fmt.Fprintf(out, "job %s at the gate in round %d; running `%s` in %s and judging its diff against the base commit recorded for it: %s\n", job.ID, job.Round, strings.Join(g.Command, " "), wt.Path, commit)
 	if len(role.AllowedPaths) > 0 {
 		_, _ = fmt.Fprintf(out, "build role %s may touch only [%s]\n", role.Name, strings.Join(role.AllowedPaths, ", "))
 	}
@@ -125,4 +179,36 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	}
 	_, _ = fmt.Fprintf(out, "the gate failed: no reviewer started; the builder of round %d gets the log and the broken rules of round %d above (exit %d)\n", job.Round, ran.Round, ran.Run.ExitCode)
 	return nil
+}
+
+// makeDemoJob saves job at the gate and makes its worktree off base, which
+// records the commit base is at, and tells the person what to do next.
+func makeDemoJob(ctx context.Context, store gateStore, ws ports.Workspace, job domain.Job, base, dir, db string, out io.Writer) error {
+	if err := store.Create(ctx, job); err != nil {
+		return err
+	}
+	wt, err := ws.Prepare(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	commit, err := store.Base(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "job %s made: worktree %s on branch %s off %s, base commit %s recorded in %s\n", job.ID, wt.Path, wt.Branch, base, commit, db)
+	_, _ = fmt.Fprintf(out, "commit the job's work in the worktree, then run gate-demo again with -dir %s -db %s to gate it\n", dir, db)
+	return nil
+}
+
+// revParse is the full object name of the commit rev names in the repo at
+// dir.
+func revParse(ctx context.Context, dir, rev string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--end-of-options", rev+"^{commit}")
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("base %q in %s: %w: %s", rev, dir, err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }

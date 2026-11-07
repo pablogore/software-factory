@@ -16,7 +16,9 @@ import (
 type Differ struct{}
 
 // Changes lists the files that differ between the worktree at dir,
-// committed or not, and where its branch left base. Renames come as a
+// committed or not, and base, the full object name of the commit its branch
+// was made from. base is never a ref: a ref can be moved from the worktree,
+// so a diff against one could hide what the job changed. Renames come as a
 // deletion and an addition. An untracked file that .gitignore doesn't ignore
 // comes last as an addition: the builder touched it even though no diff
 // shows it.
@@ -24,11 +26,11 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 	if base == "" {
 		return nil, fmt.Errorf("gitdiff: %w: base", domain.ErrMissingField)
 	}
-	fork, err := git(ctx, dir, "merge-base", base, "HEAD")
-	if err != nil {
-		return nil, err
+	if !objectName(base) {
+		return nil, fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
 	}
-	out, err := git(ctx, dir, "diff", "--name-status", "--no-renames", "-z", strings.TrimSpace(fork), "--")
+	// ^{commit} makes git refuse an object that is not a commit, or not there.
+	out, err := git(ctx, dir, "diff", "--name-status", "--no-renames", "-z", base+"^{commit}", "--")
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +53,20 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 		changes = append(changes, domain.FileChange{Path: p, Kind: domain.ChangeAdded})
 	}
 	return changes, nil
+}
+
+// objectName reports whether s is a full SHA-1 or SHA-256 object name in
+// lowercase hex, as git rev-parse prints it.
+func objectName(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // nulFields splits git's -z output, which ends in a NUL, into its fields.

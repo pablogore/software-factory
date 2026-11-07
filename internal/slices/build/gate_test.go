@@ -76,6 +76,14 @@ var (
 	failing = domain.ChecksRun{Command: "make check", ExitCode: 2, Duration: 3 * time.Second, Output: "--- FAIL: TestSave"}
 )
 
+// recorded is the base commit recorded for j-1 when its worktree was made.
+const recorded = "c0ffee0000000000000000000000000000000000"
+
+// bases answers every job's base with err.
+type bases struct{ err error }
+
+func (b bases) Base(context.Context, domain.JobID) (string, error) { return "", b.err }
+
 func newGate(ctx *specs.Context, stage string, round int, c *checks) (*build.Gate, *memstore.Store) {
 	return newGateDiff(ctx, stage, round, c, &diffs{})
 }
@@ -85,7 +93,8 @@ func newGateDiff(ctx *specs.Context, stage string, round int, c *checks, d *diff
 	ctx.Expect(err).To(specs.BeNil())
 	job := domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: stage, Round: round}
 	ctx.Expect(store.Create(context.Background(), job)).To(specs.BeNil())
-	return &build.Gate{Jobs: store, Pipelines: pipelines{}, Worktrees: worktrees{}, Checks: c, Diffs: d, Clock: stopped{}, Command: build.DefaultCommand, Base: "arch/base"}, store
+	ctx.Expect(store.RecordBase(context.Background(), job.ID, recorded)).To(specs.BeNil())
+	return &build.Gate{Jobs: store, Pipelines: pipelines{}, Worktrees: worktrees{}, Checks: c, Bases: store, Diffs: d, Clock: stopped{}, Command: build.DefaultCommand}, store
 }
 
 func names(evs []domain.Event) []string {
@@ -232,7 +241,7 @@ func TestGate(t *testing.T) {
 				})
 			})
 
-			s.It("judges the job's worktree against the configured base", func(ctx *specs.Context) {
+			s.It("judges the job's worktree against the base commit recorded for it", func(ctx *specs.Context) {
 				d := &diffs{}
 				g, _ := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, d)
 
@@ -240,7 +249,7 @@ func TestGate(t *testing.T) {
 
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(d.dir).ToEqual("/wt/j-1")
-				ctx.Expect(d.base).ToEqual("arch/base")
+				ctx.Expect(d.base).ToEqual(recorded)
 			})
 		})
 
@@ -334,10 +343,44 @@ func TestGate(t *testing.T) {
 			ctx.Expect(job.Stage).ToEqual(domain.StageGate)
 		})
 
-		s.It("refuses to run with no base", func(ctx *specs.Context) {
+		s.When("no base commit was recorded for the job", func(s *specs.Spec) {
+			s.It("fails even though the checks pass, with that reason, asking no diff of any ref", func(ctx *specs.Context) {
+				d := &diffs{}
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, d)
+				g.Bases = bases{err: fmt.Errorf("store: %w", ports.ErrNoBase)}
+
+				evs, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "RoundStarted", "StageEntered"})
+				ctx.Expect(d.dir).ToEqual("")
+				hist, err := store.History(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				last, ok := build.LastChecks(hist)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(last.Run.Violations).ToEqual([]string{build.NoBase})
+			})
+		})
+
+		s.It("saves nothing and runs no checks when the base cannot be read", func(ctx *specs.Context) {
+			broken := errors.New("database is locked")
+			c := &checks{run: passing}
+			g, store := newGate(ctx, domain.StageGate, 1, c)
+			g.Bases = bases{err: broken}
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.MatchError(broken))
+			ctx.Expect(c.calls).ToEqual(0)
+			job, _, err := store.Load(bg, "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Stage).ToEqual(domain.StageGate)
+		})
+
+		s.It("refuses to run with no base log", func(ctx *specs.Context) {
 			c := &checks{run: passing}
 			g, _ := newGate(ctx, domain.StageGate, 1, c)
-			g.Base = ""
+			g.Bases = nil
 
 			_, err := g.Run(bg, "j-1")
 
