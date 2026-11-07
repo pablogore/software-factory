@@ -45,10 +45,18 @@ func write(ctx *specs.Context, dir, name, content string) {
 // job branch off it, checked out. It returns the repo and the commit the job
 // branch was made from, as factoryd records it.
 func newRepo(ctx *specs.Context) (string, string) {
+	return newRepoWith(ctx, nil)
+}
+
+// newRepoWith is newRepo with files, by path and content, also on base.
+func newRepoWith(ctx *specs.Context, files map[string]string) (string, string) {
 	dir := ctx.Testing().TempDir()
 	must(ctx, dir, "init", "-q", "-b", base)
 	for _, name := range []string{"Makefile", "AGENTS.md", "README.md"} {
 		write(ctx, dir, name, name+"\n")
+	}
+	for name, content := range files {
+		write(ctx, dir, name, content)
 	}
 	must(ctx, dir, "add", ".")
 	must(ctx, dir, "commit", "-q", "-m", "base")
@@ -97,23 +105,101 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
 		})
 
-		s.It("lists an untracked file as added, after the diff, and leaves out ignored ones", func(ctx *specs.Context) {
-			dir, fork := newRepo(ctx)
-			write(ctx, dir, ".gitignore", "*.log\n")
-			must(ctx, dir, "add", ".gitignore")
-			must(ctx, dir, "commit", "-q", "-m", "ignore logs")
+		s.It("lists an untracked file as added, after the diff, and leaves out those the base's .gitignore files ignore", func(ctx *specs.Context) {
+			dir, fork := newRepoWith(ctx, map[string]string{
+				".gitignore":     "*.log\nbin/\n",
+				"sub/.gitignore": "/only\n!keep.log\n",
+			})
 			write(ctx, dir, "README.md", "changed\n")
 			write(ctx, dir, "notes/new.txt", "new\n")
 			write(ctx, dir, "build.log", "ignored\n")
+			write(ctx, dir, "bin/deep/tool", "ignored\n")
+			write(ctx, dir, "sub/only", "ignored\n")
+			write(ctx, dir, "sub/keep.log", "kept\n")
+			write(ctx, dir, "only", "kept\n")
 
 			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
-				{Path: ".gitignore", Kind: domain.ChangeAdded},
 				{Path: "README.md", Kind: domain.ChangeModified},
 				{Path: "notes/new.txt", Kind: domain.ChangeAdded},
+				{Path: "only", Kind: domain.ChangeAdded},
+				{Path: "sub/keep.log", Kind: domain.ChangeAdded},
 			})
+		})
+
+		s.It("reads untracked paths that look like pathspec magic as plain paths", func(ctx *specs.Context) {
+			dir, fork := newRepoWith(ctx, map[string]string{".gitignore": "/bin/\n"})
+			write(ctx, dir, ":/bin/x_test.go", "t.Skip()\n")
+			write(ctx, dir, ":(top)bin/z", "hidden\n")
+			write(ctx, dir, ":(exclude)x", "new\n")
+			write(ctx, dir, "bin/y", "ignored\n")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: ":(exclude)x", Kind: domain.ChangeAdded},
+				{Path: ":(top)bin/z", Kind: domain.ChangeAdded},
+				{Path: ":/bin/x_test.go", Kind: domain.ChangeAdded},
+			})
+		})
+
+		s.It("lists an untracked file .git/info/exclude or core.excludesFile hides", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			write(ctx, dir, ".git/info/exclude", "hidden_test.go\n")
+			excludes := filepath.Join(ctx.Testing().TempDir(), "excludes")
+			write(ctx, filepath.Dir(excludes), "excludes", "also_test.go\n")
+			must(ctx, dir, "config", "core.excludesFile", excludes)
+			write(ctx, dir, "hidden_test.go", "t.Skip()\n")
+			write(ctx, dir, "also_test.go", "t.Skip()\n")
+			// The premise: git's own exclude rules hide both.
+			ctx.Expect(must(ctx, dir, "ls-files", "--others", "--exclude-standard")).ToEqual("")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: "also_test.go", Kind: domain.ChangeAdded},
+				{Path: "hidden_test.go", Kind: domain.ChangeAdded},
+			})
+		})
+
+		s.It("lists an untracked file an ignore rule the branch added hides", func(ctx *specs.Context) {
+			dir, fork := newRepoWith(ctx, map[string]string{".gitignore": "*.log\n"})
+			write(ctx, dir, ".gitignore", "*.log\nhidden_test.go\n")
+			write(ctx, dir, "sub/.gitignore", "*\n")
+			must(ctx, dir, "add", ".gitignore")
+			must(ctx, dir, "commit", "-q", "-m", "job")
+			write(ctx, dir, "hidden_test.go", "t.Skip()\n")
+			write(ctx, dir, "sub/inner_test.go", "t.Skip()\n")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: ".gitignore", Kind: domain.ChangeModified},
+				{Path: "hidden_test.go", Kind: domain.ChangeAdded},
+				{Path: "sub/.gitignore", Kind: domain.ChangeAdded},
+				{Path: "sub/inner_test.go", Kind: domain.ChangeAdded},
+			})
+		})
+
+		s.It("lists a change a core.fsmonitor that reports nothing hides", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			hook := filepath.Join(ctx.Testing().TempDir(), "fsmonitor")
+			ctx.Expect(os.WriteFile(hook, []byte("#!/bin/sh\nprintf 'token\\0'\n"), 0o700)).To(specs.BeNil())
+			must(ctx, dir, "config", "core.fsmonitor", hook)
+			must(ctx, dir, "status", "--short")
+			write(ctx, dir, "Makefile", "hidden by fsmonitor\n")
+			// The premise: git with the fsmonitor trusts the index and sees nothing.
+			ctx.Expect(must(ctx, dir, "diff", "--name-only", fork, "--")).ToEqual("")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
 		})
 
 		s.It("lists untracked files by their path from the repo root when dir is a subfolder", func(ctx *specs.Context) {
