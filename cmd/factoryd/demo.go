@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -39,10 +40,11 @@ func (demoPipelines) Pipeline(_ context.Context, name string) (domain.Pipeline, 
 // round, as a failed gate does, and prints a builder's token for it.
 const newRoundPath = "/demo/jobs/{job}/new-round"
 
-// workerDemo serves the worker API over an in-memory store with demoJobs,
-// until ctx ends. It is not a factoryd server: it prints a builder's token
-// per job and, after every request, each job's stage, round and saved
-// events, so a person can try `factory worker submit-result` against it.
+// workerDemo serves the worker API, its HTTP route and its MCP server, over
+// an in-memory store with demoJobs, until ctx ends. It is not a factoryd
+// server: it prints a builder's token per job and, after every request, each
+// job's stage, round and saved events, so a person can try `factory worker submit-result` and an MCP
+// client's submit_result against it.
 // POST newRoundPath, with no token, sends a job back to build in a new round,
 // so a person can see its old token refused.
 func workerDemo(ctx context.Context, args []string, out io.Writer) error {
@@ -75,6 +77,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "\nexport FACTORY_URL=%s\n", url)
 	for _, id := range demoJobs {
 		_, _ = fmt.Fprintf(out, "# job %s\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, issued[id])
+		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tool %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult)
 	}
 	_, _ = fmt.Fprintln(out)
 
@@ -90,6 +93,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 		}
 		mu.Lock()
 		_, _ = fmt.Fprintf(out, "# job %s, new build round; its old token is from an earlier round\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, token)
+		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tool %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult)
 		mu.Unlock()
 		_, _ = fmt.Fprintf(w, "job %s is in a new build round\n", id)
 	})
@@ -147,6 +151,11 @@ func newRound(ctx context.Context, store *memstore.Store, tokens *jobtoken.Token
 		return "", err
 	}
 	return tokens.Issue(jobtoken.For(job, hist, "builder", domain.KindBuild))
+}
+
+// mcpURL is the MCP endpoint of job id on the demo at base.
+func mcpURL(base string, id domain.JobID) string {
+	return base + strings.Replace(mcpworker.MCPPath, "{job}", string(id), 1)
 }
 
 func joinIDs(ids []domain.JobID) string {
