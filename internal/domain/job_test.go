@@ -51,3 +51,41 @@ func TestKind(t *testing.T) {
 		})
 	})
 }
+
+type invalidJobRow struct {
+	name     string
+	edit     func(*domain.Job)
+	sentinel error
+	field    string
+}
+
+func TestJobValidate(t *testing.T) {
+	specs.Describe(t, "Job.Validate", func(s *specs.Spec) {
+		valid := func() domain.Job {
+			return domain.Job{ID: "job-1", Pipeline: "default", Stage: domain.StageNeedsHuman, Round: 1, WaitSeq: 1, Cause: domain.CauseBlocked}
+		}
+
+		s.It("accepts a job that keeps every invariant", func(ctx *specs.Context) {
+			ctx.Expect(valid().Validate()).To(specs.BeNil())
+			ctx.Expect(domain.Job{ID: "job-1", Stage: "build", Round: 1}.Validate()).To(specs.BeNil())
+		})
+
+		rows := []invalidJobRow{
+			{"refuses needs-human with wait_seq 0", func(j *domain.Job) { j.WaitSeq = 0 }, domain.ErrInvalidValue, "wait_seq"},
+			{"refuses needs-info with wait_seq 0", func(j *domain.Job) { j.Stage, j.Cause, j.WaitSeq = domain.StageNeedsInfo, "", 0 }, domain.ErrInvalidValue, "wait_seq"},
+			{"refuses done with wait_seq 0", func(j *domain.Job) { j.Stage, j.Cause, j.WaitSeq = domain.StageDone, "", 0 }, domain.ErrInvalidValue, "wait_seq"},
+			{"refuses needs-human without a cause", func(j *domain.Job) { j.Cause = "" }, domain.ErrMissingField, "cause"},
+			{"refuses an unknown cause", func(j *domain.Job) { j.Cause = "bored" }, domain.ErrInvalidValue, "cause"},
+			{"refuses an unknown cause outside needs-human", func(j *domain.Job) { j.Stage, j.Cause = "build", "bored" }, domain.ErrInvalidValue, "cause"},
+		}
+		specs.Table(s, rows, func(r invalidJobRow) string { return r.name }, func(ctx *specs.Context, r invalidJobRow) {
+			job := valid()
+			r.edit(&job)
+
+			err := job.Validate()
+
+			ctx.Expect(err).To(specs.MatchError(r.sentinel))
+			ctx.Expect(err.Error()).To(specs.Contain(r.field))
+		})
+	})
+}

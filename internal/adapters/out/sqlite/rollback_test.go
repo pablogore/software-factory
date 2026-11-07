@@ -17,7 +17,11 @@ import (
 func TestStoreDatabase(t *testing.T) {
 	specs.Describe(t, "sqlite.Store database", func(s *specs.Spec) {
 		bg := context.Background()
-		job := domain.Job{ID: "job-1", Pipeline: "default", Stage: "build", Round: 1}
+		job := domain.Job{ID: "job-1", Pipeline: "default", Stage: domain.StageGate, Round: 1}
+		p := domain.Pipeline{Name: "default", Stages: []domain.Stage{
+			{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder"}},
+			{Name: "review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "build"},
+		}}
 		at := time.Date(2026, 11, 6, 20, 0, 0, 0, time.UTC)
 		open := func(ctx *specs.Context) *Store {
 			st, err := Open(bg, filepath.Join(ctx.Testing().TempDir(), "factory.db"))
@@ -29,19 +33,19 @@ func TestStoreDatabase(t *testing.T) {
 
 		s.It("rolls back the state and earlier events when SQLite refuses an event insert", func(ctx *specs.Context) {
 			st := open(ctx)
-			_, err := st.db.ExecContext(bg, `CREATE TRIGGER refuse BEFORE INSERT ON events WHEN NEW.name = 'GatePassed'
+			// A failed gate in round 1 is RoundStarted then StageEntered: the
+			// second insert fails after the state and the first were written.
+			_, err := st.db.ExecContext(bg, `CREATE TRIGGER refuse BEFORE INSERT ON events WHEN NEW.name = 'StageEntered'
 				BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, err = st.Apply(bg, job, 1, []domain.Event{
-				domain.StageEntered{Job: job.ID, Stage: domain.StageGate, At: at},
-				domain.GatePassed{Job: job.ID, At: at},
-			})
+			_, _, err = st.Apply(bg, job.ID, 1, p, domain.GateFailed{Job: job.ID, At: at})
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-			got, _, err := st.Load(bg, job.ID)
+			got, v, err := st.Load(bg, job.ID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).ToEqual(job)
+			ctx.Expect(v).ToEqual(ports.Version(1))
 			hist, err := st.History(bg, job.ID)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(hist).To(specs.BeEmpty())

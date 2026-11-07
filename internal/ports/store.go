@@ -25,17 +25,22 @@ type Version int64
 
 // JobStore keeps each job's current state. Apply saves the state and the
 // events that explain it together, so a state never exists without its events
-// (07-arquitectura.md).
+// (07-arquitectura.md). Every job a JobStore saves or loads passes
+// domain.Job.Validate; one that does not is an error naming the field.
 type JobStore interface {
 	// Create saves a new job with no events yet.
 	Create(ctx context.Context, job domain.Job) error
 	Load(ctx context.Context, id domain.JobID) (domain.Job, Version, error)
-	// Apply takes the job and version as loaded and the events decide.Decide
-	// returned for it, and saves decide.Apply(job, evs) with evs in one
-	// transaction: if any part fails, neither the state nor any event is
-	// saved. If the job was saved since v, it fails with ErrVersionConflict.
-	// It returns the job's new version.
-	Apply(ctx context.Context, job domain.Job, v Version, evs []domain.Event) (Version, error)
+	// Apply runs decide.Decide for ev on job id as saved at version v, in
+	// pipeline p, and saves decide.Apply(job, evs) with the evs Decide
+	// returned in one transaction. Only Decide's events are saved, never ev
+	// itself, so no caller can save an event Decide did not return: when
+	// Decide refuses ev, Apply returns its error and saves nothing. If any part
+	// fails, neither the state nor any event is saved. If the job was saved
+	// since v, it fails with ErrVersionConflict. It returns Decide's events
+	// and the job's new version; when Decide returns none, nothing is saved
+	// and the version stays v.
+	Apply(ctx context.Context, id domain.JobID, v Version, p domain.Pipeline, ev domain.Event) ([]domain.Event, Version, error)
 }
 
 // Record is one saved event in a job's history. At is the event's own time:
