@@ -31,6 +31,12 @@ type Gate struct {
 	Bases bases
 	// Command is the checks command, run without a shell in the worktree.
 	Command []string
+	// CountCommand lists the tests of each package, as go test -list . ./...
+	// does, run like Command in the worktree and in a copy of the base
+	// commit from Snapshots. With none the rule doesn't run, and the run
+	// says so in its notes.
+	CountCommand []string
+	Snapshots    snapshots
 }
 
 // Run runs the checks in the worktree of job id, which must be at the gate,
@@ -38,8 +44,8 @@ type Gate struct {
 // for it, and decides GatePassed or GateFailed with the run on it: a broken
 // rule, such as a protected path modified, a file outside the build role's
 // allowed paths, a file the index hides changes of, a test file deleted or
-// a skip mark added to one, fails the gate even when the checks pass, its
-// reason kept in the run. It
+// a skip mark added to one, or a package with fewer tests than at the base,
+// fails the gate even when the checks pass, its reason kept in the run. It
 // returns the events the job saved: the ChecksRan and the move to the next
 // stage, or back to build in a new round, or to triage in the last one. When
 // the checks cannot be run, or the job changed while they ran, nothing is
@@ -51,6 +57,9 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	}
 	if g.Bases == nil {
 		return nil, fmt.Errorf("gate: %w: bases", domain.ErrMissingField)
+	}
+	if len(g.CountCommand) > 0 && g.Snapshots == nil {
+		return nil, fmt.Errorf("gate: %w: snapshots for the test count", domain.ErrMissingField)
 	}
 	job, v, err := g.Jobs.Load(ctx, id)
 	if err != nil {
@@ -67,7 +76,7 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	if err != nil {
 		return nil, fmt.Errorf("gate: worktree of %q: %w", id, err)
 	}
-	violations, err := g.diffRules(ctx, id, wt.Path, p)
+	violations, base, err := g.diffRules(ctx, id, wt.Path, p)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +85,18 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 		return nil, fmt.Errorf("gate: checks of %q: %w", id, err)
 	}
 	run.Violations = append(run.Violations, violations...)
+	switch {
+	case len(g.CountCommand) == 0:
+		run.Notes = append(run.Notes, NoCountCommand)
+	case base == "":
+		run.Notes = append(run.Notes, NoCountBase)
+	default:
+		dropped, err := g.testCount(ctx, wt.Path, base)
+		if err != nil {
+			return nil, fmt.Errorf("gate: test count of %q: %w", id, err)
+		}
+		run.Violations = append(run.Violations, dropped...)
+	}
 	var ev domain.Event = domain.GatePassed{Job: id, Run: run, At: g.Clock.Now()}
 	if !run.Passed() {
 		ev = domain.GateFailed{Job: id, Run: run, At: g.Clock.Now()}
@@ -92,32 +113,33 @@ const NoBase = "no base commit was recorded when the job's worktree was made, so
 
 // diffRules is a reason for each diff rule the worktree at dir breaks
 // against job id's recorded base, or NoBase when it has none, after one for
-// each index flag that hides a file's changes from that diff.
-func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p domain.Pipeline) ([]string, error) {
+// each index flag that hides a file's changes from that diff, and the base,
+// or "" when there is none.
+func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p domain.Pipeline) ([]string, string, error) {
 	flagged, err := g.Diffs.Flagged(ctx, dir)
 	if err != nil {
-		return nil, fmt.Errorf("gate: index of %q: %w", id, err)
+		return nil, "", fmt.Errorf("gate: index of %q: %w", id, err)
 	}
 	reasons := HiddenByIndex(flagged)
 	base, err := g.Bases.Base(ctx, id)
 	if errors.Is(err, ports.ErrNoBase) {
-		return append(reasons, NoBase), nil
+		return append(reasons, NoBase), "", nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("gate: base of %q: %w", id, err)
+		return nil, "", fmt.Errorf("gate: base of %q: %w", id, err)
 	}
 	changes, err := g.Diffs.Changes(ctx, dir, base)
 	if err != nil {
-		return nil, fmt.Errorf("gate: diff of %q: %w", id, err)
+		return nil, "", fmt.Errorf("gate: diff of %q: %w", id, err)
 	}
 	reasons = append(reasons, ProtectedTouched(changes)...)
 	reasons = append(reasons, OutsideAllowed(changes, Roles(p))...)
 	reasons = append(reasons, TestsDeleted(changes)...)
 	marks, err := g.marksAdded(ctx, dir, base, changes)
 	if err != nil {
-		return nil, fmt.Errorf("gate: tests of %q: %w", id, err)
+		return nil, "", fmt.Errorf("gate: tests of %q: %w", id, err)
 	}
-	return append(reasons, marks...), nil
+	return append(reasons, marks...), base, nil
 }
 
 // marksAdded is MarksAdded for each test file changes add or modify, read

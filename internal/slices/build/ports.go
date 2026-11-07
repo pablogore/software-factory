@@ -47,3 +47,12 @@ type diffs interface {
 	AtBase(ctx context.Context, dir, base, file string) (string, error)
 	InWorktree(ctx context.Context, dir, file string) (string, error)
 }
+
+// snapshots checks out a commit, by its full object name, in a directory of
+// its own apart from the worktree at dir, from the repo dir is in, and
+// removes it, so the gate counts the base's tests on files the builder never
+// had.
+type snapshots interface {
+	Checkout(ctx context.Context, dir, commit string) (string, error)
+	Remove(ctx context.Context, dir, path string) error
+}

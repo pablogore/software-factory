@@ -14,5 +14,8 @@
 // So does an index that marks a file skip-worktree or assume-unchanged,
 // since it hides that file's changes from the diff. A diff that deletes or
 // moves a test file, or adds .skip, .only or t.Skip to one, fails it too, so
-// checks never pass only because tests stopped running.
+// checks never pass only because tests stopped running. With a test count
+// command, a package with fewer tests in the job's head than in a copy of
+// its base commit fails it as well, however the tests went; with none, the
+// run notes that the rule did not run.
 package build
