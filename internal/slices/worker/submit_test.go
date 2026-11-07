@@ -201,6 +201,19 @@ func TestSubmit(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 		})
 
+		s.It("keeps what a valid token's submissions came to until Take, and nothing for a token it refused", func(ctx *specs.Context) {
+			w := newWorld(ctx)
+			_, err := w.sub.Submit(context.Background(), w.j2, "j-1", []byte(`{"status":"READY"}`))
+			ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			ctx.Expect(w.sub.Take(w.j2)).ToEqual(worker.Outcome{})
+			_, err = w.sub.Submit(context.Background(), w.j1, "j-1", []byte(`{"status":"DONE"}`))
+			ctx.Expect(w.sub.Take(w.j1)).ToEqual(worker.Outcome{Refused: err})
+			ctx.Expect(w.sub.Take(w.j1)).ToEqual(worker.Outcome{})
+			_, err = w.sub.Submit(context.Background(), w.j1, "j-1", []byte(`{"status":"READY"}`))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(w.sub.Take(w.j1)).ToEqual(worker.Outcome{Saved: true})
+		})
+
 		s.When("the job moved on since the token was issued", func(s *specs.Spec) {
 			s.It("refuses a token of an earlier round, though the job is back in build, saving nothing", func(ctx *specs.Context) {
 				w := newWorld(ctx)

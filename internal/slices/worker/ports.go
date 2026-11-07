@@ -19,6 +19,16 @@ type jobs interface {
 	History(ctx context.Context, id domain.JobID) ([]ports.Record, error)
 }
 
+// session is the agent session an attempt prompts.
+type session interface {
+	Prompt(ctx context.Context, msg string) (<-chan domain.AgentProgressed, error)
+}
+
+// results tells what a token's submissions came to.
+type results interface {
+	Take(token string) Outcome
+}
+
 // pipelines finds the pipeline a job follows by its name.
 type pipelines interface {
 	Pipeline(ctx context.Context, name string) (domain.Pipeline, error)

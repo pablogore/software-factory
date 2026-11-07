@@ -33,5 +33,14 @@ type WorkerStore interface {
 // WorkerAPI is the worker HTTP API over jobs, deciding results with the
 // tokens issued from tokens.
 func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, clock ports.Clock) http.Handler {
-	return mcpworker.Handler(&worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Clock: clock})
+	h, _ := Worker(tokens, jobs, p, clock)
+	return h
+}
+
+// Worker is WorkerAPI and the Attempts that run agents' turns over the same
+// submissions, so an attempt sees the results its agent handed in through
+// the API.
+func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, clock ports.Clock) (http.Handler, *worker.Attempts) {
+	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Clock: clock}
+	return mcpworker.Handler(sub), &worker.Attempts{Results: sub, Jobs: jobs, Pipelines: p, Clock: clock}
 }
