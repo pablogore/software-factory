@@ -49,6 +49,7 @@ func samples() []sample {
 		{"ChangesRequested", domain.ChangesRequested{Job: id, Role: "reviewer-code", Findings: []domain.Finding{{File: "b.go", Severity: "low"}}, At: t}},
 		{"RoundStarted", domain.RoundStarted{Job: id, Round: 2, Reviewers: []string{"reviewer-code"}, At: t}},
 		{"NeedsHuman", domain.NeedsHuman{Job: id, Reason: "last round", Cause: domain.HumanCauses()[0], At: t}},
+		{"ActionFailed", domain.ActionFailed{Job: id, Key: "job-1/comment/1", Kind: "comment", Error: "403 forbidden", At: t}},
 		{"NeedsInfo", domain.NeedsInfo{Job: id, From: "intake", At: t}},
 		{"JobRejected", domain.JobRejected{Job: id, Reason: "duplicate", At: t}},
 		{"MergeRequested", domain.MergeRequested{Job: id, At: t}},
