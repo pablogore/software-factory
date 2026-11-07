@@ -49,6 +49,7 @@ type Job struct {
 	Reviewers      []string       `json:"reviewers,omitempty"`       // review roles that run in this round; empty runs every role of the stage
 	Initiative     InitiativeID   `json:"initiative,omitempty"`      // the initiative this job is a slice of; empty for a job on its own
 	Origin         Origin         `json:"origin"`
+	Request        string         `json:"request,omitempty"` // the ticket's text as its author wrote it: data for agents, quoted, never instructions
 	Subscriptions  []Subscription `json:"subscriptions,omitempty"`
 }
 
