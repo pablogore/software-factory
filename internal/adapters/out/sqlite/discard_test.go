@@ -2,7 +2,10 @@ package sqlite_test
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/getsyntegrity/go-specs/specs"
 
@@ -70,5 +73,49 @@ func discardContract(s *specs.Spec, newLog func(ctx *specs.Context) ports.Discar
 
 		ctx.Expect(err).To(specs.BeNil())
 		ctx.Expect(got).ToEqual([]ports.Discarded{discarded("1", "mallory", 1), other, elsewhere})
+	})
+
+	s.It("keeps at most ports.MaxDiscardField bytes of each field, as valid UTF-8", func(ctx *specs.Context) {
+		log := newLog(ctx)
+		huge := "x" + strings.Repeat("é", ports.MaxDiscardField)
+		ctx.Expect(log.Discard(bg, ports.Discarded{Provider: huge, Thread: huge, Request: huge, Author: huge, At: at(1)})).To(specs.BeNil())
+
+		got, err := log.Discards(bg)
+
+		ctx.Expect(err).To(specs.BeNil())
+		ctx.Expect(got).To(specs.HaveLen(1))
+		for _, f := range []string{got[0].Provider, got[0].Thread, got[0].Request, got[0].Author} {
+			ctx.Expect(len(f) <= ports.MaxDiscardField).To(specs.BeTrue())
+			ctx.Expect(len(f) >= ports.MaxDiscardField-utf8.UTFMax).To(specs.BeTrue())
+			ctx.Expect(utf8.ValidString(f)).To(specs.BeTrue())
+			ctx.Expect(strings.HasPrefix(huge, f)).To(specs.BeTrue())
+		}
+	})
+
+	s.It("tells a repeat of a huge request by what it keeps of it", func(ctx *specs.Context) {
+		log := newLog(ctx)
+		huge := strings.Repeat("1", 10*ports.MaxDiscardField)
+		ctx.Expect(log.Discard(bg, discarded(huge, "mallory", 1))).To(specs.BeNil())
+
+		ctx.Expect(log.Discard(bg, discarded(huge, "mallory", 2))).To(specs.BeNil())
+
+		got, err := log.Discards(bg)
+		ctx.Expect(err).To(specs.BeNil())
+		ctx.Expect(got).ToEqual([]ports.Discarded{discarded(huge[:ports.MaxDiscardField], "mallory", 1)})
+	})
+
+	s.It("keeps the newest ports.MaxDiscards requests, dropping the oldest", func(ctx *specs.Context) {
+		log := newLog(ctx)
+		const extra = 3
+		for i := range ports.MaxDiscards + extra {
+			ctx.Expect(log.Discard(bg, discarded(strconv.Itoa(i), "mallory", i))).To(specs.BeNil())
+		}
+
+		got, err := log.Discards(bg)
+
+		ctx.Expect(err).To(specs.BeNil())
+		ctx.Expect(got).To(specs.HaveLen(ports.MaxDiscards))
+		ctx.Expect(got[0]).ToEqual(discarded(strconv.Itoa(extra), "mallory", extra))
+		ctx.Expect(got[len(got)-1]).ToEqual(discarded(strconv.Itoa(ports.MaxDiscards+extra-1), "mallory", ports.MaxDiscards+extra-1))
 	})
 }

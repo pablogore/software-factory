@@ -2,19 +2,38 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
-// Discard implements ports.DiscardLog.
-func (s *Store) Discard(ctx context.Context, d ports.Discarded) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO discarded (provider, thread, request, author, at) VALUES (?, ?, ?, ?, ?)
+// Discard implements ports.DiscardLog: the insert and the dropping of the
+// oldest past ports.MaxDiscards are one transaction.
+func (s *Store) Discard(ctx context.Context, d ports.Discarded) (err error) {
+	d = d.Capped()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin discard of request %q of %s: %w", d.Request, d.Provider, err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+	_, err = tx.ExecContext(ctx, `INSERT INTO discarded (provider, thread, request, author, at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (provider, thread, request) DO NOTHING`,
 		d.Provider, d.Thread, d.Request, d.Author, d.At.Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("sqlite: discard request %q of %s: %w", d.Request, d.Provider, err)
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM discarded WHERE seq NOT IN (SELECT seq FROM discarded ORDER BY seq DESC LIMIT ?)`, ports.MaxDiscards)
+	if err != nil {
+		return fmt.Errorf("sqlite: drop oldest discarded requests: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit discard of request %q of %s: %w", d.Request, d.Provider, err)
 	}
 	return nil
 }
