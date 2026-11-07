@@ -222,6 +222,31 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
 		})
 
+		s.It("fails a folder with its own .git and a test file in it, naming the folder, even where the base ignores it, and passes once it is gone", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+			ctx.Expect(os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("vendorx/\n"), 0o600)).To(specs.BeNil())
+			git(ctx, dir, "init", "-q", "-b", "main")
+			git(ctx, dir, "add", ".")
+			git(ctx, dir, "commit", "-q", "-m", "base")
+			nested := filepath.Join(dir, "vendorx")
+			git(ctx, dir, "init", "-q", nested)
+			ctx.Expect(os.WriteFile(filepath.Join(nested, "a_test.go"), []byte("package x\n"), 0o600)).To(specs.BeNil())
+			args := []string{"-dir", dir, "-checks", "true"}
+
+			var failed bytes.Buffer
+			ctx.Expect(gateDemo(context.Background(), args, &failed)).To(specs.BeNil())
+
+			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the worktree has vendorx/, a folder with its own .git that hides its files from the gate"))
+			ctx.Expect(failed.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+
+			ctx.Expect(os.RemoveAll(nested)).To(specs.BeNil())
+			var passed bytes.Buffer
+			ctx.Expect(gateDemo(context.Background(), args, &passed)).To(specs.BeNil())
+
+			ctx.Expect(passed.String()).To(specs.Not(specs.Contain("rule broken")))
+			ctx.Expect(passed.String()).To(specs.Contain("the gate passed"))
+		})
+
 		s.It("refuses a role file that is not a build role", func(ctx *specs.Context) {
 			role := filepath.Join(ctx.Testing().TempDir(), "reviewer.yaml")
 			ctx.Expect(os.WriteFile(role, []byte("name: reviewer-code\nkind: review\nmode: blocking\n"), 0o600)).To(specs.BeNil())
