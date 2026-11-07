@@ -11,6 +11,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/acp/acpfake"
 	"github.com/pablogore/software-factory/internal/adapters/out/configyaml"
+	"github.com/pablogore/software-factory/internal/wiring"
 )
 
 // TestMain lets this test binary be the fake agent role-demo launches.
@@ -49,6 +50,38 @@ func TestRoleDemo(t *testing.T) {
 			ctx.Expect(out.String()).To(specs.Contain("model opus\n"))
 			ctx.Expect(out.String()).To(specs.Contain("env [ANTHROPIC_MODEL=opus]"))
 			ctx.Expect(out.String()).To(specs.Contain("   | You are the builder."))
+		})
+
+		s.It("launches the repo's security reviewer with its agent, its model and its prompt", func(ctx *specs.Context) {
+			var out bytes.Buffer
+
+			err := roleDemo(context.Background(), []string{"--config", "../..", "--role", "reviewer-security"}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).To(specs.Contain("role reviewer-security (review)"))
+			ctx.Expect(out.String()).To(specs.Contain("env [ANTHROPIC_MODEL=opus]"))
+			ctx.Expect(out.String()).To(specs.Contain("   | You are the security reviewer."))
+		})
+
+		s.It("launches the repo's product owner with its agent, its model and its prompt", func(ctx *specs.Context) {
+			var out bytes.Buffer
+
+			err := roleDemo(context.Background(), []string{"--config", "../..", "--role", "product-owner"}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).To(specs.Contain("role product-owner (task)"))
+			ctx.Expect(out.String()).To(specs.Contain("env [ANTHROPIC_MODEL=sonnet]"))
+			ctx.Expect(out.String()).To(specs.Contain("   | You are the product owner."))
+		})
+
+		s.It("fails naming a role that does not exist, without launching anything", func(ctx *specs.Context) {
+			var out bytes.Buffer
+
+			err := roleDemo(context.Background(), []string{"--config", "../..", "--role", "no-existe"}, &out)
+
+			ctx.Expect(err).To(specs.MatchError(wiring.ErrUnknownRole))
+			ctx.Expect(err.Error()).To(specs.Contain("role no-existe"))
+			ctx.Expect(out.String()).To(specs.BeEmpty())
 		})
 
 		s.It("launches the next session with the model and agent the YAML says now", func(ctx *specs.Context) {

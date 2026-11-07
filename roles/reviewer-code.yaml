@@ -1,0 +1,7 @@
+name: reviewer-code
+kind: review
+description: Reviews a branch for correctness, simplicity and the repo conventions
+prompt: roles/reviewer-code.md
+agent: claude
+model: sonnet
+mode: blocking

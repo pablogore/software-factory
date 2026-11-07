@@ -1,0 +1,7 @@
+name: tech-lead
+kind: triage
+description: Plans the order of the queue and triages a stuck job, retrying it once or escalating with one closed question
+prompt: roles/tech-lead.md
+agent: claude
+model: sonnet
+mode: blocking

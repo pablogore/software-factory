@@ -1,0 +1,7 @@
+name: reviewer-security
+kind: review
+description: Reviews a branch for security issues
+prompt: roles/reviewer-security.md
+agent: claude
+model: opus
+mode: blocking

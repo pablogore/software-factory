@@ -1,0 +1,7 @@
+name: intake
+kind: intake
+description: Decides whether an issue is worth building and at what scope, and rates its risk and surfaces
+prompt: roles/intake.md
+agent: claude
+model: sonnet
+mode: blocking
