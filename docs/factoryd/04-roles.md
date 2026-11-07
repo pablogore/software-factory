@@ -53,14 +53,14 @@ stages:
 Y en la fábrica (`factory.yaml` o `.factory/` del repo): `pipeline: default`. Otra fábrica puede usar `pipeline: backend` sin ux/ui.
 
 ### Límites de reintento (`limits`)
-Un pipeline puede fijar cuántas veces se reintenta cada cosa antes de que el job pase a una persona. Todos son opcionales y, si se ponen, valen al menos 1; una clave desconocida en `limits` es un error.
+Un pipeline puede fijar cuántas veces se reintenta cada cosa antes de que el job pase a una persona. Todos son opcionales y, si se ponen, valen al menos 1, salvo `triage_retries`, que puede ser 0; una clave desconocida en `limits` es un error.
 
 ```yaml
 name: default
 limits:
   spec_rejections: 3   # rechazos de specgate antes de needs-human (por defecto 3)
   human_reworks: 1     # retrabajos desde needs-human que vuelven a build (sin límite si no se pone, o "unlimited")
-  triage_retries: 1    # reintentos que el triage puede dar a un job trabado
+  triage_retries: 1    # reintentos que el triage puede dar a un job trabado (0 = sin triage: la pared va directo a una persona)
   max_rounds: 3        # rondas de un review que no fija las suyas (por defecto 3)
 stages:
   - intake
@@ -74,6 +74,7 @@ stages:
 
 - **Rondas:** un review usa su propio `max_rounds`; si no lo tiene, `limits.max_rounds`; si tampoco, 3. Un gate fallido gasta una ronda igual que un CHANGES.
 - **`human_reworks` nunca se reinicia.** Cuenta solo el feedback desde needs-human que devuelve el job a build. No cuentan el que lo devuelve a spec (excepción de largo, escalada de specgate), porque ese ciclo ya lo limita `spec_rejections`, ni reabrir un job mergeado (un comentario en done). Cuando se agota, en needs-human solo se puede aprobar, rechazar o detener.
+- **Triage:** cuando un job choca contra una pared (gate fallido sin rondas, rondas agotadas, BLOCKED del builder o merge fallido), corre el rol `tech-lead`, que devuelve RETRY (vuelve al builder con instrucciones y suma una ronda) o ESCALATE (needs-human con una pregunta cerrada). Agotados los `triage_retries`, la pared siguiente escala sin triage. Un ESCALATE del approver y una acción externa rechazada van directo a una persona.
 - **Un rework humano no da rondas nuevas:** el job vuelve a build en la misma ronda. Si esa era la última, un nuevo CHANGES lo devuelve a needs-human.
 
 ## Modos de un rol nuevo (para meterlo sin riesgo)
@@ -90,9 +91,9 @@ Las métricas por rol (costo, hallazgos, cuántos terminaron en cambios reales, 
 - **Nombres de rol:** minúsculas, dígitos y guiones; se comparan exactos. En `Decide`, el resultado de un rol que no es de la etapa en curso es una transición ilegal.
 - Conocido: un `~` o `null` dentro de `parallel` se descarta sin error al cargar.
 - Todo `review` lista al menos un rol (`parallel`); su `max_rounds`, si lo fija, es >= 1.
-- Los valores de `limits` que se fijan son >= 1, y una clave desconocida en `limits` es un error.
+- Los valores de `limits` que se fijan son >= 1 (`triage_retries` puede ser 0), y una clave desconocida en `limits` es un error.
 - Topes: `max_rounds` (en `limits` o en una etapa de review), `spec_rejections` y `human_reworks` <= 10; `triage_retries` <= 3. `human_reworks: unlimited` sigue siendo válido. Un override por job puede llegar hasta 20 (5 para `triage_retries`) y queda registrado con quién lo pidió.
-- Ninguna etapa, sea del kind que sea, se llama como un estado del job: `stopped`, `merge`, `needs-human`, `needs-info`, `done`, `rejected`. El error nombra la etapa.
+- Ninguna etapa, sea del kind que sea, se llama como un estado del job: `stopped`, `merge`, `needs-human`, `needs-info`, `done`, `rejected`, `triage`. El error nombra la etapa.
 - El schema del kind existe y el prompt no está vacío.
 - El agente y el modelo existen en la config; las tools pedidas están permitidas para ese kind.
 - `plan` muestra el impacto: "security-deep habría corrido en 7 de los últimos 20 jobs, costo estimado X".
