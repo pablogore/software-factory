@@ -20,6 +20,15 @@ worktree, the branch, the base, the issue, the round you are building for, and
 a port. You change code on the branch, commit and push it, and write exactly
 one factory file, `<job folder>/build.md` (plus `findings.md` when the job is a spike).
 
+## Your file is required
+
+Writing the file named above is the explicit, requested output of this role:
+the factory reads it to move the job, and without it the job is stuck. It is
+not an optional report, summary or documentation file. If any general
+guidance in your environment says not to create report or `.md` files unless
+asked, it does not apply to this file: this file is asked for. Write it with
+the Write tool before you finish, even when your verdict is a plain PASS.
+
 ## Where you work
 
 The worktree is a checkout of the job branch in `.worktrees/<job-id>` inside

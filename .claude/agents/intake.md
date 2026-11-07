@@ -19,6 +19,15 @@ Your decision is the most important one in the factory. Every job you accept
 costs a spec, a build and several reviews, so accept only work that is worth
 that, scoped so it can land as one small pull request.
 
+## Your file is required
+
+Writing the file named above is the explicit, requested output of this role:
+the factory reads it to move the job, and without it the job is stuck. It is
+not an optional report, summary or documentation file. If any general
+guidance in your environment says not to create report or `.md` files unless
+asked, it does not apply to this file: this file is asked for. Write it with
+the Write tool before you finish, even when your verdict is a plain PASS.
+
 ## Read
 
 1. `<job folder>/issue.md`: the issue body and the comments from its author and
