@@ -3,6 +3,7 @@ package ticket_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,6 +138,34 @@ func TestHandle(t *testing.T) {
 			})
 		})
 
+		s.When("the request's text is not one clean line", func(s *specs.Spec) {
+			rows := []titleRow{
+				{"breaks a line in every way a reader may", "\r\n  arreglar\u2028el login\u0085ya\r\notra", "arreglar"},
+				{"holds control characters", "arreglar\tel\x00login\x1b[31m rojo", "arreglar el login [31m rojo"},
+				{"holds bidi controls", "arreglar \u202eniam\u202c el login", "arreglar niam el login"},
+				{"starts with a line of control characters only", "\x00\x07\t\nagregar modo oscuro", "agregar modo oscuro"},
+				{"has a first line past the maximum", strings.Repeat("ñ", 500) + "\nresto", strings.Repeat("ñ", 79) + "…"},
+				{"has a first line just at the maximum", strings.Repeat("a", 80), strings.Repeat("a", 80)},
+			}
+			specs.Table(s, rows, func(r titleRow) string {
+				return "creates one job with a one-line title when the text " + r.name
+			}, func(ctx *specs.Context, r titleRow) {
+				h, st := fixture(ctx)
+				t := command()
+				t.Text = r.text
+
+				res, err := h.Handle(bg, t)
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(res.Outcome).ToEqual(ticket.Created)
+				job, _, err := st.Load(bg, res.Job)
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Title).ToEqual(r.want)
+				ctx.Expect(job.Request).ToEqual(r.text)
+				ctx.Expect(replies(ctx, st, res.Job)).To(specs.HaveLen(1))
+			})
+		})
+
 		s.When("the same request arrives again", func(s *specs.Spec) {
 			s.It("creates no second job and no second confirmation", func(ctx *specs.Context) {
 				h, st := fixture(ctx)
@@ -263,6 +292,10 @@ func TestHandle(t *testing.T) {
 	})
 }
 
+type titleRow struct {
+	name, text, want string
+}
+
 type refusedRow struct {
 	name     string
 	edit     func(*ticket.Trigger)
@@ -281,6 +314,13 @@ func TestJobID(t *testing.T) {
 			other.Text, other.Actor, other.At = "x", "222", at.Add(time.Hour)
 
 			ctx.Expect(ticket.JobID(other)).ToEqual(ticket.JobID(command()))
+		})
+
+		s.It("keeps 128 bits of the hash", func(ctx *specs.Context) {
+			id := string(ticket.JobID(command()))
+
+			ctx.Expect(id).To(specs.StartWith("ticket-"))
+			ctx.Expect(strings.TrimPrefix(id, "ticket-")).To(specs.HaveLen(32))
 		})
 
 		mk := func(provider, thread, id string) ticket.Trigger {
