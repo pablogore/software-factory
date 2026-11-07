@@ -1,0 +1,7 @@
+name: spec-writer
+kind: spec
+description: Splits an initiative into small slices of value and writes the short spec of the next one
+prompt: roles/spec-writer.md
+agent: claude
+model: opus
+mode: blocking

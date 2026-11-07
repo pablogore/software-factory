@@ -1,0 +1,7 @@
+name: approver
+kind: approve
+description: Decides whether a reviewed increment merges or goes to a person
+prompt: roles/approver.md
+agent: claude
+model: opus
+mode: blocking
