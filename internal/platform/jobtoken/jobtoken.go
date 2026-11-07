@@ -1,8 +1,9 @@
 // Package jobtoken issues the token a session's agent calls factoryd with:
-// one per session, bound to one job, role and kind (01-diseno.md). It denies
-// by default: a job token authorizes only submitting its own job's result,
-// so it never works for another job or for an operator's operation, even one
-// added later.
+// one per session, bound to one job, role and kind (01-diseno.md), and to
+// the round and stage entry the job was in when it was issued. It denies by
+// default: a job token authorizes only submitting its own job's result, so
+// it never works for another job or for an operator's operation, even one
+// added later, nor once the job moved on.
 package jobtoken
 
 import (
@@ -14,6 +15,8 @@ import (
 	"sync"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/domain/decide"
+	"github.com/pablogore/software-factory/internal/ports"
 )
 
 // Token errors. Callers compare with errors.Is.
@@ -25,6 +28,9 @@ var (
 	// ErrForbidden means the token is valid but not for this operation or
 	// this job.
 	ErrForbidden = errors.New("job token not allowed")
+	// ErrStale means the token is for this job, but the job left the round
+	// or stage entry it was issued in, even if it came back to that stage.
+	ErrStale = errors.New("job token from an earlier round")
 )
 
 // Op names what a caller asks to do with a token.
@@ -33,16 +39,41 @@ type Op string
 // OpSubmitResult is the only operation a job token allows.
 const OpSubmitResult Op = "worker.submit_result"
 
-// Grant is what a token was issued for: the job and role of one session, and
-// the kind whose result that role submits.
+// Grant is what a token was issued for: the job and role of one session, the
+// kind whose result that role submits, and the job's round and stage entry
+// (Entry) when the session started.
 type Grant struct {
-	Job  domain.JobID
-	Role string
-	Kind domain.Kind
+	Job   domain.JobID
+	Role  string
+	Kind  domain.Kind
+	Round int
+	Entry int
 }
 
-// Validate refuses a grant without a job, with a bad role name or an
-// unknown kind.
+// For is the grant for a session of role, submitting kind, on job as it is
+// now: hist is job's history, which tells its stage entry.
+func For(job domain.Job, hist []ports.Record, role string, kind domain.Kind) Grant {
+	return Grant{Job: job.ID, Role: role, Kind: kind, Round: job.Round, Entry: Entry(hist)}
+}
+
+// Entry numbers a job's entries into a stage from its history: it grows on
+// every event that moves the job to a stage, the one it was in included, and
+// never goes back, so a job that returns to a stage is in a new entry.
+func Entry(hist []ports.Record) int {
+	var job domain.Job
+	n := 0
+	for _, r := range hist {
+		stage := job.Stage
+		job = decide.Apply(job, []domain.Event{r.Event})
+		if _, entered := r.Event.(domain.StageEntered); entered || job.Stage != stage {
+			n++
+		}
+	}
+	return n
+}
+
+// Validate refuses a grant without a job, with a bad role name, an unknown
+// kind, no round or a negative entry.
 func (g Grant) Validate() error {
 	if g.Job == "" {
 		return fmt.Errorf("%w: job", domain.ErrMissingField)
@@ -50,7 +81,26 @@ func (g Grant) Validate() error {
 	if err := domain.ValidateRoleName(g.Role); err != nil {
 		return err
 	}
-	return g.Kind.Validate()
+	if err := g.Kind.Validate(); err != nil {
+		return err
+	}
+	if g.Round < 1 {
+		return fmt.Errorf("%w: round %d", domain.ErrInvalidValue, g.Round)
+	}
+	if g.Entry < 0 {
+		return fmt.Errorf("%w: entry %d", domain.ErrInvalidValue, g.Entry)
+	}
+	return nil
+}
+
+// Current refuses with ErrStale unless job, with history hist, is still in
+// the round and stage entry g was issued in.
+func (g Grant) Current(job domain.Job, hist []ports.Record) error {
+	if entry := Entry(hist); job.Round != g.Round || entry != g.Entry {
+		return fmt.Errorf("%w: issued in round %d, stage entry %d; job %q is in round %d, stage entry %d",
+			ErrStale, g.Round, g.Entry, job.ID, job.Round, entry)
+	}
+	return nil
 }
 
 // Tokens keeps the grants of the tokens it issued. Only a token's hash is

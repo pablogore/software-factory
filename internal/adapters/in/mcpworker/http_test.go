@@ -85,6 +85,7 @@ func TestHandler(t *testing.T) {
 			{"no token", fmt.Errorf("w: %w", jobtoken.ErrNoToken), http.StatusUnauthorized},
 			{"an unknown token", fmt.Errorf("w: %w", jobtoken.ErrUnknownToken), http.StatusUnauthorized},
 			{"another job's token", fmt.Errorf("w: %w: job %q", jobtoken.ErrForbidden, "j-1"), http.StatusForbidden},
+			{"a token from an earlier round", fmt.Errorf("w: %w: issued in round 1", jobtoken.ErrStale), http.StatusConflict},
 			{"a result missing a field", fmt.Errorf("w: build result: %w: status", domain.ErrMissingField), http.StatusUnprocessableEntity},
 			{"a result with a bad value", fmt.Errorf("w: build result: %w: status", domain.ErrInvalidValue), http.StatusUnprocessableEntity},
 			{"a job that does not exist", fmt.Errorf("w: %w", ports.ErrJobNotFound), http.StatusNotFound},

@@ -35,10 +35,16 @@ func (demoPipelines) Pipeline(_ context.Context, name string) (domain.Pipeline, 
 	}}, nil
 }
 
+// newRoundPath is the demo's own route that takes a job to a new build
+// round, as a failed gate does, and prints a builder's token for it.
+const newRoundPath = "/demo/jobs/{job}/new-round"
+
 // workerDemo serves the worker API over an in-memory store with demoJobs,
 // until ctx ends. It is not a factoryd server: it prints a builder's token
-// per job and, after every request, each job's stage and saved events, so a
-// person can try `factory worker submit-result` against it.
+// per job and, after every request, each job's stage, round and saved
+// events, so a person can try `factory worker submit-result` against it.
+// POST newRoundPath, with no token, sends a job back to build in a new round,
+// so a person can see its old token refused.
 func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("worker-demo", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:0", "address to listen on")
@@ -52,10 +58,11 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	tokens := jobtoken.New()
 	issued := map[domain.JobID]string{}
 	for _, id := range demoJobs {
-		if err := store.Create(ctx, domain.Job{ID: id, Title: "Demo job", Pipeline: "demo", Stage: "build", Round: 1}); err != nil {
+		job := domain.Job{ID: id, Title: "Demo job", Pipeline: "demo", Stage: "build", Round: 1}
+		if err := store.Create(ctx, job); err != nil {
 			return err
 		}
-		if issued[id], err = tokens.Issue(jobtoken.Grant{Job: id, Role: "builder", Kind: domain.KindBuild}); err != nil {
+		if issued[id], err = tokens.Issue(jobtoken.For(job, nil, "builder", domain.KindBuild)); err != nil {
 			return err
 		}
 	}
@@ -71,10 +78,23 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	}
 	_, _ = fmt.Fprintln(out)
 
-	api := wiring.WorkerAPI(tokens, store, demoPipelines{}, wiring.SystemClock{})
 	var mu sync.Mutex
+	mux := http.NewServeMux()
+	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, wiring.SystemClock{}))
+	mux.HandleFunc("POST "+newRoundPath, func(w http.ResponseWriter, r *http.Request) {
+		id := domain.JobID(r.PathValue("job"))
+		token, err := newRound(r.Context(), store, tokens, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		mu.Lock()
+		_, _ = fmt.Fprintf(out, "# job %s, new build round; its old token is from an earlier round\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, token)
+		mu.Unlock()
+		_, _ = fmt.Fprintf(w, "job %s is in a new build round\n", id)
+	})
 	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		api.ServeHTTP(w, r)
+		mux.ServeHTTP(w, r)
 		mu.Lock()
 		defer mu.Unlock()
 		_, _ = fmt.Fprintf(out, "%s %s\n", r.Method, r.URL.Path)
@@ -85,7 +105,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 			for i, h := range hist {
 				names[i] = h.Event.EventName()
 			}
-			_, _ = fmt.Fprintf(out, "  %s: stage %s, events [%s]\n", id, job.Stage, strings.Join(names, ", "))
+			_, _ = fmt.Fprintf(out, "  %s: stage %s, round %d, events [%s]\n", id, job.Stage, job.Round, strings.Join(names, ", "))
 		}
 	})}
 	go func() {
@@ -96,6 +116,37 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	return nil
+}
+
+// newRound takes job id to build in a new round, as its build being ready
+// and the gate failing would, and returns a builder's token for that round.
+func newRound(ctx context.Context, store *memstore.Store, tokens *jobtoken.Tokens, id domain.JobID) (string, error) {
+	p, err := demoPipelines{}.Pipeline(ctx, "demo")
+	if err != nil {
+		return "", err
+	}
+	job, v, err := store.Load(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	if job.Stage == "build" {
+		ready := domain.ResultSubmitted{Job: id, Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: now}
+		if _, v, err = store.Apply(ctx, id, v, p, ready); err != nil {
+			return "", err
+		}
+	}
+	if _, _, err := store.Apply(ctx, id, v, p, domain.GateFailed{Job: id, At: now}); err != nil {
+		return "", err
+	}
+	if job, _, err = store.Load(ctx, id); err != nil {
+		return "", err
+	}
+	hist, err := store.History(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return tokens.Issue(jobtoken.For(job, hist, "builder", domain.KindBuild))
 }
 
 func joinIDs(ids []domain.JobID) string {
