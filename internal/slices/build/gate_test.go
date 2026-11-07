@@ -40,6 +40,20 @@ func (worktrees) Prepare(_ context.Context, job domain.JobID) (ports.Worktree, e
 	return ports.Worktree{Job: job, Path: "/wt/" + string(job), Branch: "factory/" + string(job)}, nil
 }
 
+// diffs answers every diff with changes, or with err, and records against
+// what base it was asked.
+type diffs struct {
+	changes []domain.FileChange
+	err     error
+	dir     string
+	base    string
+}
+
+func (d *diffs) Changes(_ context.Context, dir, base string) ([]domain.FileChange, error) {
+	d.dir, d.base = dir, base
+	return d.changes, d.err
+}
+
 // checks answers every run with run, or with err, and records where and
 // what it was asked to run.
 type checks struct {
@@ -62,11 +76,15 @@ var (
 )
 
 func newGate(ctx *specs.Context, stage string, round int, c *checks) (*build.Gate, *memstore.Store) {
+	return newGateDiff(ctx, stage, round, c, &diffs{})
+}
+
+func newGateDiff(ctx *specs.Context, stage string, round int, c *checks, d *diffs) (*build.Gate, *memstore.Store) {
 	store, err := memstore.New()
 	ctx.Expect(err).To(specs.BeNil())
 	job := domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: stage, Round: round}
 	ctx.Expect(store.Create(context.Background(), job)).To(specs.BeNil())
-	return &build.Gate{Jobs: store, Pipelines: pipelines{}, Worktrees: worktrees{}, Checks: c, Clock: stopped{}, Command: build.DefaultCommand}, store
+	return &build.Gate{Jobs: store, Pipelines: pipelines{}, Worktrees: worktrees{}, Checks: c, Diffs: d, Clock: stopped{}, Command: build.DefaultCommand, Base: "arch/base"}, store
 }
 
 func names(evs []domain.Event) []string {
@@ -186,6 +204,86 @@ func TestGate(t *testing.T) {
 			job, _, err := store.Load(bg, "j-1")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(job.Stage).ToEqual(domain.StageGate)
+		})
+
+		s.When("the diff modifies or deletes a protected path", func(s *specs.Spec) {
+			touched := &diffs{changes: []domain.FileChange{
+				{Path: "README.md", Kind: domain.ChangeModified},
+				{Path: "Makefile", Kind: domain.ChangeModified},
+				{Path: "internal/arch_test.go", Kind: domain.ChangeDeleted},
+			}}
+
+			s.It("fails even though the checks pass, naming each protected file in the run", func(ctx *specs.Context) {
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, touched)
+
+				evs, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "RoundStarted", "StageEntered"})
+				hist, err := store.History(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				last, ok := build.LastChecks(hist)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(last.Run.Output).ToEqual(passing.Output)
+				ctx.Expect(last.Run.Violations).ToEqual([]string{
+					"the diff modifies the protected path Makefile",
+					"the diff deletes the protected path internal/arch_test.go",
+				})
+			})
+
+			s.It("judges the job's worktree against the configured base", func(ctx *specs.Context) {
+				d := &diffs{}
+				g, _ := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, d)
+
+				_, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(d.dir).ToEqual("/wt/j-1")
+				ctx.Expect(d.base).ToEqual("arch/base")
+			})
+		})
+
+		s.It("passes a diff that only adds files under protected paths or touches others", func(ctx *specs.Context) {
+			d := &diffs{changes: []domain.FileChange{
+				{Path: "docs/factoryd/09-nuevo.md", Kind: domain.ChangeAdded},
+				{Path: ".github/workflows/new.yml", Kind: domain.ChangeAdded},
+				{Path: "internal/slices/build/gate.go", Kind: domain.ChangeModified},
+				{Path: "docs/factoryd/README.md", Kind: domain.ChangeModified},
+				{Path: "cmd/Makefile", Kind: domain.ChangeDeleted},
+			}}
+			g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, d)
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			job, _, err := store.Load(bg, "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Stage).ToEqual("review")
+		})
+
+		s.It("saves nothing and runs no checks when the diff cannot be read", func(ctx *specs.Context) {
+			broken := errors.New("git: unknown revision")
+			c := &checks{run: passing}
+			g, store := newGateDiff(ctx, domain.StageGate, 1, c, &diffs{err: broken})
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.MatchError(broken))
+			ctx.Expect(c.calls).ToEqual(0)
+			job, _, err := store.Load(bg, "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Stage).ToEqual(domain.StageGate)
+		})
+
+		s.It("refuses to run with no base", func(ctx *specs.Context) {
+			c := &checks{run: passing}
+			g, _ := newGate(ctx, domain.StageGate, 1, c)
+			g.Base = ""
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+			ctx.Expect(c.calls).ToEqual(0)
 		})
 
 		s.It("refuses to run with no checks command", func(ctx *specs.Context) {

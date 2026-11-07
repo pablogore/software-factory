@@ -38,6 +38,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("gate-demo", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "the repo to run the checks in, as the job's worktree")
 	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
+	base := fs.String("base", "HEAD", "the base the job's diff is taken against; HEAD judges only uncommitted changes")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -53,8 +54,8 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err := store.Create(ctx, job); err != nil {
 		return err
 	}
-	g := wiring.Gate(store, demoPipelines{}, dirWorkspace{abs}, wiring.SystemClock{}, strings.Fields(*command))
-	_, _ = fmt.Fprintf(out, "job %s at the gate in round %d; running `%s` in %s\n", job.ID, job.Round, strings.Join(g.Command, " "), abs)
+	g := wiring.Gate(store, demoPipelines{}, dirWorkspace{abs}, wiring.SystemClock{}, strings.Fields(*command), *base)
+	_, _ = fmt.Fprintf(out, "job %s at the gate in round %d; running `%s` in %s and judging its diff against %s\n", job.ID, job.Round, strings.Join(g.Command, " "), abs, g.Base)
 	if _, err := g.Run(ctx, job.ID); err != nil {
 		return err
 	}
@@ -69,15 +70,18 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	ran, _ := build.LastChecks(hist)
 	_, _ = fmt.Fprintf(out, "checks kept with the job: round %d, `%s`, exit %d in %s\n--- output ---\n%s--- end of output ---\n",
 		ran.Round, ran.Run.Command, ran.Run.ExitCode, ran.Run.Duration.Round(time.Millisecond), ran.Run.Output)
+	for _, v := range ran.Run.Violations {
+		_, _ = fmt.Fprintf(out, "rule broken: %s\n", v)
+	}
 	evNames := make([]string, len(hist))
 	for i, h := range hist {
 		evNames[i] = h.Event.EventName()
 	}
 	_, _ = fmt.Fprintf(out, "job %s: stage %s, round %d, events [%s]\n", job.ID, job.Stage, job.Round, strings.Join(evNames, ", "))
 	if job.Stage == "review" {
-		_, _ = fmt.Fprintln(out, "the checks passed: the job is in review for its reviewers")
+		_, _ = fmt.Fprintln(out, "the gate passed: the job is in review for its reviewers")
 		return nil
 	}
-	_, _ = fmt.Fprintf(out, "the checks failed: no reviewer started; the builder of round %d gets the log of round %d above (exit %d)\n", job.Round, ran.Round, ran.Run.ExitCode)
+	_, _ = fmt.Fprintf(out, "the gate failed: no reviewer started; the builder of round %d gets the log and the broken rules of round %d above (exit %d)\n", job.Round, ran.Round, ran.Run.ExitCode)
 	return nil
 }

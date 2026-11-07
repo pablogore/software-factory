@@ -23,19 +23,28 @@ type Gate struct {
 	Pipelines pipelines
 	Worktrees worktrees
 	Checks    checks
+	Diffs     diffs
 	Clock     ports.Clock
 	// Command is the checks command, run without a shell in the worktree.
 	Command []string
+	// Base is the branch job branches start from; the diff rules judge
+	// what a job changed since it left it.
+	Base string
 }
 
 // Run runs the checks in the worktree of job id, which must be at the gate,
-// and decides GatePassed or GateFailed with the run on it. It returns the
+// and the diff rules on what the job changed since Base, and decides
+// GatePassed or GateFailed with the run on it: a broken rule fails the gate
+// even when the checks pass, its reason kept in the run. It returns the
 // events the job saved: the ChecksRan and the move to the next stage, or back
 // to build in a new round, or to triage in the last one. When the checks
 // cannot be run, or the job changed while they ran, nothing is saved.
 func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error) {
 	if len(g.Command) == 0 {
 		return nil, fmt.Errorf("gate: %w: checks command", domain.ErrMissingField)
+	}
+	if g.Base == "" {
+		return nil, fmt.Errorf("gate: %w: base", domain.ErrMissingField)
 	}
 	job, v, err := g.Jobs.Load(ctx, id)
 	if err != nil {
@@ -52,10 +61,15 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	if err != nil {
 		return nil, fmt.Errorf("gate: worktree of %q: %w", id, err)
 	}
+	changes, err := g.Diffs.Changes(ctx, wt.Path, g.Base)
+	if err != nil {
+		return nil, fmt.Errorf("gate: diff of %q: %w", id, err)
+	}
 	run, err := g.Checks.Run(ctx, wt.Path, g.Command)
 	if err != nil {
 		return nil, fmt.Errorf("gate: checks of %q: %w", id, err)
 	}
+	run.Violations = append(run.Violations, ProtectedTouched(changes)...)
 	var ev domain.Event = domain.GatePassed{Job: id, Run: run, At: g.Clock.Now()}
 	if !run.Passed() {
 		ev = domain.GateFailed{Job: id, Run: run, At: g.Clock.Now()}
