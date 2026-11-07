@@ -11,6 +11,11 @@
 // a job that spent its whole budget never runs its agent, and its slot goes
 // at once to the next work in line.
 //
+// Work handed over as using GitHub launches only while GitHub's remaining
+// API limit is at or above a threshold. Below it, the work gives its slot to
+// the next in line and waits for the limit's reset off any slot, then takes
+// a slot like newly handed work.
+//
 // Choosing what to hand over next is not the scheduler's concern: it runs
 // what it is given.
 package scheduler
@@ -20,8 +25,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/ports"
 )
 
 // ErrConcurrency means New was asked for fewer than one slot.
@@ -36,6 +43,36 @@ var ErrBudget = errors.New("budget must be above 0, with a cost source")
 // records domain.BudgetExhausted for the job, which stops it in needs-human.
 var ErrBudgetExhausted = errors.New("budget exhausted")
 
+// ErrGitHub means New was given a negative GitHub threshold, or no limit
+// source or clock to wait with.
+var ErrGitHub = errors.New("github threshold must be at least 0, with a limit source and a clock")
+
+// RateLimit is what is left of GitHub's API limit and when it resets.
+type RateLimit struct {
+	Remaining int
+	Reset     time.Time
+}
+
+// LimitSource tells GitHub's API limit as it stands now.
+type LimitSource interface {
+	Limit(ctx context.Context) (RateLimit, error)
+}
+
+// Clock tells the time and wakes whoever waits for a while, so tests move
+// it instead of waiting.
+type Clock interface {
+	ports.Clock
+	After(d time.Duration) <-chan time.Time
+}
+
+// GitHub is how the scheduler holds work that uses GitHub: such work waits
+// for the reset while Limits says fewer than Threshold calls remain.
+type GitHub struct {
+	Limits    LimitSource
+	Threshold int
+	Clock     Clock
+}
+
 // CostSource tells how much a job has spent so far, in USD.
 type CostSource interface {
 	Spent(ctx context.Context, job domain.JobID) (float64, error)
@@ -46,10 +83,11 @@ type CostSource interface {
 type Work func(ctx context.Context) error
 
 type item struct {
-	ctx  context.Context
-	job  domain.JobID
-	work Work
-	done chan error
+	ctx    context.Context
+	job    domain.JobID
+	work   Work
+	github bool
+	done   chan error
 }
 
 // Scheduler runs at most its concurrency of Work at once, plus one reply
@@ -58,6 +96,7 @@ type Scheduler struct {
 	slots  int
 	budget float64
 	costs  CostSource
+	github GitHub
 
 	// mu guards running, reserved and line, so a freed slot and a new
 	// submission never both take the same slot.
@@ -68,15 +107,19 @@ type Scheduler struct {
 }
 
 // New returns a scheduler with concurrency slots, all free, that launches
-// a job's work only while costs says the job spent less than budget USD.
-func New(concurrency int, budget float64, costs CostSource) (*Scheduler, error) {
+// a job's work only while costs says the job spent less than budget USD,
+// and holds work that uses GitHub as github says.
+func New(concurrency int, budget float64, costs CostSource, github GitHub) (*Scheduler, error) {
 	if concurrency < 1 {
 		return nil, fmt.Errorf("scheduler: %d: %w", concurrency, ErrConcurrency)
 	}
 	if !(budget > 0) || costs == nil {
 		return nil, fmt.Errorf("scheduler: USD %v: %w", budget, ErrBudget)
 	}
-	return &Scheduler{slots: concurrency, budget: budget, costs: costs}, nil
+	if github.Threshold < 0 || github.Limits == nil || github.Clock == nil {
+		return nil, fmt.Errorf("scheduler: github threshold %d: %w", github.Threshold, ErrGitHub)
+	}
+	return &Scheduler{slots: concurrency, budget: budget, costs: costs, github: github}, nil
 }
 
 // Submit hands w, work for job, over to run with ctx. It never blocks: w
@@ -85,6 +128,19 @@ func New(concurrency int, budget float64, costs CostSource) (*Scheduler, error) 
 // when it never ran.
 func (s *Scheduler) Submit(ctx context.Context, job domain.JobID, w Work) <-chan error {
 	it := item{ctx: ctx, job: job, work: w, done: make(chan error, 1)}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.take(it)
+	return it.done
+}
+
+// SubmitGitHub hands over w, work for job that uses GitHub. It is handled
+// like work handed to Submit, except that while GitHub's remaining limit is
+// below the threshold w waits for the reset without holding a slot. If ctx
+// ends while w waits, the returned channel receives ctx's error and w never
+// runs.
+func (s *Scheduler) SubmitGitHub(ctx context.Context, job domain.JobID, w Work) <-chan error {
+	it := item{ctx: ctx, job: job, work: w, github: true, done: make(chan error, 1)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.take(it)
@@ -138,11 +194,15 @@ func (s *Scheduler) Waiting() int {
 // run runs it and every piece of work that inherits its slot after it.
 func (s *Scheduler) run(it item) {
 	for {
-		err := s.launch(it)
+		wait, err := s.launch(it)
 		next, ok := s.free()
 		// The slot is handed on before it.done is sent, so whoever waits
 		// for a result already sees the next work running.
-		it.done <- err
+		if wait > 0 {
+			go s.park(it, wait)
+		} else {
+			it.done <- err
+		}
 		if !ok {
 			return
 		}
@@ -153,25 +213,62 @@ func (s *Scheduler) run(it item) {
 // runReserved runs it in the reserved slot. The slot is never handed to
 // work in line, so it is free again for the next reply.
 func (s *Scheduler) runReserved(it item) {
-	err := s.launch(it)
+	// A reply never uses GitHub, so it never waits.
+	_, err := s.launch(it)
 	s.mu.Lock()
 	s.reserved = false
 	s.mu.Unlock()
 	it.done <- err
 }
 
-// launch runs it's work unless its job already spent its whole budget. The
-// spend is asked for now, not when the work was handed over, since the job
-// may have spent more while it waited in line.
-func (s *Scheduler) launch(it item) error {
+// launch runs it's work unless its job already spent its whole budget, or
+// it must first wait that long for GitHub's reset. The spend and the limit
+// are asked for now, not when the work was handed over, since either may
+// have changed while it waited in line.
+func (s *Scheduler) launch(it item) (time.Duration, error) {
 	spent, err := s.costs.Spent(it.ctx, it.job)
 	if err != nil {
-		return fmt.Errorf("scheduler: spend of job %q: %w", it.job, err)
+		return 0, fmt.Errorf("scheduler: spend of job %q: %w", it.job, err)
 	}
 	if spent >= s.budget {
-		return fmt.Errorf("scheduler: job %q spent USD %.2f of %.2f: %w", it.job, spent, s.budget, ErrBudgetExhausted)
+		return 0, fmt.Errorf("scheduler: job %q spent USD %.2f of %.2f: %w", it.job, spent, s.budget, ErrBudgetExhausted)
 	}
-	return it.work(it.ctx)
+	wait, err := s.hold(it)
+	if err != nil || wait > 0 {
+		return wait, err
+	}
+	return 0, it.work(it.ctx)
+}
+
+// hold tells how long it must wait for GitHub's reset before it may
+// launch: 0 when it does not use GitHub, enough calls remain, or the reset
+// already passed.
+func (s *Scheduler) hold(it item) (time.Duration, error) {
+	if !it.github {
+		return 0, nil
+	}
+	limit, err := s.github.Limits.Limit(it.ctx)
+	if err != nil {
+		return 0, fmt.Errorf("scheduler: github limit for job %q: %w", it.job, err)
+	}
+	if limit.Remaining >= s.github.Threshold {
+		return 0, nil
+	}
+	return max(limit.Reset.Sub(s.github.Clock.Now()), 0), nil
+}
+
+// park waits off any slot for wait to pass, then hands it over again. The
+// limit is asked for again when it next launches, in case it is still low.
+func (s *Scheduler) park(it item, wait time.Duration) {
+	select {
+	case <-s.github.Clock.After(wait):
+	case <-it.ctx.Done():
+		it.done <- it.ctx.Err()
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.take(it)
 }
 
 // free hands the finished slot to the oldest waiting work, or frees it when

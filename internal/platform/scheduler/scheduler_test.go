@@ -149,7 +149,7 @@ func newScheduler(ctx *specs.Context, concurrency int) *scheduler.Scheduler {
 }
 
 func newBudgeted(ctx *specs.Context, concurrency int, c *costs) *scheduler.Scheduler {
-	s, err := scheduler.New(concurrency, budget, c)
+	s, err := scheduler.New(concurrency, budget, c, plentyGitHub())
 	ctx.Expect(err).To(specs.BeNil())
 	return s
 }
@@ -415,7 +415,7 @@ func TestScheduler(t *testing.T) {
 
 		s.When("concurrency is below 1", func(s *specs.Spec) {
 			s.It("refuses to build the scheduler", func(ctx *specs.Context) {
-				_, err := scheduler.New(0, budget, newCosts())
+				_, err := scheduler.New(0, budget, newCosts(), plentyGitHub())
 				ctx.Expect(err).To(specs.MatchError(scheduler.ErrConcurrency))
 			})
 		})
