@@ -80,7 +80,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "\nexport FACTORY_URL=%s\n", url)
 	for _, id := range demoJobs {
 		_, _ = fmt.Fprintf(out, "# job %s\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, issued[id])
-		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tool %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult)
+		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tools %s and %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult, mcpworker.ToolProgress)
 	}
 	_, _ = fmt.Fprintln(out)
 
@@ -96,7 +96,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 		}
 		mu.Lock()
 		_, _ = fmt.Fprintf(out, "# job %s, new build round; its old token is from an earlier round\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, token)
-		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tool %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult)
+		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tools %s and %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult, mcpworker.ToolProgress)
 		mu.Unlock()
 		_, _ = fmt.Fprintf(w, "job %s is in a new build round\n", id)
 	})
@@ -110,7 +110,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 			hist, _ := store.History(ctx, id)
 			names := make([]string, len(hist))
 			for i, h := range hist {
-				names[i] = h.Event.EventName()
+				names[i] = eventLabel(h.Event)
 			}
 			_, _ = fmt.Fprintf(out, "  %s: stage %s, round %d, events [%s]\n", id, job.Stage, job.Round, strings.Join(names, ", "))
 		}
