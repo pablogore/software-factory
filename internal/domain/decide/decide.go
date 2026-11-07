@@ -79,6 +79,12 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if ignored(e.Allowed, e.AuthorKind) {
 			return nil, nil
 		}
+	case domain.ActionFailed:
+		// A job that ended needs no person for it: the action stays listed as
+		// failed, and delivery is not stopped by a refusal.
+		if job.Stage == domain.StageStopped || job.Stage == domain.StageRejected {
+			return nil, nil
+		}
 	}
 	if job.Stage == domain.StageStopped {
 		return nil, fmt.Errorf("%w: %s", ErrStopped, ev.EventName())
@@ -138,6 +144,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		if job.Stage == domain.StageNeedsHuman {
 			return limitOverridden(job, e)
 		}
+	case domain.ActionFailed:
+		return actionFailed(job, e)
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
 			evs := []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}
@@ -457,7 +465,7 @@ func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 		return respecified(job, e, p, true)
 	case domain.CauseSpecException:
 		return respecified(job, e, p, false)
-	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated:
+	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated, domain.CauseActionFailed:
 		if limit, ok := humanReworks(job, p); ok && job.HumanReworks >= limit {
 			return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
 		}
@@ -643,6 +651,18 @@ func afterGate(job domain.Job, ev domain.Event, gate string, kind domain.Kind, a
 		return nil, illegal(job, ev)
 	}
 	return next(job, p, i, at), nil
+}
+
+// actionFailed stops the job for a person, whatever stage it is in, since
+// the outside world refused what it asked for. A job already waiting in
+// needs-human waits again for this cause, so an OK given for the old one
+// never merges past the refusal.
+func actionFailed(job domain.Job, e domain.ActionFailed) ([]domain.Event, error) {
+	if domain.Blank(e.Key) {
+		return nil, fmt.Errorf("decide: failed action without key: %w", domain.ErrMissingField)
+	}
+	reason := fmt.Sprintf("external action %s %q failed: %s", e.Kind, e.Key, e.Error)
+	return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseActionFailed, At: e.At}}, nil
 }
 
 // specgateFailed counts the rejection and sends the job back to the spec

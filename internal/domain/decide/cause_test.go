@@ -37,6 +37,7 @@ func causeRows() []causeRow {
 		{"a failed gate in the last round records gate-failed", func() domain.Job { return atGate(3, nil) }, gateFailed(1), domain.CauseGateFailed},
 		{"specgate's last rejection records spec-escalated", func() domain.Job { return atSpecgate(2) }, specgateFailed(1), domain.CauseSpecEscalated},
 		{"a length exception records spec-exception", func() domain.Job { return atSpecgate(0) }, exceptionAsked(1), domain.CauseSpecException},
+		{"a refused external action records action-failed", func() domain.Job { return atGate(1, nil) }, refused(1), domain.CauseActionFailed},
 		{"a spent budget records budget-exhausted", func() domain.Job { return building(2) }, budgetSpent(1), domain.CauseBudget},
 	}
 }
@@ -179,6 +180,7 @@ func TestNeedsHumanCause(t *testing.T) {
 				{"after a failed gate in the last round it is refused, naming the cause", domain.CauseGateFailed, nil, decide.ErrOKRefused},
 				{"after specgate's escalation it is refused, naming the cause", domain.CauseSpecEscalated, nil, decide.ErrOKRefused},
 				{"on a length exception it sends the job on to build", domain.CauseSpecException, []domain.Event{entered("build", 2)}, nil},
+				{"after a refused external action it is refused, naming the cause", domain.CauseActionFailed, nil, decide.ErrOKRefused},
 				{"after a spent budget it is refused, naming the cause", domain.CauseBudget, nil, decide.ErrOKRefused},
 			}
 			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
@@ -246,6 +248,7 @@ func TestNeedsHumanCause(t *testing.T) {
 				{"after specgate's escalation it rewrites the spec with the rejection count reset", domain.CauseSpecEscalated,
 					[]domain.Event{rework, rejected(0, 2), entered("spec", 2)}, nil},
 				{"on a length exception it rewrites the spec with the count kept", domain.CauseSpecException, []domain.Event{rework, entered("spec", 2)}, nil},
+				{"after a refused external action it sends the job back to build", domain.CauseActionFailed, toBuild, nil},
 				{"after a spent budget it is refused and the job keeps waiting", domain.CauseBudget, nil, decide.ErrUnsupported},
 			}
 			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {

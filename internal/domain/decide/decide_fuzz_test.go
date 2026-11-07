@@ -19,8 +19,8 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // so answers) and direction marks from every kind of author, with and without a name, stop requests with and without a
 // name, overrides from every kind of author and without a name or a reason,
 // limit overrides from every kind of author, without a name and with an
-// unknown limit, a completed merge, a spent budget and every missing or nil
-// event of nilEvents.
+// unknown limit, a completed merge, a spent budget, a refused external action
+// with and without a key and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
@@ -39,7 +39,8 @@ func fuzzEvents() []domain.Event {
 		domain.OverrideRequested{Job: jobID, By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Reason: "", At: at(1)},
 		limitOverride(domain.AuthorPerson, true, "human_reworks", "3", 1, 1), limitOverride(domain.AuthorPerson, false, "human_reworks", "3", 1, 1),
 		limitOverride(domain.AuthorBot, true, "max_rounds", "9", 1, 1), limitOverride(domain.AuthorCI, true, "max_rounds", "9", 1, 1),
-		limitOverride(domain.AuthorPerson, true, "retries", "3", 1, 1), signedLimit(limitOverride(domain.AuthorPerson, true, "max_rounds", "9", 1, 1), " "))
+		limitOverride(domain.AuthorPerson, true, "retries", "3", 1, 1), signedLimit(limitOverride(domain.AuthorPerson, true, "max_rounds", "9", 1, 1), " "),
+		refused(1), domain.ActionFailed{Job: jobID, Key: " ", Kind: "comment", Error: "403 forbidden", At: at(1)})
 	for _, r := range nilEvents() {
 		evs = append(evs, r.ev)
 	}

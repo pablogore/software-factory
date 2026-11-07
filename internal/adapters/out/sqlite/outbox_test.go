@@ -170,6 +170,7 @@ func outboxContract(s *specs.Spec, newStore func(ctx *specs.Context) outboxStore
 
 			ctx.Expect(st.MarkActionDelivered(bg, "nope")).To(specs.MatchError(ports.ErrActionNotFound))
 			ctx.Expect(st.MarkActionFailed(bg, "nope", ports.ActionFailure{Attempts: 1})).To(specs.MatchError(ports.ErrActionNotFound))
+			ctx.Expect(st.MarkActionRefused(bg, "nope", ports.ActionFailure{Attempts: 1}, at(1))).To(specs.MatchError(ports.ErrActionNotFound))
 		})
 	})
 }

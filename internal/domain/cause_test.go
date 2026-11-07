@@ -14,7 +14,7 @@ func TestHumanCause(t *testing.T) {
 			for _, c := range domain.HumanCauses() {
 				ctx.Expect(c.Validate()).To(specs.BeNil())
 			}
-			ctx.Expect(domain.HumanCauses()).To(specs.HaveLen(7))
+			ctx.Expect(domain.HumanCauses()).To(specs.HaveLen(8))
 		})
 
 		s.It("cannot be changed from outside the package", func(ctx *specs.Context) {
@@ -23,7 +23,7 @@ func TestHumanCause(t *testing.T) {
 			_ = append(causes[:1], "merge-anyway")
 
 			ctx.Expect(domain.HumanCauses()).ToEqual([]domain.HumanCause{domain.CauseBlocked, domain.CauseEscalated, domain.CauseChanges,
-				domain.CauseGateFailed, domain.CauseSpecEscalated, domain.CauseSpecException, domain.CauseBudget})
+				domain.CauseGateFailed, domain.CauseSpecEscalated, domain.CauseSpecException, domain.CauseActionFailed, domain.CauseBudget})
 			ctx.Expect(domain.HumanCause("approved").Validate()).To(specs.MatchError(domain.ErrInvalidValue))
 			ctx.Expect(domain.HumanCause("merge-anyway").Validate()).To(specs.MatchError(domain.ErrInvalidValue))
 			ctx.Expect(domain.CauseBlocked.Validate()).To(specs.BeNil())

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pablogore/software-factory/internal/adapters/out/eventjson"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/domain/decide"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -60,6 +62,35 @@ func (s *Store) MarkActionFailed(_ context.Context, key string, f ports.ActionFa
 	if f.Failed {
 		f.NextAttempt = time.Time{}
 	}
+	q.ActionFailure = f
+	return nil
+}
+
+// MarkActionRefused implements ports.Outbox. Like the SQLite store, the
+// action is failed and the job decided under one lock, so neither is kept
+// without the other.
+func (s *Store) MarkActionRefused(_ context.Context, key string, f ports.ActionFailure, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q, err := s.action(key)
+	if err != nil {
+		return err
+	}
+	job, v, err := s.load(q.Job)
+	if err != nil {
+		return err
+	}
+	// Decide reads no pipeline for a failed action.
+	evs, err := decide.Decide(job, domain.ActionFailed{Job: q.Job, Key: q.Key, Kind: q.Kind, Error: f.LastError, At: at}, domain.Pipeline{})
+	if err != nil {
+		return fmt.Errorf("memstore: job %q: %w", q.Job, err)
+	}
+	if len(evs) > 0 {
+		if err := s.keep(job, v, eventjson.CapReasons(evs, s.maxReason)); err != nil {
+			return err
+		}
+	}
+	f.Failed, f.NextAttempt = true, time.Time{}
 	q.ActionFailure = f
 	return nil
 }
