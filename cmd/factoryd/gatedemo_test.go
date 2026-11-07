@@ -112,6 +112,52 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(passed.String()).To(specs.Contain("the gate passed"))
 		})
 
+		s.It("with -db and -count, fails a commit that deletes a test case, naming its package, and passes once it is restored", func(ctx *specs.Context) {
+			bg := context.Background()
+			repo := ctx.Testing().TempDir()
+			tests := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n\nfunc TestB(t *testing.T) {}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/x\n\ngo 1.27\n"), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "x_test.go"), []byte(tests), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "init", "-q", "-b", "main")
+			git(ctx, repo, "add", ".")
+			git(ctx, repo, "commit", "-q", "-m", "base")
+			db := filepath.Join(ctx.Testing().TempDir(), "factory.db")
+			args := []string{"-dir", repo, "-base", "main", "-db", db, "-checks", "true", "-count", "go test -list . ./..."}
+			ctx.Expect(gateDemo(bg, args, &bytes.Buffer{})).To(specs.BeNil())
+			wt := filepath.Join(repo, ".worktrees", "gate-demo")
+			fewer := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(wt, "x_test.go"), []byte(fewer), 0o600)).To(specs.BeNil())
+			git(ctx, wt, "commit", "-q", "-am", "drop a case")
+
+			var failed bytes.Buffer
+			ctx.Expect(gateDemo(bg, args, &failed)).To(specs.BeNil())
+
+			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the package example.com/x has 1 tests, 2 at the base commit"))
+			ctx.Expect(failed.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+
+			git(ctx, wt, "revert", "--no-edit", "HEAD")
+			var passed bytes.Buffer
+			ctx.Expect(gateDemo(bg, []string{"-dir", wt, "-base", "main", "-checks", "true", "-count", "go test -list . ./..."}, &passed)).To(specs.BeNil())
+
+			ctx.Expect(passed.String()).To(specs.Not(specs.Contain("rule broken")))
+			ctx.Expect(passed.String()).To(specs.Not(specs.Contain("note:")))
+			ctx.Expect(passed.String()).To(specs.Contain("the gate passed"))
+		})
+
+		s.It("says the test count rule did not run without -count", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme\n"), 0o600)).To(specs.BeNil())
+			git(ctx, dir, "init", "-q", "-b", "main")
+			git(ctx, dir, "add", ".")
+			git(ctx, dir, "commit", "-q", "-m", "base")
+
+			var out bytes.Buffer
+			ctx.Expect(gateDemo(context.Background(), []string{"-dir", dir, "-checks", "true"}, &out)).To(specs.BeNil())
+
+			ctx.Expect(out.String()).To(specs.Contain("note: the test count rule did not run: no test count command is configured"))
+			ctx.Expect(out.String()).To(specs.Contain("the gate passed"))
+		})
+
 		s.It("fails a new test file not yet committed that adds .only, naming it", func(ctx *specs.Context) {
 			dir := ctx.Testing().TempDir()
 			ctx.Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme\n"), 0o600)).To(specs.BeNil())
