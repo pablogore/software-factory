@@ -70,10 +70,16 @@ func New(opts ...Option) (*Store, error) {
 	return s, nil
 }
 
-// Create implements ports.JobStore.
-func (s *Store) Create(_ context.Context, job domain.Job) error {
+// Create implements ports.JobStore. Like the SQLite store it checks the job
+// and every action before keeping anything.
+func (s *Store) Create(_ context.Context, job domain.Job, acts ...ports.Action) error {
 	if err := job.Validate(); err != nil {
 		return fmt.Errorf("memstore: create: %w", err)
+	}
+	for _, a := range acts {
+		if err := a.Validate(); err != nil {
+			return fmt.Errorf("memstore: job %q: %w", job.ID, err)
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,6 +92,7 @@ func (s *Store) Create(_ context.Context, job domain.Job) error {
 	}
 	s.jobs[job.ID] = data
 	s.versions[job.ID] = 1
+	s.enqueue(job.ID, acts)
 	return nil
 }
 

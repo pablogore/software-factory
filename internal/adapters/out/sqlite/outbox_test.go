@@ -77,6 +77,71 @@ func outboxContract(s *specs.Spec, newStore func(ctx *specs.Context) outboxStore
 		})
 	})
 
+	s.When("a new job asks for actions", func(s *specs.Spec) {
+		s.It("saves them with the job, pending and due now", func(ctx *specs.Context) {
+			st := newStore(ctx)
+
+			ctx.Expect(st.Create(bg, newJob(), comment("job-1/confirm"))).To(specs.BeNil())
+
+			got, _, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(newJob())
+			want := []ports.QueuedAction{queued(comment("job-1/confirm"))}
+			ctx.Expect(actions(ctx, st, jobID)).ToEqual(want)
+			due, err := st.DueActions(bg, at(1))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(due).ToEqual(want)
+		})
+
+		s.It("saves none of them when the job exists already", func(ctx *specs.Context) {
+			st := newStore(ctx)
+			ctx.Expect(st.Create(bg, newJob(), comment("job-1/confirm"))).To(specs.BeNil())
+
+			err := st.Create(bg, newJob(), comment("job-1/confirm"), comment("job-1/confirm/again"))
+
+			ctx.Expect(err).To(specs.MatchError(ports.ErrJobExists))
+			ctx.Expect(actions(ctx, st, jobID)).ToEqual([]ports.QueuedAction{queued(comment("job-1/confirm"))})
+		})
+
+		s.It("keeps one job and one set of actions when two creates race", func(ctx *specs.Context) {
+			st := newStore(ctx)
+			const n = 8
+			errs := make(chan error, n)
+			for range n {
+				go func() { errs <- st.Create(bg, newJob(), comment("job-1/confirm")) }()
+			}
+			won := 0
+			for range n {
+				err := <-errs
+				if err == nil {
+					won++
+					continue
+				}
+				ctx.Expect(err).To(specs.MatchError(ports.ErrJobExists))
+			}
+
+			ctx.Expect(won).ToEqual(1)
+			ctx.Expect(actions(ctx, st, jobID)).ToEqual([]ports.QueuedAction{queued(comment("job-1/confirm"))})
+		})
+
+		rows := []invalidAction{
+			{"without a key", ports.Action{Kind: "comment"}},
+			{"without a kind", ports.Action{Key: "job-1/confirm"}},
+		}
+		specs.Table(s, rows, func(r invalidAction) string {
+			return "an action " + r.name + " is refused and saves neither the job nor any action"
+		}, func(ctx *specs.Context, r invalidAction) {
+			st := newStore(ctx)
+
+			err := st.Create(bg, newJob(), comment("job-1/confirm"), r.act)
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+			_, _, err = st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
+			ctx.Expect(actions(ctx, st, jobID)).To(specs.BeEmpty())
+		})
+	})
+
 	s.When("the state change is not saved", func(s *specs.Spec) {
 		s.It("saves no action when Decide refuses the event", func(ctx *specs.Context) {
 			st := newStore(ctx)
