@@ -3,6 +3,10 @@
 // one frees; waiting work starts in the order it was handed over. A slot is
 // one running agent, not one job.
 //
+// One more slot, on top of the concurrency, is reserved for a person's
+// reply, so new work filling every slot never makes someone wait for an
+// answer. New work never takes it.
+//
 // Choosing what to hand over next is not the scheduler's concern: it runs
 // what it is given.
 package scheduler
@@ -27,15 +31,17 @@ type item struct {
 	done chan error
 }
 
-// Scheduler runs at most its concurrency of Work at once.
+// Scheduler runs at most its concurrency of Work at once, plus one reply
+// in the reserved slot.
 type Scheduler struct {
 	slots int
 
-	// mu guards running and line, so a freed slot and a new submission
-	// never both take the same slot.
-	mu      sync.Mutex
-	running int
-	line    []item
+	// mu guards running, reserved and line, so a freed slot and a new
+	// submission never both take the same slot.
+	mu       sync.Mutex
+	running  int
+	reserved bool
+	line     []item
 }
 
 // New returns a scheduler with concurrency slots, all free.
@@ -53,19 +59,44 @@ func (s *Scheduler) Submit(ctx context.Context, w Work) <-chan error {
 	it := item{ctx: ctx, work: w, done: make(chan error, 1)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.take(it)
+	return it.done
+}
+
+// SubmitReply hands over w, the work that answers a person's reply. It
+// never blocks: w starts now in the reserved slot if it is free; otherwise
+// it is handled like any work handed to Submit.
+func (s *Scheduler) SubmitReply(ctx context.Context, w Work) <-chan error {
+	it := item{ctx: ctx, work: w, done: make(chan error, 1)}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.reserved {
+		s.reserved = true
+		go s.runReserved(it)
+	} else {
+		s.take(it)
+	}
+	return it.done
+}
+
+// take starts it in a free regular slot, or puts it in line. s.mu must be
+// held.
+func (s *Scheduler) take(it item) {
 	if s.running < s.slots {
 		s.running++
 		go s.run(it)
 	} else {
 		s.line = append(s.line, it)
 	}
-	return it.done
 }
 
-// Running is how many slots are taken.
+// Running is how many slots are taken, the reserved one included.
 func (s *Scheduler) Running() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.reserved {
+		return s.running + 1
+	}
 	return s.running
 }
 
@@ -89,6 +120,16 @@ func (s *Scheduler) run(it item) {
 		}
 		it = next
 	}
+}
+
+// runReserved runs it in the reserved slot. The slot is never handed to
+// work in line, so it is free again for the next reply.
+func (s *Scheduler) runReserved(it item) {
+	err := it.work(it.ctx)
+	s.mu.Lock()
+	s.reserved = false
+	s.mu.Unlock()
+	it.done <- err
 }
 
 // free hands the finished slot to the oldest waiting work, or frees it when
