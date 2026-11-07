@@ -9,27 +9,46 @@ import (
 
 // ProtectedPaths are what the gate and the rules a builder is judged by are
 // made of, so a job may not modify or delete them; adding a new file under
-// one is allowed. An entry ending in "/" covers everything under it, any
-// other is a path.Match pattern from the repo root.
+// one is allowed, except under ProtectedAdds. An entry ending in "/" covers
+// everything under it, any other is a path.Match pattern from the repo root.
 var ProtectedPaths = []string{
 	"Makefile",
+	"GNUmakefile",
+	"makefile",
 	"internal/arch_test.go",
-	".github/workflows/",
+	".github/",
 	"AGENTS.md",
 	".golangci.yml",
 	"docs/factoryd/0*.md",
 }
 
+// ProtectedAdds are the protected paths a job may not add to either: make
+// reads a GNUmakefile or a makefile before the Makefile, and any new file
+// under .github/ can be a workflow, an action or a CODEOWNERS that GitHub
+// runs or enforces.
+var ProtectedAdds = []string{
+	"GNUmakefile",
+	"makefile",
+	".github/",
+}
+
 // ProtectedTouched is one reason for each protected file that changes
-// modifies or deletes, naming the file, in the order of changes.
+// modifies or deletes, or adds under ProtectedAdds, naming the file, in the
+// order of changes.
 func ProtectedTouched(changes []domain.FileChange) []string {
 	var reasons []string
 	for _, c := range changes {
-		if c.Kind == domain.ChangeAdded || !matches(ProtectedPaths, c.Path) {
+		if !matches(ProtectedPaths, c.Path) {
 			continue
 		}
 		verb := "modifies"
-		if c.Kind == domain.ChangeDeleted {
+		switch c.Kind {
+		case domain.ChangeAdded:
+			if !matches(ProtectedAdds, c.Path) {
+				continue
+			}
+			verb = "adds"
+		case domain.ChangeDeleted:
 			verb = "deletes"
 		}
 		reasons = append(reasons, "the diff "+verb+" the protected path "+c.Path)

@@ -9,6 +9,8 @@
 //
 // The checks command and the protected paths are the factory's own
 // configuration, never read from the job's branch, and a diff that modifies
-// or deletes a protected path fails the gate, so a builder cannot change what
-// it is judged by.
+// or deletes a protected path, or adds a makefile variant or a file under
+// .github/, fails the gate, so a builder cannot change what it is judged by.
+// So does an index that marks a file skip-worktree or assume-unchanged,
+// since it hides that file's changes from the diff.
 package build
