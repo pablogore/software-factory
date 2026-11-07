@@ -216,6 +216,57 @@ func TestDiffer(t *testing.T) {
 			})
 		})
 
+		s.It("lists an untracked folder with its own .git as one nested repo, even where the base's .gitignore ignores it", func(ctx *specs.Context) {
+			dir, fork := newRepoWith(ctx, map[string]string{".gitignore": "vendorx/\n"})
+			must(ctx, dir, "init", "-q", "vendorx")
+			write(ctx, dir, "vendorx/a_test.go", "package x\n")
+			must(ctx, dir, "init", "-q", "deep/inner")
+			write(ctx, dir, "deep/inner/b_test.go", "package x\n")
+			write(ctx, dir, "deep/new.txt", "new\n")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: "deep/inner/", Kind: domain.ChangeAdded, Repo: domain.RepoNested},
+				{Path: "deep/new.txt", Kind: domain.ChangeAdded},
+				{Path: "vendorx/", Kind: domain.ChangeAdded, Repo: domain.RepoNested},
+			})
+		})
+
+		s.It("lists a submodule added, with no .gitmodules, or moved to another commit as one, whatever the config ignores", func(ctx *specs.Context) {
+			dir, _ := newRepo(ctx)
+			must(ctx, dir, "switch", "-q", base)
+			must(ctx, dir, "init", "-q", "lib/sub")
+			write(ctx, dir, "lib/sub/a.go", "a\n")
+			must(ctx, dir, "-C", "lib/sub", "add", ".")
+			must(ctx, dir, "-C", "lib/sub", "commit", "-q", "-m", "a")
+			must(ctx, dir, "add", "lib/sub")
+			must(ctx, dir, "commit", "-q", "-m", "base with a submodule")
+			fork := must(ctx, dir, "rev-parse", "HEAD")
+			must(ctx, dir, "switch", "-q", "factory/job-1")
+			must(ctx, dir, "reset", "-q", "--hard", fork)
+			write(ctx, dir, "lib/sub/a.go", "moved\n")
+			must(ctx, dir, "-C", "lib/sub", "commit", "-q", "-am", "moved")
+			must(ctx, dir, "init", "-q", "vendorx")
+			write(ctx, dir, "vendorx/a_test.go", "package x\n")
+			must(ctx, dir, "-C", "vendorx", "add", ".")
+			must(ctx, dir, "-C", "vendorx", "commit", "-q", "-m", "x")
+			must(ctx, dir, "add", "vendorx")
+			must(ctx, dir, "config", "diff.ignoreSubmodules", "all")
+			must(ctx, dir, "config", "submodule.lib/sub.ignore", "all")
+			// The premise: git with that config sees neither.
+			ctx.Expect(must(ctx, dir, "diff", "--name-only", fork, "--")).ToEqual("")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: "lib/sub", Kind: domain.ChangeModified, Repo: domain.RepoSubmodule},
+				{Path: "vendorx", Kind: domain.ChangeAdded, Repo: domain.RepoSubmodule},
+			})
+		})
+
 		s.It("lists a rename as a deletion and an addition", func(ctx *specs.Context) {
 			dir, fork := newRepo(ctx)
 			must(ctx, dir, "mv", "Makefile", "Makefile.old")

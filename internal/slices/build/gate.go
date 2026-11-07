@@ -43,8 +43,9 @@ type Gate struct {
 // Run runs the checks in the worktree of job id, which must be at the gate,
 // and the diff rules on what the job changed since the base commit recorded
 // for it, and decides GatePassed or GateFailed with the run on it: a broken
-// rule, such as a protected path modified, a file outside the build role's
-// allowed paths, a file the index hides changes of, a test file deleted or
+// rule, such as a nested repo or a submodule not allowed, a protected path
+// modified, a file outside the build role's allowed paths, a file the index
+// hides changes of, a test file deleted or
 // a skip mark added to one, or a package with fewer tests than at the base,
 // fails the gate even when the checks pass, its reason kept in the run. It
 // returns the events the job saved: the ChecksRan and the move to the next
@@ -133,6 +134,7 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 	if err != nil {
 		return nil, "", fmt.Errorf("gate: diff of %q: %w", id, err)
 	}
+	reasons = append(reasons, ReposChanged(changes, Roles(p))...)
 	reasons = append(reasons, ProtectedTouched(changes)...)
 	reasons = append(reasons, OutsideAllowed(changes, Roles(p))...)
 	reasons = append(reasons, TestsDeleted(changes)...)
@@ -144,11 +146,12 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 }
 
 // marksAdded is MarksAdded for each test file changes add or modify, read
-// as base has it and as the worktree at dir has it, uncommitted or not.
+// as base has it and as the worktree at dir has it, uncommitted or not. A
+// repo of its own is no file to read, whatever its name.
 func (g *Gate) marksAdded(ctx context.Context, dir, base string, changes []domain.FileChange) ([]string, error) {
 	var reasons []string
 	for _, c := range changes {
-		if c.Kind == domain.ChangeDeleted || !IsTestFile(c.Path) {
+		if c.Kind == domain.ChangeDeleted || c.Repo != "" || !IsTestFile(c.Path) {
 			continue
 		}
 		var before string
