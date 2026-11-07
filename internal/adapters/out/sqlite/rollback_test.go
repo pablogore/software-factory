@@ -51,6 +51,30 @@ func TestStoreDatabase(t *testing.T) {
 			ctx.Expect(hist).To(specs.BeEmpty())
 		})
 
+		s.It("saves neither the override record nor the state when SQLite refuses its merge request", func(ctx *specs.Context) {
+			st, err := Open(bg, filepath.Join(ctx.Testing().TempDir(), "factory.db"))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Cleanup(func() { _ = st.Close() })
+			waiting := domain.Job{ID: "job-1", Pipeline: "default", Stage: domain.StageNeedsHuman, Round: 3, WaitSeq: 1, Cause: domain.CauseChanges}
+			ctx.Expect(st.Create(bg, waiting)).To(specs.BeNil())
+			// MergeOverridden is inserted first, so the refusal comes after it
+			// and the state were written.
+			_, err = st.db.ExecContext(bg, `CREATE TRIGGER refuse BEFORE INSERT ON events WHEN NEW.name = 'MergeRequested'
+				BEGIN SELECT RAISE(ABORT, 'refused'); END`)
+			ctx.Expect(err).To(specs.BeNil())
+
+			_, _, err = st.Apply(bg, waiting.ID, 1, p, domain.OverrideRequested{Job: waiting.ID, By: "ana", AuthorKind: domain.AuthorPerson, Allowed: true, Reason: "ship it", WaitSeq: 1, At: at})
+
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			got, v, err := st.Load(bg, waiting.ID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(waiting)
+			ctx.Expect(v).ToEqual(ports.Version(1))
+			hist, err := st.History(bg, waiting.ID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(hist).To(specs.BeEmpty())
+		})
+
 		s.It("reading a row of an unknown event type is an error, never an empty event", func(ctx *specs.Context) {
 			st := open(ctx)
 			_, err := st.db.ExecContext(bg, `INSERT INTO events (job_id, name, at, data) VALUES (?, 'Renamed', ?, '{}')`,

@@ -38,11 +38,28 @@ CREATE INDEX IF NOT EXISTS events_job ON events(job_id, seq);
 
 // Store is a JobStore and EventLog backed by one SQLite file.
 type Store struct {
-	db *sql.DB
+	db        *sql.DB
+	maxReason int
+}
+
+// Option sets how Open configures the store.
+type Option func(*Store)
+
+// WithMaxReason keeps at most n characters of an override's reason, instead
+// of eventjson.DefaultMaxReason. n must be at least 1.
+func WithMaxReason(n int) Option {
+	return func(s *Store) { s.maxReason = n }
 }
 
 // Open opens or creates the database at path and its schema.
-func Open(ctx context.Context, path string) (*Store, error) {
+func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
+	st := &Store{maxReason: eventjson.DefaultMaxReason}
+	for _, opt := range opts {
+		opt(st)
+	}
+	if err := eventjson.CheckMaxReason(st.maxReason); err != nil {
+		return nil, fmt.Errorf("sqlite: open %s: %w", path, err)
+	}
 	dsn := "file:" + (&url.URL{Path: path}).EscapedPath() + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -51,7 +68,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		return nil, errors.Join(fmt.Errorf("sqlite: schema: %w", err), db.Close())
 	}
-	return &Store{db: db}, nil
+	st.db = db
+	return st, nil
 }
 
 // Close closes the database.
@@ -136,6 +154,7 @@ func (s *Store) Apply(ctx context.Context, id domain.JobID, v ports.Version, p d
 	if len(evs) == 0 {
 		return nil, v, tx.Rollback()
 	}
+	evs = eventjson.CapReasons(evs, s.maxReason)
 	if err := save(ctx, tx, decide.Apply(job, evs)); err != nil {
 		return nil, 0, err
 	}
