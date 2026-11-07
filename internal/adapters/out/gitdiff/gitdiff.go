@@ -121,8 +121,13 @@ func ignoredAtBase(ctx context.Context, dir, base string, paths []string) (map[s
 	if err := os.Remove(filepath.Join(scratch, ".git", "info", "exclude")); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("gitdiff: %w", err)
 	}
-	stdin := strings.Join(paths, "\x00") + "\x00"
-	out, err = run(ctx, scratch, stdin, "-c", "core.excludesFile="+os.DevNull, "check-ignore", "--no-index", "--stdin", "-z")
+	// check-ignore reads each path as a pathspec, so one starting with :/ or
+	// :(top) would be matched from the root; a leading ./ makes it plain.
+	var stdin strings.Builder
+	for _, p := range paths {
+		stdin.WriteString("./" + p + "\x00")
+	}
+	out, err = run(ctx, scratch, stdin.String(), "-c", "core.excludesFile="+os.DevNull, "check-ignore", "--no-index", "--stdin", "-z")
 	// check-ignore exits 1 when it ignores none of the paths.
 	if exit := (*exec.ExitError)(nil); errors.As(err, &exit) && exit.ExitCode() == 1 {
 		return nil, nil
@@ -132,7 +137,7 @@ func ignoredAtBase(ctx context.Context, dir, base string, paths []string) (map[s
 	}
 	ignored := map[string]bool{}
 	for _, p := range nulFields(out) {
-		ignored[p] = true
+		ignored[strings.TrimPrefix(p, "./")] = true
 	}
 	return ignored, nil
 }

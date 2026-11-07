@@ -129,6 +129,23 @@ func TestDiffer(t *testing.T) {
 			})
 		})
 
+		s.It("reads untracked paths that look like pathspec magic as plain paths", func(ctx *specs.Context) {
+			dir, fork := newRepoWith(ctx, map[string]string{".gitignore": "/bin/\n"})
+			write(ctx, dir, ":/bin/x_test.go", "t.Skip()\n")
+			write(ctx, dir, ":(top)bin/z", "hidden\n")
+			write(ctx, dir, ":(exclude)x", "new\n")
+			write(ctx, dir, "bin/y", "ignored\n")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: ":(exclude)x", Kind: domain.ChangeAdded},
+				{Path: ":(top)bin/z", Kind: domain.ChangeAdded},
+				{Path: ":/bin/x_test.go", Kind: domain.ChangeAdded},
+			})
+		})
+
 		s.It("lists an untracked file .git/info/exclude or core.excludesFile hides", func(ctx *specs.Context) {
 			dir, fork := newRepo(ctx)
 			write(ctx, dir, ".git/info/exclude", "hidden_test.go\n")
