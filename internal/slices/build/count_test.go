@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -56,6 +57,26 @@ func listed(output string) domain.ChecksRun {
 	return domain.ChecksRun{Command: "go test -list . ./...", Output: output}
 }
 
+// jsonRun is go test -json output, stderr in it: in example.com/a a test
+// whose two subtests pass and one is skipped, a test that fails in
+// example.com/c, and example.com/b with no test files.
+const jsonRun = `go: downloading example.com/x v1.0.0
+{"ImportPath":"example.com/a","Action":"build-output","Output":"# example.com/a\n"}
+{"Action":"start","Package":"example.com/a"}
+{"Action":"run","Package":"example.com/a","Test":"TestA"}
+{"Action":"output","Package":"example.com/a","Test":"TestA","Output":"=== RUN   TestA\n"}
+{"Action":"pass","Package":"example.com/a","Test":"TestA/one"}
+{"Action":"skip","Package":"example.com/a","Test":"TestA/skipped"}
+{"Action":"pass","Package":"example.com/a","Test":"TestA/two"}
+{"Action":"pass","Package":"example.com/a","Test":"TestA"}
+{"Action":"pass","Package":"example.com/a"}
+{"Action":"output","Package":"example.com/b","Output":"?   \texample.com/b\t[no test files]\n"}
+{"Action":"skip","Package":"example.com/b"}
+{"Action":"pass","Package":"example.com/c","Test":"TestC"}
+{"Action":"fail","Package":"example.com/c","Test":"TestD"}
+{"Action":"fail","Package":"example.com/c"}
+`
+
 const (
 	baseList = "TestA\nTestB\nok  \texample.com/a\t0.1s\nTestC\nok  \texample.com/b\t(cached)\n"
 	snap     = "/snap/" + recorded
@@ -105,6 +126,19 @@ func TestTestCount(t *testing.T) {
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 		})
+
+		s.It("counts each test go test -json saw pass, subtests included, and no skipped or failed one", func(ctx *specs.Context) {
+			counts, err := build.CountTests(jsonRun)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(counts).ToEqual(map[string]int{"example.com/a": 3, "example.com/b": 0, "example.com/c": 1})
+		})
+
+		s.It("refuses a JSON line that is not a go test -json event", func(ctx *specs.Context) {
+			_, err := build.CountTests(`{"Action":"pass","Package":"example.com/a","Test":"TestA"}` + "\n" + `{"Package":"example.com/a"` + "\n")
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+		})
 	})
 
 	specs.Describe(t, "build.TestsDropped", func(s *specs.Spec) {
@@ -141,6 +175,21 @@ func TestTestCount(t *testing.T) {
 			ctx.Expect(snaps.removed).ToEqual([]string{snap})
 			ctx.Expect(store.last(ctx).Violations).ToEqual([]string{"the package example.com/a has 1 tests, 2 at the base commit"})
 			ctx.Expect(store.last(ctx).Notes).To(specs.BeEmpty())
+			ctx.Expect(store.stage(ctx)).ToEqual("build")
+		})
+
+		s.It("fails when go test -json saw a subtest of a package skipped at the head, naming it", func(ctx *specs.Context) {
+			skipped := strings.Replace(jsonRun, `"pass","Package":"example.com/a","Test":"TestA/two"`, `"skip","Package":"example.com/a","Test":"TestA/two"`, 1)
+			c := &counter{checks: passing, counts: map[string]domain.ChecksRun{
+				"/wt/j-1": {Command: "go test -json -count=1 ./...", Output: skipped},
+				snap:      {Command: "go test -json -count=1 ./...", Output: jsonRun},
+			}}
+			g, store := newCountGate(ctx, c, &snapshots{})
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(store.last(ctx).Violations).ToEqual([]string{"the package example.com/a has 2 tests, 3 at the base commit"})
 			ctx.Expect(store.stage(ctx)).ToEqual("build")
 		})
 
