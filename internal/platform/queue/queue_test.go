@@ -107,8 +107,25 @@ type costs struct{ err error }
 
 func (c costs) Spent(context.Context, domain.JobID) (float64, error) { return 0, c.err }
 
+// plenty is a fake GitHub limit source with plenty of calls left, so the
+// scheduler never holds work for the rate limit.
+type plenty struct{}
+
+func (plenty) Limit(context.Context) (scheduler.RateLimit, error) {
+	return scheduler.RateLimit{Remaining: 5000, Reset: epoch.Add(time.Hour)}, nil
+}
+
+var epoch = time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+
+// stopped is a fake clock whose time never moves: with plenty of calls
+// left nobody waits on it.
+type stopped struct{}
+
+func (stopped) Now() time.Time                       { return epoch }
+func (stopped) After(time.Duration) <-chan time.Time { return nil }
+
 func newScheduler(ctx *specs.Context, concurrency int, c costs) *scheduler.Scheduler {
-	s, err := scheduler.New(concurrency, 5, c)
+	s, err := scheduler.New(concurrency, 5, c, scheduler.GitHub{Limits: plenty{}, Threshold: 100, Clock: stopped{}})
 	ctx.Expect(err).To(specs.BeNil())
 	return s
 }
