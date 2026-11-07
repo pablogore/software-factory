@@ -211,6 +211,13 @@ func alone(n int, stage string) runmode.IssueReport {
 	}
 }
 
+// noDeps is a fake queue.Issues for issues that depend on none.
+type noDeps struct{}
+
+func (noDeps) Finished(_ context.Context, n int) (bool, error) {
+	return false, fmt.Errorf("issue #%d: %w", n, queue.ErrNoIssue)
+}
+
 type fixture struct {
 	r      *runner
 	sched  *scheduler.Scheduler
@@ -224,7 +231,7 @@ type fixture struct {
 func newFixture(ctx *specs.Context, order queue.Order, reps reports) fixture {
 	f := fixture{r: newRunner(), sched: newScheduler(ctx, 1, costs{}), outbox: &outbox{}, inbox: &inbox{}}
 	f.brake = runmode.NewBrake(f.sched)
-	f.q = queue.New(f.brake, order, f.r)
+	f.q = queue.New(f.brake, order, noDeps{}, f.r)
 	f.mode = runmode.New(f.brake, f.q, order, reps, f.outbox, f.inbox)
 	return f
 }

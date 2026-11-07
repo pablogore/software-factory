@@ -14,10 +14,15 @@ type Issue struct {
 }
 
 // Order is the explicit order to take issues in, issue numbers first to
-// last: the tech lead's, and the product owner's priority.
+// last: the tech lead's, and the product owner's priority. After comes with
+// it from the tech lead's plan too.
 type Order struct {
 	TechLead []int
 	Priority []int
+	// After maps an issue to those it waits for, from plan.md's
+	// `AFTER: #a #b ...` lines, where #a waits for the rest. They add to the
+	// issue's "Depends on #N" lines and follow the same rules (see Depends).
+	After map[int][]int
 }
 
 // rank maps each listed issue to its place: the tech lead's order when it
