@@ -10,6 +10,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
+	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/scheduler"
 )
 
@@ -103,22 +104,52 @@ func result(ctx *specs.Context, done <-chan error) error {
 	}
 }
 
-// submit hands over one new agent per name to s, in order.
+// submit hands over one new agent per name to s, in order, each for the
+// job of the same name.
 func submit(s *scheduler.Scheduler, c *crew, names ...string) map[string]<-chan error {
 	done := map[string]<-chan error{}
 	for _, n := range names {
-		done[n] = s.Submit(context.Background(), c.work(n))
+		done[n] = s.Submit(context.Background(), domain.JobID(n), c.work(n))
 	}
 	return done
 }
 
-// reply hands over one new agent called name as a person's reply.
+// reply hands over one new agent called name as a person's reply for the
+// job of the same name.
 func reply(s *scheduler.Scheduler, c *crew, name string) <-chan error {
-	return s.SubmitReply(context.Background(), c.work(name))
+	return s.SubmitReply(context.Background(), domain.JobID(name), c.work(name))
+}
+
+// budget is the USD budget every test scheduler is handed.
+const budget = 5.0
+
+// costs is a fake cost source: what each job has spent, nothing by default.
+type costs struct {
+	mu    sync.Mutex
+	spent map[domain.JobID]float64
+	err   error
+}
+
+func newCosts() *costs { return &costs{spent: map[domain.JobID]float64{}} }
+
+func (c *costs) Spent(_ context.Context, job domain.JobID) (float64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.spent[job], c.err
+}
+
+func (c *costs) set(job string, usd float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.spent[domain.JobID(job)] = usd
 }
 
 func newScheduler(ctx *specs.Context, concurrency int) *scheduler.Scheduler {
-	s, err := scheduler.New(concurrency)
+	return newBudgeted(ctx, concurrency, newCosts())
+}
+
+func newBudgeted(ctx *specs.Context, concurrency int, c *costs) *scheduler.Scheduler {
+	s, err := scheduler.New(concurrency, budget, c)
 	ctx.Expect(err).To(specs.BeNil())
 	return s
 }
@@ -341,7 +372,7 @@ func TestScheduler(t *testing.T) {
 					if i%3 == 0 {
 						done[n] = reply(sch, c, n)
 					} else {
-						done[n] = sch.Submit(context.Background(), c.work(n))
+						done[n] = sch.Submit(context.Background(), domain.JobID(n), c.work(n))
 					}
 				}
 				ctx.Expect(sch.Running()).ToEqual(3)
@@ -384,7 +415,7 @@ func TestScheduler(t *testing.T) {
 
 		s.When("concurrency is below 1", func(s *specs.Spec) {
 			s.It("refuses to build the scheduler", func(ctx *specs.Context) {
-				_, err := scheduler.New(0)
+				_, err := scheduler.New(0, budget, newCosts())
 				ctx.Expect(err).To(specs.MatchError(scheduler.ErrConcurrency))
 			})
 		})
