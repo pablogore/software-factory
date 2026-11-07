@@ -67,9 +67,11 @@ type Summary struct {
 	USD      float64       `json:"usd"`
 	Duration time.Duration `json:"duration"`
 	// Next is nil when no waiting issue can be taken, and NoNext says why.
-	Next    *Next             `json:"next,omitempty"`
-	NoNext  domain.NextReason `json:"no_next,omitempty"`
-	Options []Option          `json:"options"`
+	Next   *Next             `json:"next,omitempty"`
+	NoNext domain.NextReason `json:"no_next,omitempty"`
+	// RunStop is the run's cap the auto mode reached; nil when none was.
+	RunStop *RunStop `json:"run_stop,omitempty"`
+	Options []Option `json:"options"`
 }
 
 // Summarize sums up r after its job by ended, and recommends the first of
