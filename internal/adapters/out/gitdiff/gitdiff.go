@@ -26,9 +26,13 @@ type Differ struct{}
 // committed or not, and base, the full object name of the commit its branch
 // was made from. base is never a ref: a ref can be moved from the worktree,
 // so a diff against one could hide what the job changed. Renames come as a
-// deletion and an addition. An untracked file that the base's .gitignore
-// files don't ignore comes last as an addition: the builder touched it even
-// though no diff shows it.
+// deletion and an addition. A submodule, a gitlink on either side, comes
+// marked as one, whether its commit or its checkout changed. An untracked
+// file that the base's .gitignore files don't ignore comes last as an
+// addition: the builder touched it even though no diff shows it. An
+// untracked folder with its own .git comes there too, marked as a nested
+// repo, even when the base ignores it: git lists it as one entry and never
+// what is inside.
 func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChange, error) {
 	if base == "" {
 		return nil, fmt.Errorf("gitdiff: %w: base", domain.ErrMissingField)
@@ -37,18 +41,30 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 		return nil, fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
 	}
 	// ^{commit} makes git refuse an object that is not a commit, or not there.
-	out, err := git(ctx, dir, "diff", "--name-status", "--no-renames", "-z", base+"^{commit}", "--")
+	// --raw gives each side's mode, which tells a gitlink. The config and
+	// .gitmodules, which the builder can write, may set submodules to be
+	// ignored; --ignore-submodules=none overrides both.
+	out, err := git(ctx, dir, "diff", "--raw", "--no-renames", "--ignore-submodules=none", "-z", base+"^{commit}", "--")
 	if err != nil {
 		return nil, err
 	}
-	// -z gives status and path as separate NUL-terminated fields.
+	// -z gives the modes, object names and status, and the path, as
+	// separate NUL-terminated fields.
 	fields := nulFields(out)
 	if len(fields)%2 != 0 {
 		return nil, fmt.Errorf("gitdiff: unexpected git diff output %q: %w", out, domain.ErrInvalidValue)
 	}
 	var changes []domain.FileChange
 	for i := 0; i < len(fields); i += 2 {
-		changes = append(changes, domain.FileChange{Path: fields[i+1], Kind: kind(fields[i])})
+		f := strings.Fields(strings.TrimPrefix(fields[i], ":"))
+		if !strings.HasPrefix(fields[i], ":") || len(f) != 5 {
+			return nil, fmt.Errorf("gitdiff: unexpected git diff output %q: %w", fields[i], domain.ErrInvalidValue)
+		}
+		c := domain.FileChange{Path: fields[i+1], Kind: kind(f[4])}
+		if f[0] == gitlink || f[1] == gitlink {
+			c.Repo = domain.RepoSubmodule
+		}
+		changes = append(changes, c)
 	}
 	// ":/" lists from the repo root whatever dir is, and --full-name keeps
 	// paths from the root like git diff's. No --exclude-standard: it would
@@ -64,12 +80,21 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 		return nil, err
 	}
 	for _, p := range untracked {
+		// Without --directory, git ends an untracked entry in "/" only for a
+		// folder that is a repo of its own.
+		if strings.HasSuffix(p, "/") {
+			changes = append(changes, domain.FileChange{Path: p, Kind: domain.ChangeAdded, Repo: domain.RepoNested})
+			continue
+		}
 		if !ignored[p] {
 			changes = append(changes, domain.FileChange{Path: p, Kind: domain.ChangeAdded})
 		}
 	}
 	return changes, nil
 }
+
+// gitlink is the mode git keeps a submodule's commit with.
+const gitlink = "160000"
 
 // ignoredAtBase is the set of paths, from the repo root, that the .gitignore
 // files of base ignore. git reads ignore rules only from a worktree, so the
