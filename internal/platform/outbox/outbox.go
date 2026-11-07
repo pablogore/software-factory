@@ -7,11 +7,16 @@
 // too, the action is failed and stays listed with its attempts. Attempts, the
 // last error and the next attempt are saved in the outbox, not logged.
 //
+// A delivery whose result was lost, as after a timeout, is retried the same
+// way, but the retry first asks the destination whether the action was done,
+// so a comment or a push is never repeated.
+//
 // Nothing runs Deliver on a schedule yet: the scheduler will call it.
 package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -56,16 +61,36 @@ func (d *Deliverer) Deliver(ctx context.Context) error {
 }
 
 // try hands q to the destination once and saves the outcome: delivered, or
-// one more failed attempt, which gives up past the last retry. Only the
-// outbox's errors are returned; the destination's goes into the failure.
+// one more failed attempt, which gives up past the last retry. When q's last
+// result was lost, the destination is asked first and q is delivered only if
+// it was not done. Only the outbox's errors are returned; the destination's
+// goes into the failure.
 func (d *Deliverer) try(ctx context.Context, q ports.QueuedAction) error {
+	if q.ResultLost {
+		done, err := d.dest.Done(ctx, q.Key)
+		if err != nil {
+			// Still unknown whether it was done, so the next attempt asks again.
+			return d.failed(ctx, q, err, true)
+		}
+		if done {
+			return d.outbox.MarkActionDelivered(ctx, q.Key)
+		}
+	}
 	derr := d.dest.Deliver(ctx, q.Action)
 	if derr == nil {
 		return d.outbox.MarkActionDelivered(ctx, q.Key)
 	}
+	return d.failed(ctx, q, derr, errors.Is(derr, ports.ErrResultLost))
+}
+
+// failed saves one more failed attempt of q with err, rescheduled on the
+// backoff schedule or given up past the last retry. lost says whether the
+// action may have been done.
+func (d *Deliverer) failed(ctx context.Context, q ports.QueuedAction, err error, lost bool) error {
 	f := q.ActionFailure
 	f.Attempts++
-	f.LastError = derr.Error()
+	f.LastError = err.Error()
+	f.ResultLost = lost
 	f.Failed = f.Attempts > backoff.Retries
 	f.NextAttempt = time.Time{}
 	if !f.Failed {

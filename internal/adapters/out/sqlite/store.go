@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS outbox (
 	attempts     INTEGER NOT NULL DEFAULT 0,
 	last_error   TEXT NOT NULL DEFAULT '',
 	next_attempt TEXT NOT NULL DEFAULT '',
-	failed       INTEGER NOT NULL DEFAULT 0
+	failed       INTEGER NOT NULL DEFAULT 0,
+	result_lost  INTEGER NOT NULL DEFAULT 0
 );
 `
 
