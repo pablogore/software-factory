@@ -21,7 +21,7 @@ func enqueue(ctx context.Context, tx *sql.Tx, id domain.JobID, a ports.Action) e
 	return nil
 }
 
-const queuedColumns = `job_id, key, kind, payload, delivered, attempts, last_error, next_attempt, failed`
+const queuedColumns = `job_id, key, kind, payload, delivered, attempts, last_error, next_attempt, failed, result_lost`
 
 // DueActions implements ports.Outbox. Times are compared after parsing, since
 // RFC 3339 text with trimmed fractions does not sort as time does.
@@ -58,7 +58,7 @@ func (s *Store) queued(ctx context.Context, query string, args ...any) ([]ports.
 	for rows.Next() {
 		var q ports.QueuedAction
 		var job, next string
-		if err := rows.Scan(&job, &q.Key, &q.Kind, &q.Payload, &q.Delivered, &q.Attempts, &q.LastError, &next, &q.Failed); err != nil {
+		if err := rows.Scan(&job, &q.Key, &q.Kind, &q.Payload, &q.Delivered, &q.Attempts, &q.LastError, &next, &q.Failed, &q.ResultLost); err != nil {
 			return nil, err
 		}
 		q.Job = domain.JobID(job)
@@ -87,8 +87,8 @@ func (s *Store) MarkActionFailed(ctx context.Context, key string, f ports.Action
 	if !f.Failed && !f.NextAttempt.IsZero() {
 		next = f.NextAttempt.Format(time.RFC3339Nano)
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE outbox SET attempts = ?, last_error = ?, next_attempt = ?, failed = ? WHERE key = ?`,
-		f.Attempts, f.LastError, next, f.Failed, key)
+	res, err := s.db.ExecContext(ctx, `UPDATE outbox SET attempts = ?, last_error = ?, next_attempt = ?, failed = ?, result_lost = ? WHERE key = ?`,
+		f.Attempts, f.LastError, next, f.Failed, f.ResultLost, key)
 	return marked(res, err, "failed", key)
 }
 

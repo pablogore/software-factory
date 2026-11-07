@@ -13,6 +13,10 @@ import (
 // Callers compare with errors.Is.
 var ErrActionNotFound = errors.New("action not found")
 
+// ErrResultLost is what a destination wraps when it cannot tell whether an
+// action was done, as after a timeout. Callers compare with errors.Is.
+var ErrResultLost = errors.New("action result lost")
+
 // Action is one external effect a state change asks for: a comment, a push,
 // a PR, a chat message. It is saved with that state change and delivered
 // later, so a slice never calls the outside world itself
@@ -52,6 +56,9 @@ type ActionFailure struct {
 	// Failed means delivery gave up after the last retry. The action stays
 	// listed, so it is seen, but is never due again.
 	Failed bool
+	// ResultLost means the last attempt may have been done: the next one
+	// asks the destination before delivering again.
+	ResultLost bool
 }
 
 // QueuedAction is an action as the outbox keeps it: the job whose state
@@ -84,6 +91,10 @@ type Outbox interface {
 // Destination performs actions in the outside world.
 type Destination interface {
 	// Deliver performs a once. An error means it was not done and is worth
-	// trying again, as a network failure or a 5xx answer is.
+	// trying again, as a network failure or a 5xx answer is, unless it wraps
+	// ErrResultLost: then it may have been done.
 	Deliver(ctx context.Context, a Action) error
+	// Done tells whether the action with idempotency key key was done. An
+	// error means the destination could not tell and is worth asking again.
+	Done(ctx context.Context, key string) (bool, error)
 }
