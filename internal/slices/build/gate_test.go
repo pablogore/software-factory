@@ -21,16 +21,17 @@ type stopped struct{}
 
 func (stopped) Now() time.Time { return at }
 
-type pipelines struct{}
+// pipelines answers the default pipeline with roles as its loaded roles.
+type pipelines struct{ roles []domain.Role }
 
-func (pipelines) Pipeline(_ context.Context, name string) (domain.Pipeline, error) {
+func (f pipelines) Pipeline(_ context.Context, name string) (domain.Pipeline, error) {
 	if name != "default" {
 		return domain.Pipeline{}, fmt.Errorf("no pipeline %q", name)
 	}
 	return domain.Pipeline{Name: "default", Stages: []domain.Stage{
 		{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder"}},
 		{Name: "review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "build"},
-	}}, nil
+	}, Roles: f.roles}, nil
 }
 
 // worktrees puts every job's worktree under /wt.
@@ -259,6 +260,64 @@ func TestGate(t *testing.T) {
 			job, _, err := store.Load(bg, "j-1")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(job.Stage).ToEqual("review")
+		})
+
+		s.When("the build role declares allowed paths", func(s *specs.Spec) {
+			outside := &diffs{changes: []domain.FileChange{
+				{Path: "internal/slices/build/gate.go", Kind: domain.ChangeModified},
+				{Path: "README.md", Kind: domain.ChangeModified},
+				{Path: "notes.txt", Kind: domain.ChangeAdded},
+			}}
+
+			s.It("fails a diff that touches files outside them, even though the checks pass, naming each file", func(ctx *specs.Context) {
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, outside)
+				g.Pipelines = pipelines{roles: []domain.Role{builder("internal/slices/build/")}}
+
+				evs, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "RoundStarted", "StageEntered"})
+				job, _, err := store.Load(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual("build")
+				hist, err := store.History(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				last, ok := build.LastChecks(hist)
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(last.Run.Output).ToEqual(passing.Output)
+				ctx.Expect(last.Run.Violations).ToEqual([]string{
+					"the diff modifies README.md, outside the allowed paths of build role builder",
+					"the diff adds notes.txt, outside the allowed paths of build role builder",
+				})
+			})
+
+			s.It("passes a diff that stays inside them", func(ctx *specs.Context) {
+				inside := &diffs{changes: []domain.FileChange{
+					{Path: "internal/slices/build/gate.go", Kind: domain.ChangeModified},
+					{Path: "internal/slices/build/new.go", Kind: domain.ChangeAdded},
+				}}
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, inside)
+				g.Pipelines = pipelines{roles: []domain.Role{builder("internal/slices/build/")}}
+
+				_, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				job, _, err := store.Load(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual("review")
+			})
+
+			s.It("passes the same diff when the build role declares none, as before", func(ctx *specs.Context) {
+				g, store := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, outside)
+				g.Pipelines = pipelines{roles: []domain.Role{builder()}}
+
+				_, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				job, _, err := store.Load(bg, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual("review")
+			})
 		})
 
 		s.It("saves nothing and runs no checks when the diff cannot be read", func(ctx *specs.Context) {

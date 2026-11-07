@@ -25,7 +25,7 @@ var ProtectedPaths = []string{
 func ProtectedTouched(changes []domain.FileChange) []string {
 	var reasons []string
 	for _, c := range changes {
-		if c.Kind == domain.ChangeAdded || !protected(c.Path) {
+		if c.Kind == domain.ChangeAdded || !matches(ProtectedPaths, c.Path) {
 			continue
 		}
 		verb := "modifies"
@@ -37,8 +37,11 @@ func ProtectedTouched(changes []domain.FileChange) []string {
 	return reasons
 }
 
-func protected(file string) bool {
-	for _, p := range ProtectedPaths {
+// matches reports whether file is covered by one of patterns: an entry
+// ending in "/" covers everything under it, any other is a path.Match
+// pattern from the repo root.
+func matches(patterns []string, file string) bool {
+	for _, p := range patterns {
 		if strings.HasSuffix(p, "/") {
 			if strings.HasPrefix(file, p) {
 				return true
