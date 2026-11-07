@@ -1,7 +1,8 @@
 // Package mcpworker serves the worker surface of factoryd to the agents that
 // work on jobs, with the session's job token. For now it is the HTTP route
-// `factory worker submit-result` calls; it serves nothing else, so a job
-// token gets no other operation from it (06-interfaz-y-observabilidad.md).
+// `factory worker submit-result` calls and the MCP tool submit_result, both
+// over one Submitter; it serves nothing else, so a job token gets no other
+// operation from it (06-interfaz-y-observabilidad.md).
 package mcpworker
 
 import (
@@ -41,13 +42,16 @@ type Refused struct {
 	Error string `json:"error"`
 }
 
-// Handler serves POST ResultPath with the token as a bearer token. Every
-// other request is refused with 403.
+// Handler serves POST ResultPath and the MCP server at MCPPath, both with
+// the token as a bearer token and both submitting to s, so a result is
+// decided the same way whichever one it comes by. Every other request is
+// refused with 403.
 func Handler(s Submitter) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+ResultPath, func(w http.ResponseWriter, r *http.Request) {
 		submit(w, r, s)
 	})
+	mux.Handle(MCPPath, mcpHandler(s))
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		write(w, http.StatusForbidden, Refused{Error: jobtoken.ErrForbidden.Error() + ": the worker API only takes a job's result"})
 	})
@@ -65,26 +69,36 @@ func submit(w http.ResponseWriter, r *http.Request, s Submitter) {
 		return
 	}
 	job := domain.JobID(r.PathValue("job"))
-	evs, err := s.Submit(r.Context(), bearer(r), job, data)
+	evs, err := s.Submit(r.Context(), bearer(r.Header), job, data)
 	if err != nil {
-		code := status(err)
-		msg := err.Error()
-		if code == http.StatusInternalServerError {
-			msg = "internal error"
-		}
+		code, msg := refusal(err)
 		write(w, code, Refused{Error: msg})
 		return
 	}
+	write(w, http.StatusOK, accepted(job, evs))
+}
+
+func accepted(job domain.JobID, evs []domain.Event) Accepted {
 	names := make([]string, len(evs))
 	for i, ev := range evs {
 		names[i] = ev.EventName()
 	}
-	write(w, http.StatusOK, Accepted{Job: job, Events: names})
+	return Accepted{Job: job, Events: names}
 }
 
-// bearer is the request's bearer token, or "" without one.
-func bearer(r *http.Request) string {
-	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+// refusal is the status and message a submission's err is answered with;
+// an unexpected error is hidden behind "internal error".
+func refusal(err error) (int, string) {
+	code := status(err)
+	if code == http.StatusInternalServerError {
+		return code, "internal error"
+	}
+	return code, err.Error()
+}
+
+// bearer is the bearer token in h, or "" without one.
+func bearer(h http.Header) string {
+	token, ok := strings.CutPrefix(h.Get("Authorization"), "Bearer ")
 	if !ok {
 		return ""
 	}
