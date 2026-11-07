@@ -150,7 +150,7 @@ func TestWaitSeq(t *testing.T) {
 					result("builder", 1, domain.BuildResult{Status: domain.BuildReady}),
 					gateFailed(2),
 					result("builder", 3, domain.BuildResult{Status: domain.BuildReady}),
-					domain.GatePassed{Job: jobID, At: at(4)},
+					domain.GatePassed{Job: jobID, Run: passingRun, At: at(4)},
 				)
 
 				ctx.Expect(after.Stage).ToEqual("review")
@@ -342,7 +342,7 @@ func TestStaleAction(t *testing.T) {
 				job = walkTo(ctx, job,
 					answering(message(domain.AuthorPerson, true, 2), 1),
 					result("builder", 3, domain.BuildResult{Status: domain.BuildReady}),
-					domain.GatePassed{Job: jobID, At: at(4)},
+					domain.GatePassed{Job: jobID, Run: passingRun, At: at(4)},
 				)
 				job = walkTo(ctx, job, reviewedBy(pass(reviewers[len(reviewers)-1], 5))...)
 				job = walkTo(ctx, job, result("approver", 6, domain.ApproveResult{Decision: domain.ApproveEscalate, Reasons: []string{"too risky"}}))
@@ -365,7 +365,7 @@ func TestStaleAction(t *testing.T) {
 			s.It("refuses the old override after a second CHANGES in the last round and merges on the current one", func(ctx *specs.Context) {
 				toReview := []domain.Event{
 					result("builder", 3, domain.BuildResult{Status: domain.BuildReady}),
-					domain.GatePassed{Job: jobID, At: at(4)},
+					domain.GatePassed{Job: jobID, Run: passingRun, At: at(4)},
 				}
 				job := walkTo(ctx, building(3), toReview...)
 				job = walkTo(ctx, job, reviewedBy(changes(reviewers[len(reviewers)-1], 5))...)

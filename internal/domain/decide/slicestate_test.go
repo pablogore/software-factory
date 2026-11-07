@@ -157,7 +157,7 @@ func TestSliceState(t *testing.T) {
 				{"records a length exception and its reason", atSpecgate(2), exceptionAsked(1), "spec asks for a length exception", domain.CauseSpecException},
 				{"records CHANGES in the last round, not as specgate's escalation, even after three rejections", inStage("review", 3, 3), changes("reviewer-code", 1),
 					"CHANGES in the last round (3 of 3) from reviewer-code", domain.CauseChanges},
-				{"records a gate failing in the last round", inStage(domain.StageGate, 3, 3), domain.GateFailed{Job: jobID, At: at(1)},
+				{"records a gate failing in the last round", inStage(domain.StageGate, 3, 3), domain.GateFailed{Job: jobID, Run: failingRun, At: at(1)},
 					"gate failed in the last round (3 of 3)", domain.CauseGateFailed},
 				{"records an approver escalation, not as specgate's escalation, even after three rejections", inStage("approve", 2, 3),
 					result("approver", 1, domain.ApproveResult{Decision: domain.ApproveEscalate, Reasons: []string{"needs a product decision"}}),
@@ -239,7 +239,7 @@ func TestSliceState(t *testing.T) {
 					step(answering(message(domain.AuthorPerson, true, 12), 2))
 					ctx.Expect(job.Stage).ToEqual("build")
 					step(result("builder", 13, domain.BuildResult{Status: domain.BuildReady}))
-					step(domain.GatePassed{Job: jobID, At: at(14)})
+					step(domain.GatePassed{Job: jobID, Run: passingRun, At: at(14)})
 					for _, role := range reviewers {
 						step(pass(role, 15))
 					}

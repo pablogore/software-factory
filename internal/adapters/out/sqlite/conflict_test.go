@@ -85,7 +85,7 @@ func conflictContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 
 			b, vb, err := st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.BeNil())
-			gate := domain.GateFailed{Job: jobID, At: at(2)}
+			gate := domain.GateFailed{Job: jobID, Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at(2)}
 			second, _, err := st.Apply(bg, jobID, vb, pipeline(), gate)
 
 			ctx.Expect(err).To(specs.BeNil())

@@ -93,7 +93,7 @@ func busContract(s *specs.Spec, open restartable) {
 		apply(ctx, st, "job-2", ready("job-2", 2))
 		// RoundStarted, which board did not register for, comes before this
 		// StageEntered.
-		apply(ctx, st, jobID, domain.GateFailed{Job: jobID, At: at(3)})
+		apply(ctx, st, jobID, domain.GateFailed{Job: jobID, Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at(3)})
 		board := &recorder{}
 		b := subscribed(ctx, st, newClock(), "board", board)
 
@@ -116,7 +116,7 @@ func busContract(s *specs.Spec, open restartable) {
 		ctx.Expect(b.Start(bg)).To(specs.BeNil())
 		ctx.Expect(board.got).ToEqual([]domain.Event{entered(jobID, domain.StageGate, 1), entered("job-2", domain.StageGate, 2)})
 
-		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, At: at(3)})
+		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(3)})
 		ctx.Expect(b.Dispatch(bg)).To(specs.BeNil())
 		ctx.Expect(board.got).ToEqual([]domain.Event{entered(jobID, domain.StageGate, 1), entered("job-2", domain.StageGate, 2), entered(jobID, "review", 3)})
 	})
@@ -143,7 +143,7 @@ func busContract(s *specs.Spec, open restartable) {
 		createJobs(ctx, st)
 		apply(ctx, st, jobID, ready(jobID, 1))
 		apply(ctx, st, "job-2", ready("job-2", 2))
-		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, At: at(3)})
+		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(3)})
 		broken := true
 		c := newClock()
 		failing, inbox := &recorder{fail: failsFor(jobID, &broken)}, &recorder{}
@@ -236,8 +236,8 @@ func busContract(s *specs.Spec, open restartable) {
 		ctx.Expect(ds).To(specs.HaveLen(1))
 		ctx.Expect(ds[0].Dead).To(specs.BeTrue())
 
-		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, At: at(3)})
-		apply(ctx, st, "job-2", domain.GatePassed{Job: "job-2", At: at(4)})
+		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(3)})
+		apply(ctx, st, "job-2", domain.GatePassed{Job: "job-2", Run: domain.ChecksRun{Command: "make check"}, At: at(4)})
 		ctx.Expect(b.Dispatch(bg)).To(specs.BeNil())
 		ctx.Expect(board.got).ToEqual([]domain.Event{entered("job-2", domain.StageGate, 2), entered("job-2", "review", 4)})
 		ctx.Expect(inbox.got).To(specs.HaveLen(4))
@@ -259,7 +259,7 @@ func busContract(s *specs.Spec, open restartable) {
 		b := subscribed(ctx, st, c, "board", board)
 		ctx.Expect(b.Start(bg)).To(specs.BeNil())
 		exhaust(ctx, b, c)
-		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, At: at(3)})
+		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(3)})
 		ctx.Expect(b.Dispatch(bg)).To(specs.BeNil())
 		ctx.Expect(board.got).To(specs.BeEmpty())
 
@@ -279,7 +279,7 @@ func busContract(s *specs.Spec, open restartable) {
 		gate := func(_ context.Context, ev domain.Event) error {
 			got = append(got, ev)
 			if ev.(domain.StageEntered).Stage == domain.StageGate {
-				apply(ctx, st, jobID, domain.GatePassed{Job: jobID, At: at(2)})
+				apply(ctx, st, jobID, domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(2)})
 			}
 			return nil
 		}

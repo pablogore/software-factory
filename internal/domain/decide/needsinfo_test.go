@@ -120,7 +120,7 @@ func TestNeedsInfo(t *testing.T) {
 			rows := []eventRow{
 				{"refuses a result", needsInfo()},
 				{"refuses a person's approval", domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(2)}},
-				{"refuses a gate OK", domain.GatePassed{Job: jobID, At: at(2)}},
+				{"refuses a gate OK", domain.GatePassed{Job: jobID, Run: passingRun, At: at(2)}},
 			}
 			specs.Table(s, rows, func(r eventRow) string { return r.name }, func(ctx *specs.Context, r eventRow) {
 				evs, err := decide.Decide(askingJob(), r.ev, defaultPipeline())

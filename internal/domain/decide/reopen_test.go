@@ -90,7 +90,7 @@ func TestReopen(t *testing.T) {
 				for _, ev := range []domain.Event{
 					message(domain.AuthorPerson, true, 1),
 					result("builder", 2, domain.BuildResult{Status: domain.BuildReady}),
-					domain.GatePassed{Job: jobID, At: at(3)},
+					domain.GatePassed{Job: jobID, Run: passingRun, At: at(3)},
 					pass("reviewer-security", 4), pass("reviewer-ux", 4), pass("reviewer-ui", 4), pass("security-deep", 4),
 					changes("reviewer-code", 5),
 				} {

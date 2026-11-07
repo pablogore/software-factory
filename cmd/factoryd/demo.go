@@ -53,6 +53,9 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := loopback(*addr); err != nil {
+		return err
+	}
 	store, err := memstore.New()
 	if err != nil {
 		return err
@@ -140,7 +143,7 @@ func newRound(ctx context.Context, store *memstore.Store, tokens *jobtoken.Token
 			return "", err
 		}
 	}
-	if _, _, err := store.Apply(ctx, id, v, p, domain.GateFailed{Job: id, At: now}); err != nil {
+	if _, _, err := store.Apply(ctx, id, v, p, domain.GateFailed{Job: id, Run: domain.ChecksRun{Command: "demo checks", ExitCode: 1}, At: now}); err != nil {
 		return "", err
 	}
 	if job, _, err = store.Load(ctx, id); err != nil {
@@ -151,6 +154,23 @@ func newRound(ctx context.Context, store *memstore.Store, tokens *jobtoken.Token
 		return "", err
 	}
 	return tokens.Issue(jobtoken.For(job, hist, "builder", domain.KindBuild))
+}
+
+// errNotLoopback refuses an address other machines could reach: the demo's
+// newRoundPath takes no token.
+var errNotLoopback = errors.New("worker demo listens on loopback only, since " + newRoundPath + " takes no token; use 127.0.0.1, ::1 or localhost")
+
+// loopback refuses addr unless its host is localhost or a loopback IP. An
+// empty host or 0.0.0.0 listens on every interface, so neither is one.
+func loopback(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("--addr %q: %w", addr, err)
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("--addr %q: %w", addr, errNotLoopback)
+	}
+	return nil
 }
 
 // mcpURL is the MCP endpoint of job id on the demo at base.

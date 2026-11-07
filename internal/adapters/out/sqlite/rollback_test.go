@@ -39,7 +39,7 @@ func TestStoreDatabase(t *testing.T) {
 				BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, _, err = st.Apply(bg, job.ID, 1, p, domain.GateFailed{Job: job.ID, At: at})
+			_, _, err = st.Apply(bg, job.ID, 1, p, domain.GateFailed{Job: job.ID, Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at})
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			got, v, err := st.Load(bg, job.ID)

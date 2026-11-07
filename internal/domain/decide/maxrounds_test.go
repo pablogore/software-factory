@@ -62,9 +62,9 @@ func TestDecideMaxRounds(t *testing.T) {
 		s.When("the gate fails", func(s *specs.Spec) {
 			rows := []maxRoundsRow{
 				{"with limits.max_rounds 2 and no stage value, round 2 goes to triage", nil, &two, 2,
-					[]domain.Event{triaging("gate failed in the last round (2 of 2)", domain.CauseGateFailed, 1)}},
+					[]domain.Event{ran(2, 1, failingRun), triaging("gate failed in the last round (2 of 2)", domain.CauseGateFailed, 1)}},
 				{"with stage max_rounds 4 over limits.max_rounds 2, round 2 goes back to build", &four, &two, 2,
-					[]domain.Event{started(3, 1), entered("build", 1)}},
+					[]domain.Event{ran(2, 1, failingRun), started(3, 1), entered("build", 1)}},
 			}
 			specs.Table(s, rows, func(r maxRoundsRow) string { return r.name }, func(ctx *specs.Context, r maxRoundsRow) {
 				p := defaultPipeline()

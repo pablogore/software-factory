@@ -33,6 +33,16 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "gate-demo" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		err := gateDemo(ctx, os.Args[2:], os.Stdout)
+		stop()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "factoryd gate-demo:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	fmt.Fprintln(os.Stderr, "factoryd: nothing to run yet; see docs/factoryd/README.md")
 	os.Exit(2)
 }

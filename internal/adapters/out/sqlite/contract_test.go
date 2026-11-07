@@ -152,7 +152,7 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			evs, v, err := st.Apply(bg, jobID, v, pipeline(), built(domain.BuildReady, 1))
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(evs).ToEqual([]domain.Event{domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)}})
-			_, v, err = st.Apply(bg, jobID, v, pipeline(), domain.GatePassed{Job: jobID, At: at(2)})
+			_, v, err = st.Apply(bg, jobID, v, pipeline(), domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(2)})
 			ctx.Expect(err).To(specs.BeNil())
 			_, v, err = st.Apply(bg, jobID, v, pipeline(), review)
 			ctx.Expect(err).To(specs.BeNil())
@@ -162,8 +162,10 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			ctx.Expect(gotV).ToEqual(v)
 			ctx.Expect(got.Stage).ToEqual("review")
 			ctx.Expect(got.Passed).ToEqual([]string{"reviewer-code"})
+			run := domain.ChecksRun{Command: "make check"}
 			want := decide.Apply(job, []domain.Event{
 				domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)},
+				domain.ChecksRan{Job: jobID, Round: 1, Run: run, At: at(2)},
 				domain.StageEntered{Job: jobID, Stage: "review", At: at(2)},
 				domain.ReviewPassed{Job: jobID, Role: "reviewer-code", At: at(3)},
 			})
@@ -173,6 +175,7 @@ func storeContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(hist).ToEqual([]ports.Record{
 				record(domain.StageEntered{Job: jobID, Stage: domain.StageGate, At: at(1)}, at(1)),
+				record(domain.ChecksRan{Job: jobID, Round: 1, Run: run, At: at(2)}, at(2)),
 				record(domain.StageEntered{Job: jobID, Stage: "review", At: at(2)}, at(2)),
 				record(domain.ReviewPassed{Job: jobID, Role: "reviewer-code", At: at(3)}, at(3)),
 			})
