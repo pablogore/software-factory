@@ -32,8 +32,21 @@ type Caps struct {
 	USD float64
 }
 
-// DefaultCaps are the caps of a run whose config sets none.
+// DefaultCaps are the caps of a run whose config sets none; a config that
+// sets one of them starts from these.
 var DefaultCaps = Caps{Slices: 5, USD: 8}
+
+// Validate returns an error naming the first cap under 1: a cap of 0 would
+// stop every issue before its first slice.
+func (c Caps) Validate() error {
+	if c.Slices < 1 {
+		return fmt.Errorf("runmode: cap slices is %d, must be at least 1: %w", c.Slices, domain.ErrInvalidValue)
+	}
+	if c.USD < 1 {
+		return fmt.Errorf("runmode: cap usd is %v, must be at least 1: %w", c.USD, domain.ErrInvalidValue)
+	}
+	return nil
+}
 
 // Stop is why an issue starts no more slices: the cap it reached, the cap's
 // value and the value the issue reached.
@@ -86,16 +99,13 @@ type Starter struct {
 	inbox   StopInbox
 }
 
-// NewStarter returns a starter that runs slices in slots under caps; a zero
-// field of caps, one the run's config does not set, takes DefaultCaps'.
-func NewStarter(slots Slots, caps Caps, reports Reports, outbox Outbox, inbox StopInbox) *Starter {
-	if caps.Slices == 0 {
-		caps.Slices = DefaultCaps.Slices
+// NewStarter returns a starter that runs slices in slots under caps, or an
+// error when caps does not validate.
+func NewStarter(slots Slots, caps Caps, reports Reports, outbox Outbox, inbox StopInbox) (*Starter, error) {
+	if err := caps.Validate(); err != nil {
+		return nil, err
 	}
-	if caps.USD == 0 {
-		caps.USD = DefaultCaps.USD
-	}
-	return &Starter{slots: slots, caps: caps, reports: reports, outbox: outbox, inbox: inbox}
+	return &Starter{slots: slots, caps: caps, reports: reports, outbox: outbox, inbox: inbox}, nil
 }
 
 // Start hands w, job's work as the slice ev asks for, to the scheduler, as
