@@ -15,9 +15,11 @@ import (
 // Differ reads diffs with the git of factoryd's environment.
 type Differ struct{}
 
-// Changes lists the tracked files that differ between the worktree at dir,
+// Changes lists the files that differ between the worktree at dir,
 // committed or not, and where its branch left base. Renames come as a
-// deletion and an addition. Untracked files are not listed.
+// deletion and an addition. An untracked file that .gitignore doesn't ignore
+// comes last as an addition: the builder touched it even though no diff
+// shows it.
 func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChange, error) {
 	if base == "" {
 		return nil, fmt.Errorf("gitdiff: %w: base", domain.ErrMissingField)
@@ -30,19 +32,33 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 	if err != nil {
 		return nil, err
 	}
-	if out == "" {
-		return nil, nil
-	}
 	// -z gives status and path as separate NUL-terminated fields.
-	fields := strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
+	fields := nulFields(out)
 	if len(fields)%2 != 0 {
 		return nil, fmt.Errorf("gitdiff: unexpected git diff output %q: %w", out, domain.ErrInvalidValue)
 	}
-	changes := make([]domain.FileChange, 0, len(fields)/2)
+	var changes []domain.FileChange
 	for i := 0; i < len(fields); i += 2 {
 		changes = append(changes, domain.FileChange{Path: fields[i+1], Kind: kind(fields[i])})
 	}
+	// ":/" lists from the repo root whatever dir is, and --full-name keeps
+	// paths from the root like git diff's.
+	untracked, err := git(ctx, dir, "ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":/")
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range nulFields(untracked) {
+		changes = append(changes, domain.FileChange{Path: p, Kind: domain.ChangeAdded})
+	}
 	return changes, nil
+}
+
+// nulFields splits git's -z output, which ends in a NUL, into its fields.
+func nulFields(out string) []string {
+	if out == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(out, "\x00"), "\x00")
 }
 
 // kind maps git's status letter; a type change or an unmerged file counts as
