@@ -6,7 +6,7 @@ import "fmt"
 // schema of the result it submits and how the flow reacts to it (04-roles.md).
 type Kind string
 
-// The six kinds. A new kind needs Go code and a schema.
+// The seven kinds. A new kind needs Go code and a schema.
 const (
 	KindIntake  Kind = "intake"
 	KindSpec    Kind = "spec"
@@ -14,10 +14,13 @@ const (
 	KindReview  Kind = "review"
 	KindApprove Kind = "approve"
 	KindTask    Kind = "task"
+	// KindTriage looks at a job that hit a wall before a person does. It
+	// runs outside the pipeline, so no stage has it.
+	KindTriage Kind = "triage"
 )
 
-// Kinds lists every kind in pipeline order.
-var Kinds = []Kind{KindIntake, KindSpec, KindBuild, KindReview, KindApprove, KindTask}
+// Kinds lists every kind in pipeline order, then triage.
+var Kinds = []Kind{KindIntake, KindSpec, KindBuild, KindReview, KindApprove, KindTask, KindTriage}
 
 // Validate returns an error when k is not one of Kinds.
 func (k Kind) Validate() error {
@@ -42,6 +45,8 @@ func DefaultRole(k Kind) (string, bool) {
 		return "builder", true
 	case KindApprove:
 		return "approver", true
+	case KindTriage:
+		return "tech-lead", true
 	default:
 		return "", false
 	}

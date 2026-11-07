@@ -40,10 +40,16 @@ func TestKinds(t *testing.T) {
 			{"decides an approver APPROVE", "approve", "approver", domain.ApproveResult{Decision: domain.ApproveApprove}, false},
 			{"decides an approver ESCALATE", "approve", "approver", domain.ApproveResult{Decision: domain.ApproveEscalate}, false},
 			{"leaves a task result unsupported (#76)", "changelog", "scribe", domain.TaskResult{Produces: []string{"CHANGELOG.md"}}, true},
+			{"decides a triage RETRY", domain.StageTriage, "tech-lead", domain.TriageResult{Decision: domain.TriageRetry, Brief: triageBrief}, false},
+			{"decides a triage ESCALATE", domain.StageTriage, "tech-lead", domain.TriageResult{Decision: domain.TriageEscalate, Question: triageQuestion}, false},
 		}
 		specs.Table(s, rows, func(r kindRow) string { return r.name }, func(ctx *specs.Context, r kindRow) {
 			job := newJob()
 			job.Stage = r.stage
+			if r.stage == domain.StageTriage {
+				// A job only gets to triage by hitting a wall, which it records.
+				job.Wall = domain.CauseBlocked
+			}
 
 			evs, err := decide.Decide(job, result(r.role, 1, r.result), taskPipeline())
 

@@ -108,6 +108,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return specgateFailed(job, e, p)
 	case domain.GateFailed:
 		return gateFailed(job, e, p)
+	case domain.MergeFailed:
+		return mergeFailed(job, e, p)
 	case domain.BudgetExhausted:
 		return budgetExhausted(job, e, p)
 	case domain.HumanApproved:
@@ -209,8 +211,15 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
-			job.Reason, job.Cause = e.Reason, e.Cause
+			job.Reason, job.Cause, job.Question, job.Wall = e.Reason, e.Cause, e.Question, ""
 			job.WaitSeq++
+		case domain.TriageRequested:
+			// Reviewers stay, so a retried round runs the same ones again.
+			job.Stage, job.InfoFrom, job.Passed, job.Changes = domain.StageTriage, "", nil, nil
+			job = leftNeedsHuman(job)
+			job.Reason, job.Wall = e.Reason, e.Cause
+		case domain.TriageRetried:
+			job.TriageRetries++
 		case domain.MergeRequested:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageMerge, "", nil, nil, nil
 			job = leftNeedsHuman(job)
@@ -229,14 +238,17 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 	return job
 }
 
-// leftNeedsHuman forgets why the job was in needs-human, so a later stop for
-// a person never inherits an old cause.
+// leftNeedsHuman forgets why the job was in needs-human or triage, so a later
+// stop for a person never inherits an old cause or question.
 func leftNeedsHuman(job domain.Job) domain.Job {
-	job.Reason, job.Cause = "", ""
+	job.Reason, job.Cause, job.Question, job.Wall = "", "", "", ""
 	return job
 }
 
 func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) ([]domain.Event, error) {
+	if job.Stage == domain.StageTriage {
+		return triaged(job, e, p)
+	}
 	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage })
 	if i < 0 || isNil(e.Result) {
 		return nil, illegal(job, e)
@@ -271,9 +283,7 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 		if r.Status == domain.BuildReady {
 			return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageGate, At: e.At}}, nil
 		}
-		// No pipeline has a triage stage yet (E02), so a blocked build waits
-		// for a person, whose feedback sends it back to build.
-		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: blocked(e.Role, r.Summary), Cause: domain.CauseBlocked, At: e.At}}, nil
+		return wall(job, p, domain.CauseBlocked, blocked(e.Role, r.Summary), e.At), nil
 	case domain.ReviewResult:
 		return reviewed(job, e, r, p, i)
 	case domain.ApproveResult:
@@ -415,6 +425,22 @@ func maxRounds(job domain.Job, p domain.Pipeline, st domain.Stage) int {
 	return p.MaxRounds(st)
 }
 
+// roundLimit is how many rounds the job has in review stage st: its
+// maxRounds plus one for every round triage gave it, so a retried job gets
+// its round and a wall in it goes to triage again.
+func roundLimit(job domain.Job, p domain.Pipeline, st domain.Stage) int {
+	return maxRounds(job, p, st) + job.TriageRetries
+}
+
+// triageRetries is the job's own triage_retries when a person overrode it,
+// else the pipeline's.
+func triageRetries(job domain.Job, p domain.Pipeline) int {
+	if job.Limits.TriageRetries != nil {
+		return *job.Limits.TriageRetries
+	}
+	return p.TriageRetries()
+}
+
 // specRejections is the job's own spec_rejections when a person overrode it,
 // else the pipeline's.
 func specRejections(job domain.Job, p domain.Pipeline) int {
@@ -465,7 +491,7 @@ func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 		return respecified(job, e, p, true)
 	case domain.CauseSpecException:
 		return respecified(job, e, p, false)
-	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated, domain.CauseActionFailed:
+	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated, domain.CauseActionFailed, domain.CauseMergeFailed:
 		if limit, ok := humanReworks(job, p); ok && job.HumanReworks >= limit {
 			return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
 		}
@@ -571,9 +597,9 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 	if len(blocking) == 0 {
 		return append(evs, next(job, p, i, e.At)...), nil
 	}
-	if limit := maxRounds(job, p, stage); job.Round >= limit {
+	if limit := roundLimit(job, p, stage); job.Round >= limit {
 		reason := fmt.Sprintf("CHANGES in the last round (%d of %d) from %s", job.Round, limit, strings.Join(inOrder(stage.Roles, blocking), ", "))
-		return append(evs, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseChanges, At: e.At}), nil
+		return append(evs, wall(job, p, domain.CauseChanges, reason, e.At)...), nil
 	}
 	return append(evs,
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: rerun(p, stage.Roles, changes), At: e.At},
@@ -700,9 +726,9 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 	if r < 0 {
 		return nil, fmt.Errorf("decide: pipeline %q has no review stage", p.Name)
 	}
-	if limit := maxRounds(job, p, p.Stages[r]); job.Round >= limit {
+	if limit := roundLimit(job, p, p.Stages[r]); job.Round >= limit {
 		reason := fmt.Sprintf("gate failed in the last round (%d of %d)", job.Round, limit)
-		return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseGateFailed, At: e.At}}, nil
+		return wall(job, p, domain.CauseGateFailed, reason, e.At), nil
 	}
 	return []domain.Event{
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: slices.Clone(job.Reviewers), At: e.At},
@@ -710,10 +736,10 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 	}, nil
 }
 
-// budgetExhausted stops a job in a pipeline stage, the only stages that
-// launch agents, until a person acts.
+// budgetExhausted stops a job in a pipeline stage or in triage, the only
+// stages that launch agents, until a person acts.
 func budgetExhausted(job domain.Job, e domain.BudgetExhausted, p domain.Pipeline) ([]domain.Event, error) {
-	if !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage }) {
+	if job.Stage != domain.StageTriage && !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage }) {
 		return nil, illegal(job, e)
 	}
 	return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: "budget exhausted", Cause: domain.CauseBudget, At: e.At}}, nil

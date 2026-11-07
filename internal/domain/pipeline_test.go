@@ -51,6 +51,17 @@ func TestPipeline(t *testing.T) {
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
 
+		s.It("accepts triage_retries 0, which turns triage off", func(ctx *specs.Context) {
+			p := validPipeline()
+			p.Limits = domain.Limits{TriageRetries: ptr(0)}
+			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
+			ctx.Expect(p.TriageRetries()).ToEqual(0)
+		})
+
+		s.It("takes triage_retries 1 when the pipeline doesn't set it", func(ctx *specs.Context) {
+			ctx.Expect(validPipeline().TriageRetries()).ToEqual(1)
+		})
+
 		s.It("accepts every limit at its cap and a review at the max_rounds cap", func(ctx *specs.Context) {
 			p := validPipeline()
 			p.Limits = domain.Limits{SpecRejections: ptr(10), HumanReworks: ptr(10), TriageRetries: ptr(3), MaxRounds: ptr(10)}
@@ -108,13 +119,13 @@ func TestPipeline(t *testing.T) {
 		s.It("names a stage listing a role another stage takes by default", func(ctx *specs.Context) {
 			intake := domain.Role{Name: "intake", Kind: domain.KindIntake, Prompt: "roles/intake.md"}
 			p := validPipeline()
-			p.Stages = append([]domain.Stage{{Name: "triage", Kind: domain.KindIntake}}, p.Stages...)
+			p.Stages = append([]domain.Stage{{Name: "screen", Kind: domain.KindIntake}}, p.Stages...)
 			p.Stages[1].Roles = []string{"intake"}
 
 			err := p.Validate(append(slices.Clone(roles), intake))
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
-			ctx.Expect(err.Error()).ToEqual(`stage intake: invalid value: role "intake" is also in stage triage`)
+			ctx.Expect(err.Error()).ToEqual(`stage intake: invalid value: role "intake" is also in stage screen`)
 		})
 
 		s.It("names a role loaded from two role files", func(ctx *specs.Context) {
@@ -208,6 +219,12 @@ func TestPipeline(t *testing.T) {
 				{"names a done stage of kind approve", func(p *domain.Pipeline) {
 					p.Stages[3].Name = "done"
 				}, domain.ErrInvalidValue, "stage done: invalid value: stage name is reserved"},
+				{"names a triage stage of kind intake", func(p *domain.Pipeline) {
+					p.Stages[0].Name = "triage"
+				}, domain.ErrInvalidValue, "stage triage: invalid value: stage name is reserved"},
+				{"names a stage of kind triage", func(p *domain.Pipeline) {
+					p.Stages = append(p.Stages[:2], append([]domain.Stage{{Name: "second-look", Kind: domain.KindTriage}}, p.Stages[2:]...)...)
+				}, domain.ErrInvalidValue, "stage second-look: invalid value: triage runs outside the pipeline"},
 				{"names an approve stage with no review stage", func(p *domain.Pipeline) {
 					p.Stages = []domain.Stage{p.Stages[0], p.Stages[1], p.Stages[3]}
 				}, domain.ErrInvalidValue, "stage approve: invalid value: approve stage has no review stage before it"},
@@ -268,17 +285,17 @@ func TestPipeline(t *testing.T) {
 					)
 				}, domain.ErrInvalidValue, `stage notify: invalid value: role "scribe" is also in stage changelog`},
 				{"names a default role filling a second stage of its kind", func(p *domain.Pipeline) {
-					p.Stages = append([]domain.Stage{{Name: "triage", Kind: domain.KindIntake}}, p.Stages...)
-				}, domain.ErrInvalidValue, `stage intake: invalid value: role "intake" is also in stage triage`},
+					p.Stages = append([]domain.Stage{{Name: "screen", Kind: domain.KindIntake}}, p.Stages...)
+				}, domain.ErrInvalidValue, `stage intake: invalid value: role "intake" is also in stage screen`},
 				{"names spec_rejections 0", func(p *domain.Pipeline) {
 					p.Limits.SpecRejections = ptr(0)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: spec_rejections 0, want at least 1"},
 				{"names negative human_reworks", func(p *domain.Pipeline) {
 					p.Limits.HumanReworks = ptr(-1)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: human_reworks -1, want at least 1"},
-				{"names triage_retries 0", func(p *domain.Pipeline) {
-					p.Limits.TriageRetries = ptr(0)
-				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: triage_retries 0, want at least 1"},
+				{"names negative triage_retries", func(p *domain.Pipeline) {
+					p.Limits.TriageRetries = ptr(-1)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: triage_retries -1, want at least 0"},
 				{"names max_rounds 0 in limits", func(p *domain.Pipeline) {
 					p.Limits.MaxRounds = ptr(0)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: max_rounds 0, want at least 1"},

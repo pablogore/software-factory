@@ -85,7 +85,7 @@ func TestReopen(t *testing.T) {
 				ctx.Expect(after.Round).ToEqual(3)
 			})
 
-			s.It("sends a reopened job in its last round to needs-human on CHANGES", func(ctx *specs.Context) {
+			s.It("sends a reopened job in its last round to triage on CHANGES", func(ctx *specs.Context) {
 				job := doneJob()
 				for _, ev := range []domain.Event{
 					message(domain.AuthorPerson, true, 1),
@@ -99,7 +99,8 @@ func TestReopen(t *testing.T) {
 					job = decide.Apply(job, evs)
 				}
 
-				ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
+				ctx.Expect(job.Stage).ToEqual(domain.StageTriage)
+				ctx.Expect(job.Wall).ToEqual(domain.CauseChanges)
 				ctx.Expect(job.Round).ToEqual(3)
 			})
 		})

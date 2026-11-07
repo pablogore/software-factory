@@ -7,7 +7,7 @@ import "fmt"
 // person (02-diagramas.md), the wait for an answer to a stage's question,
 // the merged job, which a person's comment can reopen, the stop a person
 // asked for and the slice a person's direction dropped before it merged,
-// both final.
+// both final, and the triage of a job that hit a wall.
 const (
 	StageSpecgate   = "specgate"
 	StageGate       = "gate"
@@ -17,6 +17,7 @@ const (
 	StageNeedsInfo  = "needs-info"
 	StageStopped    = "stopped"
 	StageRejected   = "rejected"
+	StageTriage     = "triage"
 )
 
 // JobID identifies a job inside factoryd.
@@ -32,11 +33,14 @@ type Job struct {
 	Round          int            `json:"round"`                     // review round, from 1
 	SpecRejections int            `json:"spec_rejections,omitempty"` // times specgate rejected the spec
 	HumanReworks   int            `json:"human_reworks,omitempty"`   // reworks back to build a person sent from needs-human; never reset
+	TriageRetries  int            `json:"triage_retries,omitempty"`  // rounds triage gave the job after a wall; never reset
 	Limits         Limits         `json:"limits,omitzero"`           // limits a person overrode for this job; a nil one is the pipeline's
 	ReworksLifted  bool           `json:"reworks_lifted,omitempty"`  // a person overrode human_reworks to unlimited for this job
 	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer
-	Reason         string         `json:"reason,omitempty"`          // in needs-human, why the job is there; rejected by intake, intake's reason
+	Reason         string         `json:"reason,omitempty"`          // in needs-human or triage, why the job is there; rejected by intake, intake's reason
 	Cause          HumanCause     `json:"cause,omitempty"`           // in needs-human, which of HumanCauses put the job there
+	Question       string         `json:"question,omitempty"`        // in needs-human after a wall, the closed question for the person
+	Wall           HumanCause     `json:"wall,omitempty"`            // in triage, the cause the job waits in needs-human with if triage escalates
 	WaitSeq        int            `json:"wait_seq"`                  // entries into needs-human, needs-info or done so far; a person's action names the one it answers
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
@@ -48,9 +52,9 @@ type Job struct {
 
 // Validate checks the invariants Apply keeps on every job Decide folds: a
 // wait stage (needs-human, needs-info, done) was entered at least once, so
-// WaitSeq is not 0, and a job in needs-human records one of HumanCauses. A
-// store refuses to save or load a job that breaks them. The error names the
-// field.
+// WaitSeq is not 0, a job in needs-human records one of HumanCauses and a
+// job in triage records the wall it hit as one of them. A store refuses to
+// save or load a job that breaks them. The error names the field.
 func (j Job) Validate() error {
 	if j.WaitSeq == 0 && (j.Stage == StageNeedsHuman || j.Stage == StageNeedsInfo || j.Stage == StageDone) {
 		return fmt.Errorf("job %q: %w: wait_seq 0 in stage %q", j.ID, ErrInvalidValue, j.Stage)
@@ -58,6 +62,11 @@ func (j Job) Validate() error {
 	if j.Stage == StageNeedsHuman || j.Cause != "" {
 		if err := j.Cause.Validate(); err != nil {
 			return fmt.Errorf("job %q: %w", j.ID, err)
+		}
+	}
+	if j.Stage == StageTriage || j.Wall != "" {
+		if err := j.Wall.Validate(); err != nil {
+			return fmt.Errorf("job %q: wall: %w", j.ID, err)
 		}
 	}
 	return nil

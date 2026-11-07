@@ -242,9 +242,9 @@ func TestDecide(t *testing.T) {
 					[]domain.Event{asked("security-deep", 1), started(2, 1, "security-deep"), entered("build", 1)}},
 				{"CHANGES in round 2 of 3 goes back to build at round 3", 2, reviewers[1:], nil, changes("reviewer-security", 1),
 					[]domain.Event{asked("reviewer-security", 1), started(3, 1, "reviewer-security"), entered("build", 1)}},
-				{"CHANGES in round 3 of 3 ends in needs-human naming the reviewers", 3, []string{"reviewer-ux", "reviewer-ui"}, []string{"security-deep", "reviewer-security"}, changes("reviewer-code", 1),
-					[]domain.Event{asked("reviewer-code", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-security, reviewer-code, security-deep", Cause: domain.CauseChanges, At: at(1)}}},
+				{"CHANGES in round 3 of 3 goes to triage naming the reviewers", 3, []string{"reviewer-ux", "reviewer-ui"}, []string{"security-deep", "reviewer-security"}, changes("reviewer-code", 1),
+					[]domain.Event{asked("reviewer-code", 1),
+						triaging("CHANGES in the last round (3 of 3) from reviewer-security, reviewer-code, security-deep", domain.CauseChanges, 1)}},
 				{"all PASS in round 3 of 3 enters approve", 3, reviewers[:4], nil, pass("security-deep", 1),
 					[]domain.Event{passed("security-deep", 1), entered("approve", 1)}},
 			}
@@ -286,14 +286,12 @@ func TestDecide(t *testing.T) {
 					[]domain.Event{asked("reviewer-ux", 3), entered("approve", 3)}},
 				{"mixed round with a blocking CHANGES goes back to build at round 2", 1, []string{"reviewer-ui", "reviewer-code"}, []string{"reviewer-ux", "security-deep"}, changes("reviewer-security", 1),
 					roundTwo("reviewer-security", "reviewer-security", "reviewer-ux", "security-deep")},
-				{"mixed round in round 3 of 3 ends in needs-human naming only the blocking reviewer", 3, []string{"reviewer-ui", "reviewer-code"}, []string{"reviewer-ux", "security-deep"}, changes("reviewer-security", 1),
-					[]domain.Event{asked("reviewer-security", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-security", Cause: domain.CauseChanges, At: at(1)}}},
+				{"mixed round in round 3 of 3 goes to triage naming only the blocking reviewer", 3, []string{"reviewer-ui", "reviewer-code"}, []string{"reviewer-ux", "security-deep"}, changes("reviewer-security", 1),
+					[]domain.Event{asked("reviewer-security", 1), triaging("CHANGES in the last round (3 of 3) from reviewer-security", domain.CauseChanges, 1)}},
 				{"CHANGES from a role with no mode goes back to build at round 2", 1, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}, nil, changes("reviewer-code", 1),
 					roundTwo("reviewer-code", "reviewer-code")},
-				{"CHANGES from a role with no mode in round 3 of 3 ends in needs-human", 3, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}, nil, changes("reviewer-code", 1),
-					[]domain.Event{asked("reviewer-code", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-code", Cause: domain.CauseChanges, At: at(1)}}},
+				{"CHANGES from a role with no mode in round 3 of 3 goes to triage", 3, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}, nil, changes("reviewer-code", 1),
+					[]domain.Event{asked("reviewer-code", 1), triaging("CHANGES in the last round (3 of 3) from reviewer-code", domain.CauseChanges, 1)}},
 			}
 			specs.Table(s, rows, func(r reviewRow) string { return r.name }, func(ctx *specs.Context, r reviewRow) {
 				job := newJob()
@@ -369,14 +367,15 @@ func TestDecide(t *testing.T) {
 				ctx.Expect(job.Round).ToEqual(2)
 			})
 
-			s.It("ends in needs-human after CHANGES in every round", func(ctx *specs.Context) {
+			s.It("goes to triage after CHANGES in every round, keeping the round's reviewers", func(ctx *specs.Context) {
 				job := reviewRound(ctx, walk(ctx, happyPath(), 5), domain.ReviewChanges)
 				job = reviewRound(ctx, toReview(ctx, job, 30), domain.ReviewChanges)
 				job = reviewRound(ctx, toReview(ctx, job, 40), domain.ReviewChanges)
 
-				ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
+				ctx.Expect(job.Stage).ToEqual(domain.StageTriage)
+				ctx.Expect(job.Wall).ToEqual(domain.CauseChanges)
 				ctx.Expect(job.Round).ToEqual(3)
-				ctx.Expect(job.Reviewers).To(specs.BeEmpty())
+				ctx.Expect(job.Reviewers).ToEqual([]string{"reviewer-code"})
 				ctx.Expect(job.Passed).To(specs.BeEmpty())
 				ctx.Expect(job.Changes).To(specs.BeEmpty())
 			})

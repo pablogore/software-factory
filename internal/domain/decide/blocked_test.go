@@ -20,12 +20,14 @@ func building(round int) domain.Job {
 	return job
 }
 
-// blockedJob is a job a builder BLOCKED left in needs-human.
+// blockedJob is a job a builder BLOCKED left in needs-human, after triage
+// escalated it.
 func blockedJob(ctx *specs.Context, round int) domain.Job {
 	job := building(round)
 	evs, err := decide.Decide(job, blockedBuild("cannot reach the payments API", 1), defaultPipeline())
 	ctx.Expect(err).To(specs.BeNil())
-	return decide.Apply(job, evs)
+	job, _ = throughTriage(ctx, job, evs, defaultPipeline())
+	return job
 }
 
 type blockedRow struct {
@@ -44,8 +46,8 @@ func TestBlocked(t *testing.T) {
 	specs.Describe(t, "Decide on a builder BLOCKED", func(s *specs.Spec) {
 		s.When("the builder reports BLOCKED", func(s *specs.Spec) {
 			rows := []blockedRow{
-				{"waits for a person with the builder's summary in round 1", 1, "cannot reach the payments API", "cannot reach the payments API"},
-				{"waits for a person with the builder's summary in the last round", 3, "spec contradicts itself", "spec contradicts itself"},
+				{"goes to triage with the builder's summary in round 1", 1, "cannot reach the payments API", "cannot reach the payments API"},
+				{"goes to triage with the builder's summary in the last round", 3, "spec contradicts itself", "spec contradicts itself"},
 				{"names the builder when it gave no summary", 2, "  ", "builder blocked"},
 			}
 			specs.Table(s, rows, func(r blockedRow) string { return r.name }, func(ctx *specs.Context, r blockedRow) {
@@ -54,10 +56,11 @@ func TestBlocked(t *testing.T) {
 				evs, err := decide.Decide(job, blockedBuild(r.summary, 1), defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				ctx.Expect(evs).ToEqual([]domain.Event{domain.NeedsHuman{Job: jobID, Reason: r.reason, Cause: domain.CauseBlocked, At: at(1)}})
+				ctx.Expect(evs).ToEqual([]domain.Event{triaging(r.reason, domain.CauseBlocked, 1)})
 				after := decide.Apply(job, evs)
-				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
+				ctx.Expect(after.Stage).ToEqual(domain.StageTriage)
 				ctx.Expect(after.Reason).ToEqual(r.reason)
+				ctx.Expect(after.Wall).ToEqual(domain.CauseBlocked)
 				ctx.Expect(after.Round).ToEqual(r.round)
 			})
 

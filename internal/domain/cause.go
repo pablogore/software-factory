@@ -14,6 +14,7 @@ const (
 	CauseSpecEscalated HumanCause = "spec-escalated" // specgate rejected the spec too often
 	CauseSpecException HumanCause = "spec-exception" // the spec asks for a length exception
 	CauseActionFailed  HumanCause = "action-failed"  // the destination refused an external action
+	CauseMergeFailed   HumanCause = "merge-failed"   // the merge did not go through
 )
 
 // CauseBudget means the job was about to launch an agent with its whole
@@ -22,7 +23,7 @@ const CauseBudget HumanCause = "budget-exhausted"
 
 // humanCauses is unexported because what a human OK may merge depends on
 // this set: no other package may add a cause to it.
-var humanCauses = []HumanCause{CauseBlocked, CauseEscalated, CauseChanges, CauseGateFailed, CauseSpecEscalated, CauseSpecException, CauseActionFailed, CauseBudget}
+var humanCauses = []HumanCause{CauseBlocked, CauseEscalated, CauseChanges, CauseGateFailed, CauseSpecEscalated, CauseSpecException, CauseActionFailed, CauseMergeFailed, CauseBudget}
 
 // HumanCauses lists every cause. It returns a copy, so changing it changes
 // neither the set nor what Validate accepts.
