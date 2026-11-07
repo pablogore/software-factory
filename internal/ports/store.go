@@ -28,8 +28,13 @@ type Version int64
 // (07-arquitectura.md). Every job a JobStore saves or loads passes
 // domain.Job.Validate; one that does not is an error naming the field.
 type JobStore interface {
-	// Create saves a new job with no events yet.
-	Create(ctx context.Context, job domain.Job) error
+	// Create saves a new job with no events yet. acts are saved to the
+	// Outbox with it, pending, in the same transaction, so a new job's
+	// first effects exist only if the job does. When the job exists
+	// already (ErrJobExists) or an action fails Validate, nothing is saved.
+	// An action whose Key is already saved, or repeats one in acts, is kept
+	// once and is not an error.
+	Create(ctx context.Context, job domain.Job, acts ...Action) error
 	Load(ctx context.Context, id domain.JobID) (domain.Job, Version, error)
 	// Apply runs decide.Decide for ev on job id as saved at version v, in
 	// pipeline p, and saves decide.Apply(job, evs) with the evs Decide
