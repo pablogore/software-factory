@@ -1,12 +1,13 @@
 // Package runmode is how a factory run moves between issues. In the default
 // mode it brakes between them: when an issue ends (its initiative DONE, a job
-// on its own merged or rejected) or a job stops for a person (needs-human or
-// needs-info), no new issue starts. What already runs ends, and the slices
+// on its own merged or rejected) or stops for a person (a job in needs-human
+// or needs-info, an initiative in needs-human), no new issue starts. What already runs ends, and the slices
 // of an initiative already running go on by its checkpoint, since they never
 // pass through the queue.
 //
 // On braking it publishes a summary of the issue, with the next issue the
-// queue would take and why, to the thread the issue came from, through the
+// queue would take, skipping the ones it holds, and why, as a code each
+// channel words in its language, to the thread the issue came from, through the
 // outbox, and to the inbox.
 //
 // Nothing calls it yet: the daemon will subscribe Mode.Handle to the bus.
@@ -29,7 +30,7 @@ import (
 const ActionSummary = "summary"
 
 // Events names the events Mode.Handle must be subscribed to.
-var Events = []string{"InitiativeEnded", "NeedsHuman", "NeedsInfo", "JobRejected", "StageEntered"}
+var Events = []string{"InitiativeEnded", "InitiativeNeedsHumanRaised", "NeedsHuman", "NeedsInfo", "JobRejected", "StageEntered"}
 
 // Reports tells what became of the issue a job belongs to.
 type Reports interface {
@@ -54,6 +55,7 @@ type Inbox interface {
 type Queue interface {
 	Add(ctx context.Context, issues ...queue.Issue)
 	Waiting() []queue.Issue
+	Held() []queue.Hold
 }
 
 // Mode brakes the run between issues and publishes the summary.
@@ -77,7 +79,7 @@ func New(brake *Brake, q Queue, order queue.Order, reports Reports, outbox Outbo
 // a person. A slice rejected or merged does not: its initiative replans.
 func Brakes(ev domain.Event, job domain.Job) bool {
 	switch e := ev.(type) {
-	case domain.InitiativeEnded, domain.NeedsHuman, domain.NeedsInfo:
+	case domain.InitiativeEnded, domain.InitiativeNeedsHumanRaised, domain.NeedsHuman, domain.NeedsInfo:
 		return true
 	case domain.JobRejected:
 		return job.Initiative == ""
@@ -107,7 +109,7 @@ func (m *Mode) Handle(ctx context.Context, ev domain.Event) error {
 	}
 	m.brake.Engage()
 
-	s := Summarize(r, job.ID, m.queue.Waiting(), m.order)
+	s := Summarize(r, job.ID, m.queue.Waiting(), m.queue.Held(), m.order)
 	payload, err := json.Marshal(struct {
 		Origin  domain.Origin `json:"origin"`
 		Summary Summary       `json:"summary"`
@@ -136,6 +138,8 @@ func (m *Mode) Release(ctx context.Context) {
 func at(ev domain.Event) time.Time {
 	switch e := ev.(type) {
 	case domain.InitiativeEnded:
+		return e.At
+	case domain.InitiativeNeedsHumanRaised:
 		return e.At
 	case domain.NeedsHuman:
 		return e.At
