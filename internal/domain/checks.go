@@ -9,13 +9,15 @@ import (
 // ChecksRun is one run of the repo's checks in a job's worktree: the command
 // as it was run, its exit code, how long it took and its combined output.
 // Violations are the gate's rules the job's diff broke, one reason each; the
-// builder gets them with the log.
+// builder gets them with the log. Notes say which of those rules did not
+// run and why, so a rule that was skipped is never read as one that passed.
 type ChecksRun struct {
 	Command    string        `json:"command"`
 	ExitCode   int           `json:"exit_code"`
 	Duration   time.Duration `json:"duration"`
 	Output     string        `json:"output"`
 	Violations []string      `json:"violations,omitempty"`
+	Notes      []string      `json:"notes,omitempty"`
 }
 
 // Passed reports whether the checks exited with 0 and the diff broke no rule.

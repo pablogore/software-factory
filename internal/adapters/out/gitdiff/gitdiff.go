@@ -1,6 +1,7 @@
 // Package gitdiff lists the files a job's worktree changed against its base,
 // and those its index hides changes of, and reads a file as either has it,
-// for the gate's diff rules.
+// for the gate's diff rules, and checks the base out apart from the worktree
+// for the gate to count its tests.
 package gitdiff
 
 import (

@@ -94,6 +94,12 @@ var (
 	failing = domain.ChecksRun{Command: "make check", ExitCode: 2, Duration: 3 * time.Second, Output: "--- FAIL: TestSave"}
 )
 
+// noted is run as a gate with no test count command keeps it.
+func noted(run domain.ChecksRun) domain.ChecksRun {
+	run.Notes = []string{build.NoCountCommand}
+	return run
+}
+
 // recorded is the base commit recorded for j-1 when its worktree was made.
 const recorded = "c0ffee0000000000000000000000000000000000"
 
@@ -157,7 +163,7 @@ func TestGate(t *testing.T) {
 
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(evs).ToEqual([]domain.Event{
-					domain.ChecksRan{Job: "j-1", Round: 1, Run: passing, At: at},
+					domain.ChecksRan{Job: "j-1", Round: 1, Run: noted(passing), At: at},
 					domain.StageEntered{Job: "j-1", Stage: "review", At: at},
 				})
 				job, _, err := store.Load(bg, "j-1")
@@ -192,7 +198,7 @@ func TestGate(t *testing.T) {
 				last, ok := build.LastChecks(hist)
 
 				ctx.Expect(ok).To(specs.BeTrue())
-				ctx.Expect(last).ToEqual(domain.ChecksRan{Job: "j-1", Round: 1, Run: failing, At: at})
+				ctx.Expect(last).ToEqual(domain.ChecksRan{Job: "j-1", Round: 1, Run: noted(failing), At: at})
 			})
 		})
 
