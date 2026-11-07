@@ -169,6 +169,18 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
 		})
 
+		s.It("still lists what the branch committed after the base commit is replaced by the branch's head", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			write(ctx, dir, "Makefile", "changed\n")
+			must(ctx, dir, "commit", "-q", "-am", "job")
+			must(ctx, dir, "replace", fork, "HEAD")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
+		})
+
 		s.It("fails for a base commit the repo does not have", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 

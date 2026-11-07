@@ -170,9 +170,11 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return gitEnv(ctx, dir, nil, args...)
 }
 
-// gitEnv is git with env added to this process's environment.
+// gitEnv is git with env added to this process's environment. It ignores
+// refs/replace/, which any worktree can write, so a replacement left by a job
+// never changes which commit a new job's worktree is made from.
 func gitEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects"}, args...)...)
 	cmd.Dir = dir
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)

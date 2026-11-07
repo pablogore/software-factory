@@ -130,6 +130,25 @@ func TestWorkspace(t *testing.T) {
 			ctx.Expect(got).ToEqual(recorded)
 		})
 
+		s.It("makes a job's worktree from the base's own commit, whatever refs/replace/ says it stands for", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			ws, store := newWorkspace(ctx, repo)
+			baseSHA := must(ctx, repo, "rev-parse", base)
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "planted.txt"), []byte("planted\n"), 0o600)).To(specs.BeNil())
+			must(ctx, repo, "add", "planted.txt")
+			must(ctx, repo, "commit", "-q", "-m", "planted")
+			must(ctx, repo, "replace", baseSHA, "main")
+
+			wt, err := ws.Prepare(bg, job)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(exists(filepath.Join(wt.Path, "planted.txt"))).To(specs.BeFalse())
+			ctx.Expect(must(ctx, wt.Path, "--no-replace-objects", "rev-parse", "HEAD")).ToEqual(baseSHA)
+			got, err := store.Base(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(baseSHA)
+		})
+
 		s.It("records no base for a worktree it reuses without one", func(ctx *specs.Context) {
 			repo := newRepo(ctx)
 			ws, _ := newWorkspace(ctx, repo)

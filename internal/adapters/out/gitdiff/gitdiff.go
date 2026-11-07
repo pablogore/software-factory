@@ -91,9 +91,11 @@ func kind(status string) domain.ChangeKind {
 }
 
 // git runs git in dir and returns its output untrimmed, since -z output ends
-// in a NUL; a failure carries git's own message.
+// in a NUL; a failure carries git's own message. --no-replace-objects: the
+// refs/replace/ refs are shared with the worktree, so a builder could make
+// the base commit stand for one of its own and hide what it changed.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects"}, args...)...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
