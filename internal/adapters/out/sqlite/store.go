@@ -1,5 +1,5 @@
 // Package sqlite implements ports.JobStore, ports.EventLog, ports.EventFeed,
-// ports.DeadEvents and ports.Outbox on SQLite with the pure-Go modernc.org/sqlite driver, so
+// ports.DeadEvents, ports.Outbox and ports.DiscardLog on SQLite with the pure-Go modernc.org/sqlite driver, so
 // factoryd builds with CGO_ENABLED=0.
 package sqlite
 
@@ -71,10 +71,19 @@ CREATE TABLE IF NOT EXISTS outbox (
 	failed       INTEGER NOT NULL DEFAULT 0,
 	result_lost  INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS discarded (
+	seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+	provider TEXT NOT NULL,
+	thread   TEXT NOT NULL,
+	request  TEXT NOT NULL,
+	author   TEXT NOT NULL,
+	at       TEXT NOT NULL,
+	UNIQUE (provider, thread, request)
+);
 `
 
-// Store is a JobStore, EventLog, EventFeed, DeadEvents and Outbox backed by
-// one SQLite file.
+// Store is a JobStore, EventLog, EventFeed, DeadEvents, Outbox and
+// DiscardLog backed by one SQLite file.
 type Store struct {
 	db        *sql.DB
 	maxReason int
@@ -113,16 +122,32 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
-// Create implements ports.JobStore.
-func (s *Store) Create(ctx context.Context, job domain.Job) error {
+// Create implements ports.JobStore: the job and its actions are saved in one
+// transaction, rolled back on the first failure. The insert comes first, so
+// of two creates of one job the late one finds it and saves nothing.
+func (s *Store) Create(ctx context.Context, job domain.Job, acts ...ports.Action) (err error) {
 	if err := job.Validate(); err != nil {
 		return fmt.Errorf("sqlite: create: %w", err)
+	}
+	for _, a := range acts {
+		if err := a.Validate(); err != nil {
+			return fmt.Errorf("sqlite: job %q: %w", job.ID, err)
+		}
 	}
 	state, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("sqlite: encode job %q: %w", job.ID, err)
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id, state, version) VALUES (?, ?, 1) ON CONFLICT (id) DO NOTHING`, string(job.ID), string(state))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin create %q: %w", job.ID, err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+	res, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, state, version) VALUES (?, ?, 1) ON CONFLICT (id) DO NOTHING`, string(job.ID), string(state))
 	if err != nil {
 		return fmt.Errorf("sqlite: create job %q: %w", job.ID, err)
 	}
@@ -130,6 +155,14 @@ func (s *Store) Create(ctx context.Context, job domain.Job) error {
 		return fmt.Errorf("sqlite: create job %q: %w", job.ID, err)
 	} else if n == 0 {
 		return fmt.Errorf("sqlite: %q: %w", job.ID, ports.ErrJobExists)
+	}
+	for _, a := range acts {
+		if err := enqueue(ctx, tx, job.ID, a); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit create %q: %w", job.ID, err)
 	}
 	return nil
 }
