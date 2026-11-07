@@ -123,19 +123,36 @@ func reply(s *scheduler.Scheduler, c *crew, name string) <-chan error {
 // budget is the USD budget every test scheduler is handed.
 const budget = 5.0
 
-// costs is a fake cost source: what each job has spent, nothing by default.
+// costs is a fake cost source: what each job has spent and its own budget,
+// nothing by default.
 type costs struct {
-	mu    sync.Mutex
-	spent map[domain.JobID]float64
-	err   error
+	mu     sync.Mutex
+	spent  map[domain.JobID]float64
+	budget map[domain.JobID]float64
+	err    error
 }
 
-func newCosts() *costs { return &costs{spent: map[domain.JobID]float64{}} }
+func newCosts() *costs {
+	return &costs{spent: map[domain.JobID]float64{}, budget: map[domain.JobID]float64{}}
+}
 
 func (c *costs) Spent(_ context.Context, job domain.JobID) (float64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.spent[job], c.err
+}
+
+func (c *costs) Budget(_ context.Context, job domain.JobID) (float64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.budget[job], nil
+}
+
+// raise sets job's own budget, as a person's raise does.
+func (c *costs) raise(job string, usd float64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.budget[domain.JobID(job)] = usd
 }
 
 func (c *costs) set(job string, usd float64) {

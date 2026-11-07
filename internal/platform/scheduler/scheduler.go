@@ -8,8 +8,9 @@
 // answer. New work never takes it.
 //
 // Before launching any work the scheduler asks how much its job has spent:
-// a job that spent its whole budget never runs its agent, and its slot goes
-// at once to the next work in line.
+// a job that spent its whole budget, its own when a person raised it or else
+// the scheduler's, never runs its agent, and its slot goes at once to the
+// next work in line.
 //
 // Work handed over as using GitHub launches only while GitHub's remaining
 // API limit is at or above a threshold. Below it, the work gives its slot to
@@ -73,9 +74,13 @@ type GitHub struct {
 	Clock     Clock
 }
 
-// CostSource tells how much a job has spent so far, in USD.
+// CostSource tells how much a job has spent so far, in USD, and its own
+// budget.
 type CostSource interface {
 	Spent(ctx context.Context, job domain.JobID) (float64, error)
+	// Budget is the job's own budget a person raised (domain.Job.Budget),
+	// or 0 when it has none and the scheduler's holds.
+	Budget(ctx context.Context, job domain.JobID) (float64, error)
 }
 
 // Work runs one agent. Its error is handed back to whoever submitted it;
@@ -230,8 +235,15 @@ func (s *Scheduler) launch(it item) (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: spend of job %q: %w", it.job, err)
 	}
-	if spent >= s.budget {
-		return 0, fmt.Errorf("scheduler: job %q spent USD %.2f of %.2f: %w", it.job, spent, s.budget, ErrBudgetExhausted)
+	budget, err := s.costs.Budget(it.ctx, it.job)
+	if err != nil {
+		return 0, fmt.Errorf("scheduler: budget of job %q: %w", it.job, err)
+	}
+	if budget == 0 {
+		budget = s.budget
+	}
+	if spent >= budget {
+		return 0, fmt.Errorf("scheduler: job %q spent USD %.2f of %.2f: %w", it.job, spent, budget, ErrBudgetExhausted)
 	}
 	wait, err := s.hold(it)
 	if err != nil || wait > 0 {

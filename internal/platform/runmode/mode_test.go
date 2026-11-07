@@ -99,6 +99,8 @@ type costs struct{ spent float64 }
 
 func (c costs) Spent(context.Context, domain.JobID) (float64, error) { return c.spent, nil }
 
+func (c costs) Budget(context.Context, domain.JobID) (float64, error) { return 0, nil }
+
 // plenty is a fake GitHub limit source with plenty of calls left.
 type plenty struct{}
 
