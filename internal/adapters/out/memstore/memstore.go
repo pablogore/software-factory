@@ -140,27 +140,37 @@ func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p dom
 		return nil, v, nil
 	}
 	evs = eventjson.CapReasons(evs, s.maxReason)
+	if err := s.keep(job, v, evs); err != nil {
+		return nil, 0, err
+	}
+	s.enqueue(id, acts)
+	return evs, v + 1, nil
+}
+
+// keep saves decide.Apply(job, evs) as version v+1 with evs, once everything
+// is encoded, so a failure keeps nothing.
+func (s *Store) keep(job domain.Job, v ports.Version, evs []domain.Event) error {
+	id := job.ID
 	next := decide.Apply(job, evs)
 	if err := next.Validate(); err != nil {
-		return nil, 0, fmt.Errorf("memstore: save: %w", err)
+		return fmt.Errorf("memstore: save: %w", err)
 	}
 	data, err := json.Marshal(next)
 	if err != nil {
-		return nil, 0, fmt.Errorf("memstore: encode job %q: %w", id, err)
+		return fmt.Errorf("memstore: encode job %q: %w", id, err)
 	}
 	envs := make([]eventjson.Envelope, 0, len(evs))
 	for _, ev := range evs {
 		env, err := eventjson.Encode(ev)
 		if err != nil {
-			return nil, 0, fmt.Errorf("memstore: job %q: %w", id, err)
+			return fmt.Errorf("memstore: job %q: %w", id, err)
 		}
 		envs = append(envs, env)
 	}
 	s.jobs[id] = data
 	s.versions[id] = v + 1
 	s.append(id, envs)
-	s.enqueue(id, acts)
-	return evs, v + 1, nil
+	return nil
 }
 
 // enqueue keeps each of acts pending for job id, unless its key is kept

@@ -5,7 +5,7 @@ package domain
 // for a person: Decide may route on the cause, never on the text.
 type HumanCause string
 
-// The six causes, one per way into needs-human.
+// The seven causes, one per way into needs-human.
 const (
 	CauseBlocked       HumanCause = "blocked"        // the builder reported BLOCKED
 	CauseEscalated     HumanCause = "escalated"      // the approver said ESCALATE
@@ -13,11 +13,12 @@ const (
 	CauseGateFailed    HumanCause = "gate-failed"    // the gate failed in the last round
 	CauseSpecEscalated HumanCause = "spec-escalated" // specgate rejected the spec too often
 	CauseSpecException HumanCause = "spec-exception" // the spec asks for a length exception
+	CauseActionFailed  HumanCause = "action-failed"  // the destination refused an external action
 )
 
 // humanCauses is unexported because what a human OK may merge depends on
 // this set: no other package may add a cause to it.
-var humanCauses = []HumanCause{CauseBlocked, CauseEscalated, CauseChanges, CauseGateFailed, CauseSpecEscalated, CauseSpecException}
+var humanCauses = []HumanCause{CauseBlocked, CauseEscalated, CauseChanges, CauseGateFailed, CauseSpecEscalated, CauseSpecException, CauseActionFailed}
 
 // HumanCauses lists every cause. It returns a copy, so changing it changes
 // neither the set nor what Validate accepts.

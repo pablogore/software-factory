@@ -154,6 +154,7 @@ func nilEvents() []eventRow {
 		{"a nil override", (*domain.OverrideRequested)(nil)},
 		{"a nil merge completed", (*domain.MergeCompleted)(nil)},
 		{"a nil gate OK", (*domain.GatePassed)(nil)},
+		{"a nil failed action", (*domain.ActionFailed)(nil)},
 		{"a result event with a nil result", result("intake", 1, (*domain.IntakeResult)(nil))},
 	}
 }

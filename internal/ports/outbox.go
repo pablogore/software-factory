@@ -17,6 +17,11 @@ var ErrActionNotFound = errors.New("action not found")
 // action was done, as after a timeout. Callers compare with errors.Is.
 var ErrResultLost = errors.New("action result lost")
 
+// ErrRefused is what a destination wraps when it refused an action for
+// permission or validation: trying it again would fail the same way.
+// Callers compare with errors.Is.
+var ErrRefused = errors.New("action refused")
+
 // Action is one external effect a state change asks for: a comment, a push,
 // a PR, a chat message. It is saved with that state change and delivered
 // later, so a slice never calls the outside world itself
@@ -86,15 +91,24 @@ type Outbox interface {
 	// what was saved before. A failed f keeps no next attempt. An unknown
 	// key is ErrActionNotFound.
 	MarkActionFailed(ctx context.Context, key string, f ActionFailure) error
+	// MarkActionRefused saves f as the action's failed deliveries, failed,
+	// and in the same transaction decides a domain.ActionFailed at time at
+	// on the job that asked for it, saving Decide's events as
+	// JobStore.Apply does: the job goes to needs-human. A job Decide does
+	// not move keeps its state; when Decide refuses the event, nothing is
+	// saved. An unknown key is ErrActionNotFound.
+	MarkActionRefused(ctx context.Context, key string, f ActionFailure, at time.Time) error
 }
 
 // Destination performs actions in the outside world.
 type Destination interface {
 	// Deliver performs a once. An error means it was not done and is worth
 	// trying again, as a network failure or a 5xx answer is, unless it wraps
-	// ErrResultLost: then it may have been done.
+	// ErrResultLost: then it may have been done; or ErrRefused: then it was
+	// not done and never will be.
 	Deliver(ctx context.Context, a Action) error
 	// Done tells whether the action with idempotency key key was done. An
-	// error means the destination could not tell and is worth asking again.
+	// error means the destination could not tell and is worth asking again,
+	// unless it wraps ErrRefused.
 	Done(ctx context.Context, key string) (bool, error)
 }

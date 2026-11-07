@@ -179,6 +179,24 @@ func (NeedsHuman) EventName() string { return "NeedsHuman" }
 // JobID implements Event.
 func (e NeedsHuman) JobID() JobID { return e.Job }
 
+// ActionFailed records that the destination refused one of the job's
+// external actions for permission or validation, so trying it again would
+// fail the same way. Key and Kind name the action and Error is the
+// destination's answer, data only: Decide never parses it or routes on it.
+type ActionFailed struct {
+	Job   JobID     `json:"job"`
+	Key   string    `json:"key"`
+	Kind  string    `json:"kind"`
+	Error string    `json:"error"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (ActionFailed) EventName() string { return "ActionFailed" }
+
+// JobID implements Event.
+func (e ActionFailed) JobID() JobID { return e.Job }
+
 // NeedsInfo records that the job waits for a person to answer a question
 // from stage From, which gets the answer.
 type NeedsInfo struct {

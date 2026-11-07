@@ -47,7 +47,15 @@ var (
 	errUnavailable = errors.New("503 service unavailable")
 	errNetwork     = errors.New("dial tcp: connection refused")
 	errTimeout     = fmt.Errorf("context deadline exceeded: %w", ports.ErrResultLost)
+	errForbidden   = fmt.Errorf("403 permission denied: %w", ports.ErrRefused)
+	errInvalid     = fmt.Errorf("422 validation failed: %w", ports.ErrRefused)
 )
+
+// refusal is a destination answer that refuses an action for good.
+type refusal struct {
+	name string
+	err  error
+}
 
 // destination is a test ports.Destination: it keeps what it did and counts
 // every try and every check. While fails has errors left, each try takes the
@@ -305,6 +313,111 @@ func outboxDeliveryContract(s *specs.Spec, open func(ctx *specs.Context) (outbox
 			ctx.Expect(dest.tries).ToEqual(0)
 			ctx.Expect(dest.checks).ToEqual(1)
 			ctx.Expect(only(ctx, st).Delivered).ToEqual(true)
+		})
+	})
+	s.When("the destination refuses an action", func(s *specs.Spec) {
+		refusals := []refusal{{"for permission", errForbidden}, {"for validation", errInvalid}}
+		specs.Table(s, refusals, func(r refusal) string {
+			return "refused " + r.name + ", it is tried once, listed as failed with the reason and its job goes to needs-human"
+		}, func(ctx *specs.Context, r refusal) {
+			st, _ := open(ctx)
+			asked(ctx, st, comment("job-1/comment/1"))
+			_, v, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			dest, c := &destination{fails: []error{r.err}}, newClock()
+			d := outbox.New(st, dest, c)
+
+			ctx.Expect(d.Deliver(bg)).To(specs.BeNil())
+			c.advance(time.Hour)
+			ctx.Expect(d.Deliver(bg)).To(specs.BeNil())
+
+			ctx.Expect(dest.tries).ToEqual(1)
+			ctx.Expect(dest.done).To(specs.BeEmpty())
+			ctx.Expect(only(ctx, st)).ToEqual(ports.QueuedAction{
+				Job: jobID, Action: comment("job-1/comment/1"),
+				ActionFailure: ports.ActionFailure{Attempts: 1, LastError: r.err.Error(), Failed: true},
+			})
+			reason := `external action comment "job-1/comment/1" failed: ` + r.err.Error()
+			job, gotV, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
+			ctx.Expect(job.Cause).ToEqual(domain.CauseActionFailed)
+			ctx.Expect(job.Reason).ToEqual(reason)
+			ctx.Expect(gotV).ToEqual(v + 1)
+			hist, err := st.History(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(hist[len(hist)-1].Event).ToEqual(domain.NeedsHuman{Job: jobID, Reason: reason, Cause: domain.CauseActionFailed, At: at(30)})
+		})
+
+		s.It("a refused check after a lost result fails the action the same way", func(ctx *specs.Context) {
+			st, _ := open(ctx)
+			asked(ctx, st, comment("job-1/comment/1"))
+			dest, c := &destination{lost: 1, checkFails: []error{errForbidden}}, newClock()
+			d := outbox.New(st, dest, c)
+			ctx.Expect(d.Deliver(bg)).To(specs.BeNil())
+
+			c.advance(time.Second)
+			ctx.Expect(d.Deliver(bg)).To(specs.BeNil())
+			c.advance(time.Hour)
+			ctx.Expect(d.Deliver(bg)).To(specs.BeNil())
+
+			ctx.Expect(dest.tries).ToEqual(1)
+			ctx.Expect(dest.checks).ToEqual(1)
+			q := only(ctx, st)
+			ctx.Expect(q.Failed).ToEqual(true)
+			ctx.Expect(q.Attempts).ToEqual(2)
+			ctx.Expect(q.LastError).ToEqual(errForbidden.Error())
+			job, _, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Cause).ToEqual(domain.CauseActionFailed)
+		})
+
+		s.It("does not hold back the job's other actions", func(ctx *specs.Context) {
+			st, _ := open(ctx)
+			asked(ctx, st, comment("job-1/comment/1"), comment("job-1/comment/2"))
+			dest, c := &destination{fails: []error{errForbidden}}, newClock()
+
+			ctx.Expect(outbox.New(st, dest, c).Deliver(bg)).To(specs.BeNil())
+
+			ctx.Expect(dest.done).ToEqual([]ports.Action{comment("job-1/comment/2")})
+			qs := actions(ctx, st, jobID)
+			ctx.Expect(qs[0].Failed).ToEqual(true)
+			ctx.Expect(qs[1].Delivered).ToEqual(true)
+		})
+
+		s.It("on a stopped job, fails the action and leaves the job stopped", func(ctx *specs.Context) {
+			st, _ := open(ctx)
+			asked(ctx, st, comment("job-1/comment/1"))
+			_, v, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			_, v, err = st.Apply(bg, jobID, v, pipeline(), domain.StopRequested{Job: jobID, By: "ana", At: at(2)})
+			ctx.Expect(err).To(specs.BeNil())
+			dest, c := &destination{fails: []error{errForbidden}}, newClock()
+
+			ctx.Expect(outbox.New(st, dest, c).Deliver(bg)).To(specs.BeNil())
+
+			ctx.Expect(only(ctx, st).Failed).ToEqual(true)
+			job, gotV, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Stage).ToEqual(domain.StageStopped)
+			ctx.Expect(gotV).ToEqual(v)
+		})
+
+		s.It("when Decide refuses the failure, neither the action nor the job changes", func(ctx *specs.Context) {
+			st, _ := open(ctx)
+			// A blank key passes Action.Validate but not Decide.
+			asked(ctx, st, comment(" "))
+			before, v, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+
+			err = outbox.New(st, &destination{fails: []error{errForbidden}}, newClock()).Deliver(bg)
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+			ctx.Expect(only(ctx, st)).ToEqual(queued(comment(" ")))
+			job, gotV, err := st.Load(bg, jobID)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job).ToEqual(before)
+			ctx.Expect(gotV).ToEqual(v)
 		})
 	})
 }

@@ -3,10 +3,13 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/pablogore/software-factory/internal/adapters/out/eventjson"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/domain/decide"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -90,6 +93,53 @@ func (s *Store) MarkActionFailed(ctx context.Context, key string, f ports.Action
 	res, err := s.db.ExecContext(ctx, `UPDATE outbox SET attempts = ?, last_error = ?, next_attempt = ?, failed = ?, result_lost = ? WHERE key = ?`,
 		f.Attempts, f.LastError, next, f.Failed, f.ResultLost, key)
 	return marked(res, err, "failed", key)
+}
+
+// MarkActionRefused implements ports.Outbox: the action is failed and its
+// job decided and saved in one transaction, rolled back on the first failure.
+func (s *Store) MarkActionRefused(ctx context.Context, key string, f ports.ActionFailure, at time.Time) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("sqlite: begin refuse %q: %w", key, err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+	// The write comes first, so SQLite's write lock is held before the job
+	// is read and no other writer saves it in between.
+	res, err := tx.ExecContext(ctx, `UPDATE outbox SET attempts = ?, last_error = ?, next_attempt = '', failed = 1, result_lost = ? WHERE key = ?`,
+		f.Attempts, f.LastError, f.ResultLost, key)
+	if err := marked(res, err, "refused", key); err != nil {
+		return err
+	}
+	var job, kind string
+	if err := tx.QueryRowContext(ctx, `SELECT job_id, kind FROM outbox WHERE key = ?`, key).Scan(&job, &kind); err != nil {
+		return fmt.Errorf("sqlite: action %q: %w", key, err)
+	}
+	id := domain.JobID(job)
+	cur, v, err := load(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	// Decide reads no pipeline for a failed action.
+	evs, err := decide.Decide(cur, domain.ActionFailed{Job: id, Key: key, Kind: kind, Error: f.LastError, At: at}, domain.Pipeline{})
+	if err != nil {
+		return fmt.Errorf("sqlite: job %q: %w", id, err)
+	}
+	if len(evs) > 0 {
+		if err := claim(ctx, tx, id, v); err != nil {
+			return err
+		}
+		if err := record(ctx, tx, cur, eventjson.CapReasons(evs, s.maxReason)); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: commit refuse %q: %w", key, err)
+	}
+	return nil
 }
 
 // marked reports an update that touched no row as ErrActionNotFound.
