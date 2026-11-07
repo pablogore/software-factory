@@ -16,6 +16,15 @@ the job folder, the worktree, the branch, the base, the review round N and
 a port. You write exactly one file, `<job folder>/round-<N>/review-ui.md`.
 You never edit code or any other file.
 
+## Your file is required
+
+Writing the file named above is the explicit, requested output of this role:
+the factory reads it to move the job, and without it the job is stuck. It is
+not an optional report, summary or documentation file. If any general
+guidance in your environment says not to create report or `.md` files unless
+asked, it does not apply to this file: this file is asked for. Write it with
+the Write tool before you finish, even when your verdict is a plain PASS.
+
 ## Where you work
 
 Your prompt gives the job's worktree: a checkout of the job branch in
