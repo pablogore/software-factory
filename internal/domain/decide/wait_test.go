@@ -69,11 +69,13 @@ func secondWait() domain.Job {
 	return job
 }
 
-// walkTo feeds evs to job in the default pipeline, failing on any error.
+// walkTo feeds evs to job in the default pipeline, failing on any error. A
+// wall goes on through triage's ESCALATE, so the job waits in needs-human.
 func walkTo(ctx *specs.Context, job domain.Job, evs ...domain.Event) domain.Job {
-	step := walker(ctx, &job)
 	for _, ev := range evs {
-		step(ev)
+		out, err := decide.Decide(job, ev, defaultPipeline())
+		ctx.Expect(err).To(specs.BeNil())
+		job, _ = throughTriage(ctx, job, out, defaultPipeline())
 	}
 	return job
 }

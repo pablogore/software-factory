@@ -94,9 +94,8 @@ func TestDecideRerun(t *testing.T) {
 					[]domain.Event{passed("reviewer-code", 1), entered("approve", 1)}},
 				{"the round's reviewers in any order enter approve", 2, secCode, []string{"reviewer-code"}, nil, pass("reviewer-security", 1),
 					[]domain.Event{passed("reviewer-security", 1), entered("approve", 1)}},
-				{"CHANGES from the round's last reviewer in round 3 of 3 ends in needs-human", 3, secCode, []string{"reviewer-code"}, nil, changes("reviewer-security", 1),
-					[]domain.Event{asked("reviewer-security", 1), domain.NeedsHuman{Job: jobID,
-						Reason: "CHANGES in the last round (3 of 3) from reviewer-security", Cause: domain.CauseChanges, At: at(1)}}},
+				{"CHANGES from the round's last reviewer in round 3 of 3 goes to triage", 3, secCode, []string{"reviewer-code"}, nil, changes("reviewer-security", 1),
+					[]domain.Event{asked("reviewer-security", 1), triaging("CHANGES in the last round (3 of 3) from reviewer-security", domain.CauseChanges, 1)}},
 				{"round 1 ends once every reviewer of the stage answered", 1, nil, secCode, nil, pass("reviewer-ux", 1),
 					[]domain.Event{passed("reviewer-ux", 1), entered("approve", 1)}},
 				{"round 1 counts CHANGES from a reviewer that is not always_rerun", 1, nil, secCode, nil, changes("reviewer-ux", 1),
@@ -169,12 +168,12 @@ func TestDecideRerun(t *testing.T) {
 			ctx.Expect(job.Round).ToEqual(2)
 		})
 
-		s.It("forgets the round's reviewers when the job enters needs-human", func(ctx *specs.Context) {
+		s.It("forgets the round's reviewers when the job enters needs-human after triage", func(ctx *specs.Context) {
 			job := reviewing(rerunRow{round: 3, reviewers: secCode, passed: []string{"reviewer-code"}})
 
 			evs, err := decide.Decide(job, changes("reviewer-security", 1), threeReviewers())
 			ctx.Expect(err).To(specs.BeNil())
-			job = decide.Apply(job, evs)
+			job, _ = throughTriage(ctx, job, evs, threeReviewers())
 
 			ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
 			ctx.Expect(job.Reviewers).To(specs.BeEmpty())

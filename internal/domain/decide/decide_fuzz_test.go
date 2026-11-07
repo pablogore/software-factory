@@ -11,7 +11,7 @@ import (
 	"github.com/pablogore/software-factory/internal/domain/decide"
 )
 
-var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped, domain.StageRejected}
+var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman, domain.StageNeedsInfo, domain.StageStopped, domain.StageRejected, domain.StageTriage}
 
 // fuzzEvents are the happy path's events plus a CHANGES from a reviewer that
 // has not answered in any fuzzed job, a failing gate and specgate, a spec
@@ -19,8 +19,9 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // so answers) and direction marks from every kind of author, with and without a name, stop requests with and without a
 // name, overrides from every kind of author and without a name or a reason,
 // limit overrides from every kind of author, without a name and with an
-// unknown limit, a completed merge, a spent budget, a refused external action
-// with and without a key and every missing or nil event of nilEvents.
+// unknown limit, a completed merge, a failed one, a spent budget, a refused
+// external action with and without a key, triage's RETRY and ESCALATE, one
+// from another role and every missing or nil event of nilEvents.
 func fuzzEvents() []domain.Event {
 	var evs []domain.Event
 	for _, st := range happyPath() {
@@ -40,7 +41,9 @@ func fuzzEvents() []domain.Event {
 		limitOverride(domain.AuthorPerson, true, "human_reworks", "3", 1, 1), limitOverride(domain.AuthorPerson, false, "human_reworks", "3", 1, 1),
 		limitOverride(domain.AuthorBot, true, "max_rounds", "9", 1, 1), limitOverride(domain.AuthorCI, true, "max_rounds", "9", 1, 1),
 		limitOverride(domain.AuthorPerson, true, "retries", "3", 1, 1), signedLimit(limitOverride(domain.AuthorPerson, true, "max_rounds", "9", 1, 1), " "),
-		refused(1), domain.ActionFailed{Job: jobID, Key: " ", Kind: "comment", Error: "403 forbidden", At: at(1)})
+		refused(1), domain.ActionFailed{Job: jobID, Key: " ", Kind: "comment", Error: "403 forbidden", At: at(1)},
+		mergeFailed("conflict in go.sum", 1), triageRetry(1), triageEscalate(1),
+		result("builder", 1, domain.TriageResult{Decision: domain.TriageRetry, Brief: triageBrief}))
 	for _, r := range nilEvents() {
 		evs = append(evs, r.ev)
 	}
@@ -49,7 +52,7 @@ func fuzzEvents() []domain.Event {
 
 // FuzzDecide checks that the same input always gives the same output, that
 // Decide never changes the job it receives and that no round goes past the
-// review stage's max_rounds, that a message not from an allowed person
+// review stage's max_rounds plus the rounds triage gave the job, that a message not from an allowed person
 // changes nothing and is not an error, that an allowed person's message
 // without a name is refused unless the job is stopped or rejected, that a job a decision moves records an
 // asker exactly when it lands in needs-info, that every needs-human it emits
@@ -74,9 +77,10 @@ func FuzzDecide(f *testing.F) {
 		job.Passed = append([]string(nil), reviewers[:int(done)%len(reviewers)]...)
 		job.InfoFrom = fuzzAsker(job.Stage, done)
 		job.Cause = fuzzCause(job.Stage, round)
+		job.Wall = fuzzWall(job.Stage, done)
 		before := newJob()
 		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
-		before.InfoFrom, before.Cause = job.InfoFrom, job.Cause
+		before.InfoFrom, before.Cause, before.Wall = job.InfoFrom, job.Cause, job.Wall
 		evs := fuzzEvents()
 		ev := evs[int(event)%len(evs)]
 
@@ -103,8 +107,8 @@ func FuzzDecide(f *testing.F) {
 			t.Fatalf("missing event %#v accepted in stage %q", ev, job.Stage)
 		}
 		after := decide.Apply(job, first)
-		if after.Round > 3 {
-			t.Fatalf("round %d past max_rounds 3", after.Round)
+		if after.Round > 3+after.TriageRetries {
+			t.Fatalf("round %d past max_rounds 3 and %d triage retries", after.Round, after.TriageRetries)
 		}
 		if len(first) > 0 && (after.Stage == domain.StageNeedsInfo) != (after.InfoFrom != "") {
 			t.Fatalf("stage %q with asker %q after %s", after.Stage, after.InfoFrom, ev.EventName())
@@ -144,6 +148,9 @@ func FuzzDecide(f *testing.F) {
 		if after.Cause != "" && after.Stage != domain.StageNeedsHuman {
 			t.Fatalf("stage %q keeps cause %q after %s", after.Stage, after.Cause, ev.EventName())
 		}
+		if len(first) > 0 && (after.Stage == domain.StageTriage) != (after.Wall != "") {
+			t.Fatalf("stage %q with wall %q after %s", after.Stage, after.Wall, ev.EventName())
+		}
 	})
 }
 
@@ -155,6 +162,16 @@ func fuzzCause(stage string, round uint8) domain.HumanCause {
 	}
 	causes := append(domain.HumanCauses(), "", "approved")
 	return causes[int(round)%len(causes)]
+}
+
+// fuzzWall gives a job in triage one of HumanCauses as its wall, none or an
+// unknown one; a job anywhere else has none.
+func fuzzWall(stage string, n uint8) domain.HumanCause {
+	if stage != domain.StageTriage {
+		return ""
+	}
+	walls := append(domain.HumanCauses(), "", "approved")
+	return walls[int(n)%len(walls)]
 }
 
 // FuzzStopped checks that a stopped job never moves: whatever the event,

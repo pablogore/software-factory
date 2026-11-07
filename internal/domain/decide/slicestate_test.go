@@ -167,7 +167,7 @@ func TestSliceState(t *testing.T) {
 				evs, err := decide.Decide(r.job, r.ev, defaultPipeline())
 
 				ctx.Expect(err).To(specs.BeNil())
-				after := decide.Apply(r.job, evs)
+				after, _ := throughTriage(ctx, r.job, evs, defaultPipeline())
 				ctx.Expect(after.Stage).ToEqual(domain.StageNeedsHuman)
 				ctx.Expect(after.Reason).ToEqual(r.reason)
 				ctx.Expect(after.Cause).ToEqual(r.cause)

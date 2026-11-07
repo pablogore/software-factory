@@ -17,10 +17,10 @@ type roundsRow struct {
 	limit int
 }
 
-// reviewUntilNeedsHuman runs reviewer-code's CHANGES round after round and
-// returns the round the job went to needs-human in. Build and gate are left
+// reviewUntilWall runs reviewer-code's CHANGES round after round and returns
+// the round the job hit the wall in, where triage takes it. Build and gate are left
 // out: only the review's verdict counts rounds.
-func reviewUntilNeedsHuman(ctx *specs.Context, p domain.Pipeline) int {
+func reviewUntilWall(ctx *specs.Context, p domain.Pipeline) int {
 	at := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
 	job := domain.Job{ID: "job-rounds", Pipeline: p.Name, Stage: "review", Round: 1}
 	for range 10 {
@@ -28,7 +28,7 @@ func reviewUntilNeedsHuman(ctx *specs.Context, p domain.Pipeline) int {
 		ctx.Expect(err).To(specs.BeNil())
 		round := job.Round
 		job = decide.Apply(job, evs)
-		if job.Stage == domain.StageNeedsHuman {
+		if job.Stage == domain.StageTriage {
 			return round
 		}
 		ctx.Expect(job.Stage).ToEqual("build")
@@ -52,7 +52,7 @@ func TestLoadPipelineMaxRounds(t *testing.T) {
 			p, err := configyaml.LoadPipeline([]byte(r.yaml), loadedRoles(ctx))
 			ctx.Expect(err).To(specs.BeNil())
 
-			ctx.Expect(reviewUntilNeedsHuman(ctx, p)).ToEqual(r.limit)
+			ctx.Expect(reviewUntilWall(ctx, p)).ToEqual(r.limit)
 		})
 	})
 }

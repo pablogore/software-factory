@@ -136,7 +136,7 @@ func TestDecideFeedbackAfterSpecgate(t *testing.T) {
 
 				evs, err := decide.Decide(job, changes("reviewer-code", 1), defaultPipeline())
 				ctx.Expect(err).To(specs.BeNil())
-				job = decide.Apply(job, evs)
+				job, _ = throughTriage(ctx, job, evs, defaultPipeline())
 				ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
 
 				evs, err = decide.Decide(job, message(domain.AuthorPerson, true, 2), defaultPipeline())

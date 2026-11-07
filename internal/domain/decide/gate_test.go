@@ -36,8 +36,8 @@ func TestDecideGate(t *testing.T) {
 					[]domain.Event{started(2, 1), entered("build", 1)}},
 				{"in round 2 goes back to build in round 3 with the round's reviewers", 2, secCode,
 					[]domain.Event{started(3, 1, secCode...), entered("build", 1)}},
-				{"in round 3 of 3 ends in needs-human", 3, secCode,
-					[]domain.Event{domain.NeedsHuman{Job: jobID, Reason: "gate failed in the last round (3 of 3)", Cause: domain.CauseGateFailed, At: at(1)}}},
+				{"in round 3 of 3 goes to triage", 3, secCode,
+					[]domain.Event{triaging("gate failed in the last round (3 of 3)", domain.CauseGateFailed, 1)}},
 			}
 			specs.Table(s, rows, func(r gateRow) string { return r.name }, func(ctx *specs.Context, r gateRow) {
 				evs, err := decide.Decide(atGate(r.round, r.reviewers), gateFailed(1), threeReviewers())
@@ -48,7 +48,7 @@ func TestDecideGate(t *testing.T) {
 		})
 
 		s.When("the gate fails outside the gate", func(s *specs.Spec) {
-			stages := []string{"intake", "spec", domain.StageSpecgate, "build", "review", "approve", domain.StageMerge, domain.StageNeedsHuman}
+			stages := []string{"intake", "spec", domain.StageSpecgate, "build", "review", "approve", domain.StageMerge, domain.StageNeedsHuman, domain.StageTriage}
 			specs.Table(s, stages, func(st string) string { return "in " + st + " is refused" }, func(ctx *specs.Context, st string) {
 				job, before := atGate(2, secCode), atGate(2, secCode)
 				job.Stage, before.Stage = st, st
