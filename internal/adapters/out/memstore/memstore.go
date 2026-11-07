@@ -1,5 +1,5 @@
 // Package memstore is the in-memory fake of ports.JobStore, ports.EventLog,
-// ports.EventFeed, ports.DeadEvents and ports.Outbox for slice tests. It passes the same contract suite as the
+// ports.EventFeed, ports.DeadEvents, ports.Outbox and ports.DiscardLog for slice tests. It passes the same contract suite as the
 // SQLite store (internal/adapters/out/sqlite).
 package memstore
 
@@ -33,6 +33,7 @@ type Store struct {
 	// its key.
 	outbox    []ports.QueuedAction
 	queued    map[string]int
+	discarded []ports.Discarded
 	maxReason int
 }
 
