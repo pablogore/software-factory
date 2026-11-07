@@ -50,9 +50,9 @@ type Slice struct {
 
 // Next is the issue the summary recommends taking next, and why.
 type Next struct {
-	Issue int    `json:"issue"`
-	Title string `json:"title"`
-	Why   string `json:"why"`
+	Issue int               `json:"issue"`
+	Title string            `json:"title"`
+	Why   domain.NextReason `json:"why"`
 }
 
 // Summary is what the brake publishes about the issue that ended.
@@ -66,14 +66,16 @@ type Summary struct {
 	Rounds   int           `json:"rounds"`
 	USD      float64       `json:"usd"`
 	Duration time.Duration `json:"duration"`
-	// Next is nil when no issue waits.
-	Next    *Next    `json:"next,omitempty"`
-	Options []Option `json:"options"`
+	// Next is nil when no waiting issue can be taken, and NoNext says why.
+	Next    *Next             `json:"next,omitempty"`
+	NoNext  domain.NextReason `json:"no_next,omitempty"`
+	Options []Option          `json:"options"`
 }
 
 // Summarize sums up r after its job by ended, and recommends the first of
-// waiting, the queue's issues in the order it takes them, by order.
-func Summarize(r IssueReport, by domain.JobID, waiting []queue.Issue, order queue.Order) Summary {
+// waiting, the queue's issues in the order it takes them, by order, that
+// held, the ones the queue holds, does not list.
+func Summarize(r IssueReport, by domain.JobID, waiting []queue.Issue, held []queue.Hold, order queue.Order) Summary {
 	s := Summary{Issue: r.Issue.Number, Title: r.Issue.Title, PRs: []string{}, Slices: []Slice{}, Options: slices.Clone(Options)}
 	var start, end time.Time
 	for _, j := range r.Jobs {
@@ -94,22 +96,29 @@ func Summarize(r IssueReport, by domain.JobID, waiting []queue.Issue, order queu
 		}
 	}
 	s.Duration = end.Sub(start)
-	if len(waiting) > 0 {
-		is := waiting[0]
-		s.Next = &Next{Issue: is.Number, Title: is.Title, Why: why(is, order)}
+	i := slices.IndexFunc(waiting, func(is queue.Issue) bool {
+		return !slices.ContainsFunc(held, func(h queue.Hold) bool { return h.Issue.Number == is.Number })
+	})
+	switch {
+	case i >= 0:
+		s.Next = &Next{Issue: waiting[i].Number, Title: waiting[i].Title, Why: why(waiting[i], order)}
+	case len(waiting) == 0:
+		s.NoNext = domain.NoNextEmpty
+	default:
+		s.NoNext = domain.NoNextHeld
 	}
 	return s
 }
 
-// why says in one line what put is first in the queue, by the rule
-// queue.Sort follows. The text is for a person, in the factory's language.
-func why(is queue.Issue, o queue.Order) string {
+// why is what put is first among the issues the queue can take, by the
+// rule queue.Sort follows.
+func why(is queue.Issue, o queue.Order) domain.NextReason {
 	switch {
 	case slices.Contains(o.TechLead, is.Number):
-		return "es el primero en el orden del tech lead"
+		return domain.NextTechLead
 	case len(o.TechLead) == 0 && slices.Contains(o.Priority, is.Number):
-		return "es el primero en la prioridad del product owner"
+		return domain.NextPriority
 	default:
-		return "ningún orden lo lista y es el de número más bajo entre los que esperan"
+		return domain.NextLowest
 	}
 }

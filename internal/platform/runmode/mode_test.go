@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -211,6 +212,14 @@ func alone(n int, stage string) runmode.IssueReport {
 	}
 }
 
+// open is a fake queue.Issues: the issues it lists are open, every other
+// one is merged or closed.
+type open []int
+
+func (o open) Finished(_ context.Context, n int) (bool, error) {
+	return !slices.Contains(o, n), nil
+}
+
 type fixture struct {
 	r      *runner
 	sched  *scheduler.Scheduler
@@ -222,9 +231,15 @@ type fixture struct {
 }
 
 func newFixture(ctx *specs.Context, order queue.Order, reps reports) fixture {
+	return newFixtureOpen(ctx, order, reps, open{})
+}
+
+// newFixtureOpen is newFixture with the issues in deps open, so the queue
+// holds those depending on them.
+func newFixtureOpen(ctx *specs.Context, order queue.Order, reps reports, deps open) fixture {
 	f := fixture{r: newRunner(), sched: newScheduler(ctx, 1, costs{}), outbox: &outbox{}, inbox: &inbox{}}
 	f.brake = runmode.NewBrake(f.sched)
-	f.q = queue.New(f.brake, order, f.r)
+	f.q = queue.New(f.brake, order, deps, f.r)
 	f.mode = runmode.New(f.brake, f.q, order, reps, f.outbox, f.inbox)
 	return f
 }
@@ -282,7 +297,7 @@ func TestMode(t *testing.T) {
 						{Job: "1", Title: "S2", Stage: domain.StageDone, Rounds: 1},
 					},
 					Rounds: 3, USD: 1.75, Duration: 3 * time.Hour,
-					Next:    &runmode.Next{Issue: 2, Title: "Next one", Why: "es el primero en el orden del tech lead"},
+					Next:    &runmode.Next{Issue: 2, Title: "Next one", Why: domain.NextTechLead},
 					Options: []runmode.Option{runmode.OptionContinue, runmode.OptionPick, runmode.OptionReplan, runmode.OptionStop},
 				}
 				ctx.Expect(posted.Summary).ToEqual(want)
@@ -330,6 +345,84 @@ func TestMode(t *testing.T) {
 			})
 		})
 
+		s.When("an initiative goes to needs-human in the default mode", func(s *specs.Spec) {
+			s.It("starts no new issue and publishes the same summary as the other brakes", func(ctx *specs.Context) {
+				f := newFixture(ctx, queue.Order{TechLead: []int{1, 2}}, reports{}.add(initiative()))
+				bg := context.Background()
+				f.q.Add(bg, queue.Issue{Number: 1, Title: "Run mode"}, queue.Issue{Number: 2, Title: "Next one"})
+				f.r.awaitStart(ctx, 1)
+
+				ev := domain.InitiativeNeedsHumanRaised{Job: "1", Initiative: "i1", Reason: "the replan needs a decision", At: epoch.Add(3 * time.Hour)}
+				ctx.Expect(f.mode.Handle(bg, ev)).To(specs.BeNil())
+				ctx.Expect(f.brake.Engaged()).To(specs.BeTrue())
+				ctx.Expect(f.r.end(ctx, 1, nil)).To(specs.BeNil())
+				ctx.Expect(f.r.taken()).ToEqual([]int{1})
+				ctx.Expect(waitingNumbers(f.q)).ToEqual([]int{2})
+
+				acts := f.outbox.saved()
+				ctx.Expect(len(acts)).ToEqual(1)
+				ctx.Expect(acts[0].Kind).ToEqual(runmode.ActionSummary)
+				var posted struct {
+					Origin  domain.Origin   `json:"origin"`
+					Summary runmode.Summary `json:"summary"`
+				}
+				ctx.Expect(json.Unmarshal([]byte(acts[0].Payload), &posted)).To(specs.BeNil())
+				ctx.Expect(posted.Origin.Thread).ToEqual("issue/1")
+				ctx.Expect(posted.Summary).ToEqual(runmode.Summarize(initiative(), "1", []queue.Issue{{Number: 2, Title: "Next one"}}, nil, queue.Order{TechLead: []int{1, 2}}))
+				ctx.Expect(posted.Summary.Next).ToEqual(&runmode.Next{Issue: 2, Title: "Next one", Why: domain.NextTechLead})
+				ctx.Expect(f.inbox.all()).ToEqual(map[string]runmode.Summary{acts[0].Key: posted.Summary})
+			})
+		})
+
+		s.When("the queue holds the first issue waiting", func(s *specs.Spec) {
+			s.It("recommends the next one it can take", func(ctx *specs.Context) {
+				f := newFixtureOpen(ctx, queue.Order{TechLead: []int{1, 2, 3}}, reports{}.add(alone(1, domain.StageNeedsHuman)), open{50})
+				bg := context.Background()
+				f.q.Add(bg, queue.Issue{Number: 1}, queue.Issue{Number: 2, Title: "Held", Body: "Depends on #50"})
+				f.r.awaitStart(ctx, 1)
+				// #2 is held, so the queue handed nothing over; with the
+				// brake already on, #3 is not handed over either and waits
+				// behind #2.
+				f.brake.Engage()
+				f.q.Add(bg, queue.Issue{Number: 3, Title: "Free"})
+				ctx.Expect(waitingNumbers(f.q)).ToEqual([]int{2, 3})
+				ctx.Expect(f.mode.Handle(bg, domain.NeedsHuman{Job: "1", Reason: "blocked", Cause: domain.CauseBlocked, At: epoch})).To(specs.BeNil())
+
+				acts := f.outbox.saved()
+				ctx.Expect(len(acts)).ToEqual(1)
+				ctx.Expect(acts[0].Payload).To(specs.Contain(`"next":{"issue":3,"title":"Free","why":"tech-lead-order"}`))
+				ctx.Expect(f.inbox.all()[acts[0].Key].Next).ToEqual(&runmode.Next{Issue: 3, Title: "Free", Why: domain.NextTechLead})
+				ctx.Expect(f.r.end(ctx, 1, nil)).To(specs.BeNil())
+			})
+		})
+
+		s.When("no waiting issue can be taken", func(s *specs.Spec) {
+			s.It("says every waiting issue is held and recommends none", func(ctx *specs.Context) {
+				f := newFixtureOpen(ctx, queue.Order{}, reports{}.add(alone(1, domain.StageNeedsHuman)), open{50})
+				bg := context.Background()
+				f.q.Add(bg, queue.Issue{Number: 1}, queue.Issue{Number: 2, Body: "Depends on #50"})
+				f.r.awaitStart(ctx, 1)
+				ctx.Expect(f.mode.Handle(bg, domain.NeedsHuman{Job: "1", Reason: "blocked", Cause: domain.CauseBlocked, At: epoch})).To(specs.BeNil())
+
+				acts := f.outbox.saved()
+				ctx.Expect(len(acts)).ToEqual(1)
+				ctx.Expect(acts[0].Payload).To(specs.Contain(`"no_next":"all-held"`))
+				got := f.inbox.all()[acts[0].Key]
+				ctx.Expect(got.Next).To(specs.BeNil())
+				ctx.Expect(got.NoNext).ToEqual(domain.NoNextHeld)
+				ctx.Expect(f.r.end(ctx, 1, nil)).To(specs.BeNil())
+			})
+
+			s.It("says no issue waits and recommends none", func(ctx *specs.Context) {
+				f := newFixture(ctx, queue.Order{}, reports{}.add(alone(1, domain.StageDone)))
+				ctx.Expect(f.mode.Handle(context.Background(), domain.StageEntered{Job: "1", Stage: domain.StageDone, At: epoch})).To(specs.BeNil())
+				acts := f.outbox.saved()
+				ctx.Expect(len(acts)).ToEqual(1)
+				ctx.Expect(acts[0].Payload).To(specs.Contain(`"no_next":"queue-empty"`))
+				ctx.Expect(f.inbox.all()[acts[0].Key].NoNext).ToEqual(domain.NoNextEmpty)
+			})
+		})
+
 		s.When("a slice is rejected", func(s *specs.Spec) {
 			s.It("does not brake: its initiative replans", func(ctx *specs.Context) {
 				f := newFixture(ctx, queue.Order{}, reports{}.add(initiative()))
@@ -371,7 +464,7 @@ func TestBrakes(t *testing.T) {
 			{"slice rejected", domain.JobRejected{Job: "j"}, slice, false},
 			{"slice done", domain.StageEntered{Job: "j", Stage: domain.StageDone}, slice, false},
 			{"another stage", domain.StageEntered{Job: "j", Stage: "build"}, own, false},
-			{"replan needs a person", domain.InitiativeNeedsHumanRaised{Job: "j", Initiative: "i1"}, slice, false},
+			{"initiative in needs-human", domain.InitiativeNeedsHumanRaised{Job: "j", Initiative: "i1"}, slice, true},
 		}
 		specs.Table(s, rows, func(r brakeRow) string { return r.name }, func(ctx *specs.Context, r brakeRow) {
 			ctx.Expect(runmode.Brakes(r.ev, r.job)).ToEqual(r.want)
