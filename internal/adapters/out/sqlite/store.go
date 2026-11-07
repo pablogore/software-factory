@@ -1,6 +1,7 @@
 // Package sqlite implements ports.JobStore, ports.EventLog, ports.EventFeed,
-// ports.DeadEvents, ports.Outbox, ports.DiscardLog and ports.BaseLog on SQLite with the pure-Go modernc.org/sqlite driver, so
-// factoryd builds with CGO_ENABLED=0.
+// ports.DeadEvents, ports.Outbox, ports.DiscardLog and ports.BaseLog on
+// SQLite with the pure-Go modernc.org/sqlite driver, so factoryd builds with
+// CGO_ENABLED=0.
 package sqlite
 
 import (

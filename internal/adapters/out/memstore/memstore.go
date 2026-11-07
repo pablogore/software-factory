@@ -1,5 +1,6 @@
 // Package memstore is the in-memory fake of ports.JobStore, ports.EventLog,
-// ports.EventFeed, ports.DeadEvents, ports.Outbox, ports.DiscardLog and ports.BaseLog for slice tests. It passes the same contract suite as the
+// ports.EventFeed, ports.DeadEvents, ports.Outbox, ports.DiscardLog and
+// ports.BaseLog for slice tests. It passes the same contract suite as the
 // SQLite store (internal/adapters/out/sqlite).
 package memstore
 
