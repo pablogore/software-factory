@@ -101,7 +101,8 @@ type jobs interface {               // puerto angosto, del lado del consumidor
     Load(ctx context.Context, id domain.JobID) (domain.Job, ports.Version, error)
     // corre decide.Decide sobre el job guardado en v y guarda estado + sus eventos
     // en una transacción; solo guarda eventos de Decide, nunca ev
-    Apply(ctx context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event) ([]domain.Event, ports.Version, error)
+    Apply(ctx context.Context, id domain.JobID, v ports.Version, p domain.Pipeline, ev domain.Event, acts ...ports.Action) ([]domain.Event, ports.Version, error)
+    // acts: efectos externos (comentar, push…) que se guardan en el outbox en la misma transacción
 }
 
 type Handler struct{ Jobs jobs; Pipelines pipelines; Clock ports.Clock }
