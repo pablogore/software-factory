@@ -1,5 +1,5 @@
-// Package sqlite implements ports.JobStore, ports.EventLog and
-// ports.EventFeed on SQLite with the pure-Go modernc.org/sqlite driver, so
+// Package sqlite implements ports.JobStore, ports.EventLog, ports.EventFeed
+// and ports.DeadEvents on SQLite with the pure-Go modernc.org/sqlite driver, so
 // factoryd builds with CGO_ENABLED=0.
 package sqlite
 
@@ -37,12 +37,31 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_job ON events(job_id, seq);
 CREATE TABLE IF NOT EXISTS processed (
 	subscriber TEXT NOT NULL,
-	seq        INTEGER NOT NULL,
+	job_id     TEXT NOT NULL,
+	seq        INTEGER NOT NULL REFERENCES events(seq),
+	PRIMARY KEY (subscriber, seq)
+);
+CREATE TABLE IF NOT EXISTS deliveries (
+	subscriber   TEXT NOT NULL,
+	job_id       TEXT NOT NULL,
+	seq          INTEGER NOT NULL REFERENCES events(seq),
+	attempts     INTEGER NOT NULL,
+	last_error   TEXT NOT NULL,
+	next_attempt TEXT NOT NULL,
+	PRIMARY KEY (subscriber, seq)
+);
+CREATE TABLE IF NOT EXISTS dead_events (
+	subscriber TEXT NOT NULL,
+	job_id     TEXT NOT NULL,
+	seq        INTEGER NOT NULL REFERENCES events(seq),
+	attempts   INTEGER NOT NULL,
+	last_error TEXT NOT NULL,
 	PRIMARY KEY (subscriber, seq)
 );
 `
 
-// Store is a JobStore, EventLog and EventFeed backed by one SQLite file.
+// Store is a JobStore, EventLog, EventFeed and DeadEvents backed by one
+// SQLite file.
 type Store struct {
 	db        *sql.DB
 	maxReason int
@@ -316,13 +335,4 @@ func (s *Store) Pending(ctx context.Context, subscriber string, names []string) 
 		return nil, fmt.Errorf("sqlite: pending for %q: %w", subscriber, err)
 	}
 	return saved, nil
-}
-
-// MarkProcessed implements ports.EventFeed.
-func (s *Store) MarkProcessed(ctx context.Context, subscriber string, seq ports.Seq) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO processed (subscriber, seq) VALUES (?, ?) ON CONFLICT DO NOTHING`, subscriber, int64(seq))
-	if err != nil {
-		return fmt.Errorf("sqlite: mark event %d processed by %q: %w", seq, subscriber, err)
-	}
-	return nil
 }

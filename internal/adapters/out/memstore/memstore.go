@@ -1,14 +1,16 @@
-// Package memstore is the in-memory fake of ports.JobStore, ports.EventLog
-// and ports.EventFeed for slice tests. It passes the same contract suite as the
+// Package memstore is the in-memory fake of ports.JobStore, ports.EventLog,
+// ports.EventFeed and ports.DeadEvents for slice tests. It passes the same contract suite as the
 // SQLite store (internal/adapters/out/sqlite).
 package memstore
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/eventjson"
 	"github.com/pablogore/software-factory/internal/domain"
@@ -25,6 +27,8 @@ type Store struct {
 	versions  map[domain.JobID]ports.Version
 	log       []logged // every job's events in saved order; Seq is index+1
 	processed map[string]map[ports.Seq]bool
+	// failed holds each subscriber's failed deliveries, retrying and dead.
+	failed    map[string]map[ports.Seq]ports.Delivery
 	maxReason int
 }
 
@@ -49,6 +53,7 @@ func New(opts ...Option) (*Store, error) {
 		jobs:      map[domain.JobID][]byte{},
 		versions:  map[domain.JobID]ports.Version{},
 		processed: map[string]map[ports.Seq]bool{},
+		failed:    map[string]map[ports.Seq]ports.Delivery{},
 		maxReason: eventjson.DefaultMaxReason,
 	}
 	for _, opt := range opts {
@@ -193,13 +198,87 @@ func (s *Store) Pending(_ context.Context, subscriber string, names []string) ([
 	return saved, nil
 }
 
+// jobOf is the job the event at seq belongs to.
+func (s *Store) jobOf(seq ports.Seq) (domain.JobID, error) {
+	if seq < 1 || int(seq) > len(s.log) {
+		return "", fmt.Errorf("memstore: event %d: %w", seq, ports.ErrEventNotFound)
+	}
+	return s.log[seq-1].job, nil
+}
+
 // MarkProcessed implements ports.EventFeed.
 func (s *Store) MarkProcessed(_ context.Context, subscriber string, seq ports.Seq) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, err := s.jobOf(seq); err != nil {
+		return err
+	}
+	s.markProcessed(subscriber, seq)
+	return nil
+}
+
+func (s *Store) markProcessed(subscriber string, seq ports.Seq) {
 	if s.processed[subscriber] == nil {
 		s.processed[subscriber] = map[ports.Seq]bool{}
 	}
 	s.processed[subscriber][seq] = true
+	delete(s.failed[subscriber], seq)
+}
+
+// MarkFailed implements ports.EventFeed. Like the dead_events table, a dead
+// delivery keeps no next attempt.
+func (s *Store) MarkFailed(_ context.Context, subscriber string, seq ports.Seq, f ports.Failure) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, err := s.jobOf(seq)
+	if err != nil {
+		return err
+	}
+	if f.Dead {
+		f.NextAttempt = time.Time{}
+	}
+	if s.failed[subscriber] == nil {
+		s.failed[subscriber] = map[ports.Seq]ports.Delivery{}
+	}
+	s.failed[subscriber][seq] = ports.Delivery{Subscriber: subscriber, Seq: seq, Job: job, Failure: f}
+	return nil
+}
+
+// Deliveries implements ports.EventFeed.
+func (s *Store) Deliveries(_ context.Context, subscriber string) ([]ports.Delivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ds := []ports.Delivery{}
+	for _, d := range s.failed[subscriber] {
+		ds = append(ds, d)
+	}
+	slices.SortFunc(ds, func(a, b ports.Delivery) int { return cmp.Compare(a.Seq, b.Seq) })
+	return ds, nil
+}
+
+// RetryDead implements ports.DeadEvents.
+func (s *Store) RetryDead(_ context.Context, subscriber string, seq ports.Seq) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.undead(subscriber, seq)
+}
+
+// DiscardDead implements ports.DeadEvents.
+func (s *Store) DiscardDead(_ context.Context, subscriber string, seq ports.Seq) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.undead(subscriber, seq); err != nil {
+		return err
+	}
+	s.markProcessed(subscriber, seq)
+	return nil
+}
+
+// undead removes subscriber's dead event at seq, or fails with ErrNotDead.
+func (s *Store) undead(subscriber string, seq ports.Seq) error {
+	if d, ok := s.failed[subscriber][seq]; !ok || !d.Dead {
+		return fmt.Errorf("memstore: event %d of %q: %w", seq, subscriber, ports.ErrNotDead)
+	}
+	delete(s.failed[subscriber], seq)
 	return nil
 }
