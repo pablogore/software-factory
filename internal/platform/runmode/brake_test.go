@@ -36,8 +36,8 @@ func TestBrake(t *testing.T) {
 				select {
 				case <-ran:
 					ctx.Errorf("held work ran with the brake on")
-				case <-done:
-					ctx.Errorf("held work got a result with the brake on")
+				case err := <-done:
+					ctx.Errorf("held work got a result with the brake on: %v", err)
 				case <-time.After(50 * time.Millisecond):
 				}
 				b.Release()
