@@ -60,9 +60,13 @@ func hasBranch(repo, branch string) bool {
 	return err == nil
 }
 
+// backupRef is where cleaning job-1 keeps its uncommitted changes.
+const backupRef = "refs/factory-backup/job-1"
+
 type dirtyRow struct {
-	name  string
-	dirty func(wt string) error
+	name    string
+	dirty   func(wt string) error
+	changes string // the backup commit's git show --name-status
 }
 
 func TestWorkspace(t *testing.T) {
@@ -124,28 +128,88 @@ func TestWorkspace(t *testing.T) {
 		rows := []dirtyRow{
 			{"a modified tracked file", func(wt string) error {
 				return os.WriteFile(filepath.Join(wt, "README.md"), []byte("changed\n"), 0o600)
-			}},
+			}, "M\tREADME.md"},
 			{"an untracked file", func(wt string) error {
 				return os.WriteFile(filepath.Join(wt, "new.txt"), []byte("new\n"), 0o600)
-			}},
+			}, "A\tnew.txt"},
+			{"a staged change and an untracked file", func(wt string) error {
+				if err := os.WriteFile(filepath.Join(wt, "README.md"), []byte("staged\n"), 0o600); err != nil {
+					return err
+				}
+				if _, err := run(wt, "add", "README.md"); err != nil {
+					return err
+				}
+				return os.WriteFile(filepath.Join(wt, "new.txt"), []byte("new\n"), 0o600)
+			}, "M\tREADME.md\nA\tnew.txt"},
 		}
 		specs.Table(s, rows, func(r dirtyRow) string {
-			return "refuses to clean a worktree with " + r.name + ", deleting nothing"
+			return "cleans a worktree with " + r.name + ", saving it first in a backup commit that outlives the branch"
 		}, func(ctx *specs.Context, r dirtyRow) {
 			repo := newRepo(ctx)
 			ws := gitworktree.New(repo, base)
 			wt, err := ws.Prepare(bg, job)
 			ctx.Expect(err).To(specs.BeNil())
+			must(ctx, wt.Path, "commit", "-q", "--allow-empty", "-m", "job work")
+			head := must(ctx, wt.Path, "rev-parse", "HEAD")
 			ctx.Expect(r.dirty(wt.Path)).To(specs.BeNil())
-			before := must(ctx, wt.Path, "status", "--porcelain")
+			want := map[string]string{}
+			for _, name := range []string{"README.md", "new.txt"} {
+				if got, err := os.ReadFile(filepath.Join(wt.Path, name)); err == nil {
+					want[name] = string(got)
+				}
+			}
 
 			err = ws.Clean(bg, job)
 
-			ctx.Expect(err).To(specs.MatchError(ports.ErrUncommittedChanges))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(exists(wt.Path)).To(specs.BeFalse())
+			ctx.Expect(hasBranch(repo, wt.Branch)).To(specs.BeFalse())
+			// The recovery commands the package doc names.
+			ctx.Expect(must(ctx, repo, "rev-parse", backupRef+"^")).ToEqual(head)
+			ctx.Expect(must(ctx, repo, "show", "--format=", "--name-status", backupRef)).ToEqual(r.changes)
+			for name, content := range want {
+				ctx.Expect(must(ctx, repo, "show", backupRef+":"+name) + "\n").ToEqual(content)
+			}
+			restored := filepath.Join(ctx.Testing().TempDir(), "restored")
+			must(ctx, repo, "worktree", "add", "-q", "-b", "restored", restored, backupRef)
+			for name, content := range want {
+				got, err := os.ReadFile(filepath.Join(restored, name))
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(string(got)).ToEqual(content)
+			}
+		})
+
+		s.It("makes no backup when cleaning a worktree without uncommitted changes", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			ws := gitworktree.New(repo, base)
+			_, err := ws.Prepare(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+
+			err = ws.Clean(bg, job)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(must(ctx, repo, "for-each-ref", "refs/factory-backup/")).ToEqual("")
+		})
+
+		s.It("deletes nothing and returns the error when the backup can't be saved", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			ws := gitworktree.New(repo, base)
+			wt, err := ws.Prepare(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(wt.Path, "README.md"), []byte("changed\n"), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(wt.Path, "new.txt"), []byte("new\n"), 0o600)).To(specs.BeNil())
+			before := must(ctx, wt.Path, "status", "--porcelain")
+			// A ref below the backup's name makes git refuse to create it.
+			must(ctx, repo, "update-ref", backupRef+"/blocker", "HEAD")
+
+			err = ws.Clean(bg, job)
+
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err.Error()).To(specs.Contain(wt.Path))
 			ctx.Expect(exists(wt.Path)).To(specs.BeTrue())
 			ctx.Expect(hasBranch(repo, wt.Branch)).To(specs.BeTrue())
 			ctx.Expect(must(ctx, wt.Path, "status", "--porcelain")).ToEqual(before)
+			ctx.Expect(must(ctx, repo, "for-each-ref", "--format=%(refname)", "refs/factory-backup/")).ToEqual(backupRef + "/blocker")
 		})
 
 		s.It("refuses a job id that would leave .worktrees", func(ctx *specs.Context) {

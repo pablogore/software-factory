@@ -1,5 +1,13 @@
 // Package gitworktree implements ports.Workspace with git worktrees: each
 // job gets .worktrees/<job-id> in the repo, on its own branch factory/<job-id>.
+//
+// Cleaning a job whose worktree has uncommitted changes first saves them, new
+// files included, in a backup commit on top of the branch's head, kept at
+// refs/factory-backup/<job-id> so it outlives the branch. To see it and get
+// it back:
+//
+//	git show refs/factory-backup/<job-id>
+//	git switch -c <branch> refs/factory-backup/<job-id>
 package gitworktree
 
 import (
@@ -61,19 +69,56 @@ func (w *Workspace) Clean(ctx context.Context, job domain.JobID) error {
 	if err != nil {
 		return err
 	}
-	status, err := git(ctx, wt.Path, "status", "--porcelain")
-	if err != nil {
-		return err
+	if err := w.backup(ctx, wt); err != nil {
+		return fmt.Errorf("cleaning %s: %w", wt.Path, err)
 	}
-	if status != "" {
-		return fmt.Errorf("cleaning %s: %w:\n%s", wt.Path, ports.ErrUncommittedChanges, status)
-	}
-	if _, err := git(ctx, w.repo, "worktree", "remove", wt.Path); err != nil {
+	// --force: the uncommitted changes it would refuse over are in the backup.
+	if _, err := git(ctx, w.repo, "worktree", "remove", "--force", wt.Path); err != nil {
 		return err
 	}
 	// -D: the branch's commits need not be merged into the base to go.
 	_, err = git(ctx, w.repo, "branch", "-D", wt.Branch)
 	return err
+}
+
+// backup saves the worktree's uncommitted changes, untracked files included,
+// in a commit on top of HEAD at refs/factory-backup/<job-id>. A clean worktree
+// gets no backup. It stages into a scratch index, so a failure leaves the
+// worktree and its index as they were.
+func (w *Workspace) backup(ctx context.Context, wt ports.Worktree) error {
+	status, err := git(ctx, wt.Path, "status", "--porcelain")
+	if err != nil || status == "" {
+		return err
+	}
+	scratch, err := os.MkdirTemp("", "gitworktree-backup-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	index := []string{"GIT_INDEX_FILE=" + filepath.Join(scratch, "index")}
+	if _, err := gitEnv(ctx, wt.Path, index, "read-tree", "HEAD"); err != nil {
+		return err
+	}
+	if _, err := gitEnv(ctx, wt.Path, index, "add", "--all"); err != nil {
+		return err
+	}
+	tree, err := gitEnv(ctx, wt.Path, index, "write-tree")
+	if err != nil {
+		return err
+	}
+	// A fixed identity, so a machine without git's user.name and user.email
+	// can still save the backup.
+	commit, err := git(ctx, wt.Path, "-c", "user.name=factoryd", "-c", "user.email=factoryd@localhost",
+		"commit-tree", tree, "-p", "HEAD", "-m", "backup of uncommitted changes in "+wt.Branch)
+	if err != nil {
+		return err
+	}
+	_, err = git(ctx, wt.Path, "update-ref", backupRef(wt.Job), commit)
+	return err
+}
+
+func backupRef(job domain.JobID) string {
+	return "refs/factory-backup/" + string(job)
 }
 
 // worktree names the job's path and branch, refusing ids that would land
@@ -96,8 +141,16 @@ func (w *Workspace) worktree(job domain.JobID) (ports.Worktree, error) {
 // git runs git in dir and returns its trimmed output; a failure carries
 // git's own message.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	return gitEnv(ctx, dir, nil, args...)
+}
+
+// gitEnv is git with env added to this process's environment.
+func gitEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
