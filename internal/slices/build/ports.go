@@ -30,3 +30,9 @@ type worktrees interface {
 type checks interface {
 	Run(ctx context.Context, dir string, command []string) (domain.ChecksRun, error)
 }
+
+// diffs lists the files a worktree changed against where its branch left
+// base.
+type diffs interface {
+	Changes(ctx context.Context, dir, base string) ([]domain.FileChange, error)
+}
