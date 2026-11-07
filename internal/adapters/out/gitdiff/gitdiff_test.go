@@ -17,8 +17,8 @@ import (
 const base = "arch/base"
 
 // must runs git in dir with no user or system config, so the machine's
-// settings never change what a test sees.
-func must(ctx *specs.Context, dir string, args ...string) {
+// settings never change what a test sees, and returns its trimmed output.
+func must(ctx *specs.Context, dir string, args ...string) string {
 	ctx.Testing().Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -31,6 +31,7 @@ func must(ctx *specs.Context, dir string, args ...string) {
 		ctx.Testing().Log(string(out))
 	}
 	ctx.Expect(err).To(specs.BeNil())
+	return strings.TrimSpace(string(out))
 }
 
 func write(ctx *specs.Context, dir, name, content string) {
@@ -41,8 +42,9 @@ func write(ctx *specs.Context, dir, name, content string) {
 }
 
 // newRepo makes a repo with Makefile, AGENTS.md and README.md on base, and a
-// job branch off it, checked out.
-func newRepo(ctx *specs.Context) string {
+// job branch off it, checked out. It returns the repo and the commit the job
+// branch was made from, as factoryd records it.
+func newRepo(ctx *specs.Context) (string, string) {
 	dir := ctx.Testing().TempDir()
 	must(ctx, dir, "init", "-q", "-b", base)
 	for _, name := range []string{"Makefile", "AGENTS.md", "README.md"} {
@@ -51,7 +53,7 @@ func newRepo(ctx *specs.Context) string {
 	must(ctx, dir, "add", ".")
 	must(ctx, dir, "commit", "-q", "-m", "base")
 	must(ctx, dir, "switch", "-q", "-c", "factory/job-1")
-	return dir
+	return dir, must(ctx, dir, "rev-parse", base)
 }
 
 func TestDiffer(t *testing.T) {
@@ -59,21 +61,23 @@ func TestDiffer(t *testing.T) {
 		bg := context.Background()
 
 		s.It("lists nothing for a branch that changed nothing", func(ctx *specs.Context) {
-			changes, err := gitdiff.Differ{}.Changes(bg, newRepo(ctx), base)
+			dir, fork := newRepo(ctx)
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).To(specs.BeEmpty())
 		})
 
 		s.It("lists what the branch's commits added, modified and deleted", func(ctx *specs.Context) {
-			dir := newRepo(ctx)
+			dir, fork := newRepo(ctx)
 			write(ctx, dir, "Makefile", "changed\n")
 			write(ctx, dir, "docs/new file.md", "new\n")
 			must(ctx, dir, "rm", "-q", "AGENTS.md")
 			must(ctx, dir, "add", ".")
 			must(ctx, dir, "commit", "-q", "-m", "job")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, base)
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -84,17 +88,17 @@ func TestDiffer(t *testing.T) {
 		})
 
 		s.It("lists tracked changes not yet committed", func(ctx *specs.Context) {
-			dir := newRepo(ctx)
+			dir, fork := newRepo(ctx)
 			write(ctx, dir, "Makefile", "changed\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, base)
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
 		})
 
 		s.It("lists an untracked file as added, after the diff, and leaves out ignored ones", func(ctx *specs.Context) {
-			dir := newRepo(ctx)
+			dir, fork := newRepo(ctx)
 			write(ctx, dir, ".gitignore", "*.log\n")
 			must(ctx, dir, "add", ".gitignore")
 			must(ctx, dir, "commit", "-q", "-m", "ignore logs")
@@ -102,7 +106,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "notes/new.txt", "new\n")
 			write(ctx, dir, "build.log", "ignored\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, base)
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -113,11 +117,11 @@ func TestDiffer(t *testing.T) {
 		})
 
 		s.It("lists untracked files by their path from the repo root when dir is a subfolder", func(ctx *specs.Context) {
-			dir := newRepo(ctx)
+			dir, fork := newRepo(ctx)
 			write(ctx, dir, "top.txt", "new\n")
 			write(ctx, dir, "sub/inner.txt", "new\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, filepath.Join(dir, "sub"), base)
+			changes, err := gitdiff.Differ{}.Changes(bg, filepath.Join(dir, "sub"), fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -127,11 +131,11 @@ func TestDiffer(t *testing.T) {
 		})
 
 		s.It("lists a rename as a deletion and an addition", func(ctx *specs.Context) {
-			dir := newRepo(ctx)
+			dir, fork := newRepo(ctx)
 			must(ctx, dir, "mv", "Makefile", "Makefile.old")
 			must(ctx, dir, "commit", "-q", "-m", "job")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, base)
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -141,27 +145,75 @@ func TestDiffer(t *testing.T) {
 		})
 
 		s.It("leaves out what the base gained after the branch left it", func(ctx *specs.Context) {
-			dir := newRepo(ctx)
+			dir, fork := newRepo(ctx)
 			must(ctx, dir, "switch", "-q", base)
 			write(ctx, dir, "Makefile", "base moved on\n")
 			must(ctx, dir, "commit", "-q", "-am", "base moves")
 			must(ctx, dir, "switch", "-q", "factory/job-1")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, base)
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).To(specs.BeEmpty())
 		})
 
-		s.It("fails for a base the repo does not have", func(ctx *specs.Context) {
-			_, err := gitdiff.Differ{}.Changes(bg, newRepo(ctx), "no-such-base")
+		s.It("still lists what the branch committed after the base ref is moved onto it", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			write(ctx, dir, "Makefile", "changed\n")
+			must(ctx, dir, "commit", "-q", "-am", "job")
+			must(ctx, dir, "branch", "-f", base, "HEAD")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
+		})
+
+		s.It("still lists what the branch committed after the base commit is replaced by the branch's head", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			write(ctx, dir, "Makefile", "changed\n")
+			must(ctx, dir, "commit", "-q", "-am", "job")
+			must(ctx, dir, "replace", fork, "HEAD")
+
+			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
+		})
+
+		s.It("fails for a base commit the repo does not have", func(ctx *specs.Context) {
+			dir, _ := newRepo(ctx)
+
+			_, err := gitdiff.Differ{}.Changes(bg, dir, strings.Repeat("0", 40))
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-			ctx.Expect(strings.Contains(err.Error(), "merge-base")).To(specs.BeTrue())
+			ctx.Expect(err.Error()).To(specs.Contain("git diff"))
+		})
+
+		s.It("fails for a base object that is not a commit", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			tree := must(ctx, dir, "rev-parse", fork+"^{tree}")
+
+			_, err := gitdiff.Differ{}.Changes(bg, dir, tree)
+
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err.Error()).To(specs.Contain("git diff"))
+		})
+
+		s.It("refuses a ref, or a short hash, as base", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+
+			for _, ref := range []string{base, "HEAD", fork[:12], strings.ToUpper(fork)} {
+				_, err := gitdiff.Differ{}.Changes(bg, dir, ref)
+
+				ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			}
 		})
 
 		s.It("refuses an empty base", func(ctx *specs.Context) {
-			_, err := gitdiff.Differ{}.Changes(bg, newRepo(ctx), "")
+			dir, _ := newRepo(ctx)
+
+			_, err := gitdiff.Differ{}.Changes(bg, dir, "")
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 		})

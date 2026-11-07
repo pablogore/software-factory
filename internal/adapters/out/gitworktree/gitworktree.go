@@ -1,5 +1,8 @@
 // Package gitworktree implements ports.Workspace with git worktrees: each
 // job gets .worktrees/<job-id> in the repo, on its own branch factory/<job-id>.
+// Making a job's worktree records the commit the base was at in a
+// ports.BaseLog, so the gate judges the job against that commit whatever
+// happens later to the base's ref.
 //
 // Cleaning a job whose worktree has uncommitted changes first saves them, new
 // files included, in a backup commit on top of the branch's head, kept at
@@ -26,16 +29,17 @@ import (
 
 // Workspace makes and removes job worktrees in one repo.
 type Workspace struct {
-	repo string
-	base string
+	repo  string
+	base  string
+	bases ports.BaseLog
 }
 
 var _ ports.Workspace = (*Workspace)(nil)
 
 // New returns a Workspace over the git repo at repo whose job branches start
-// from base.
-func New(repo, base string) *Workspace {
-	return &Workspace{repo: repo, base: base}
+// from base, recording in bases the commit each one starts from.
+func New(repo, base string, bases ports.BaseLog) *Workspace {
+	return &Workspace{repo: repo, base: base, bases: bases}
 }
 
 // Prepare implements ports.Workspace.
@@ -57,10 +61,32 @@ func (w *Workspace) Prepare(ctx context.Context, job domain.JobID) (ports.Worktr
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ports.Worktree{}, err
 	}
-	if _, err := git(ctx, w.repo, "worktree", "add", "-b", wt.Branch, wt.Path, w.base); err != nil {
+	commit, err := w.baseCommit(ctx, job)
+	if err != nil {
+		return ports.Worktree{}, err
+	}
+	if _, err := git(ctx, w.repo, "worktree", "add", "-b", wt.Branch, wt.Path, commit); err != nil {
 		return ports.Worktree{}, err
 	}
 	return wt, nil
+}
+
+// baseCommit is the commit job's worktree is made from: the one recorded for
+// it, when a try that recorded it failed to make the worktree or the worktree
+// was cleaned, or else the commit base is at now, recorded before the
+// worktree exists so no worktree is ever without one.
+func (w *Workspace) baseCommit(ctx context.Context, job domain.JobID) (string, error) {
+	commit, err := w.bases.Base(ctx, job)
+	if err == nil || !errors.Is(err, ports.ErrNoBase) {
+		return commit, err
+	}
+	if commit, err = git(ctx, w.repo, "rev-parse", "--verify", "--end-of-options", w.base+"^{commit}"); err != nil {
+		return "", err
+	}
+	if err := w.bases.RecordBase(ctx, job, commit); err != nil {
+		return "", err
+	}
+	return commit, nil
 }
 
 // Clean implements ports.Workspace.
@@ -144,9 +170,11 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return gitEnv(ctx, dir, nil, args...)
 }
 
-// gitEnv is git with env added to this process's environment.
+// gitEnv is git with env added to this process's environment. It ignores
+// refs/replace/, which any worktree can write, so a replacement left by a job
+// never changes which commit a new job's worktree is made from.
 func gitEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects"}, args...)...)
 	cmd.Dir = dir
 	if env != nil {
 		cmd.Env = append(os.Environ(), env...)

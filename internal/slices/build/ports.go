@@ -31,8 +31,14 @@ type checks interface {
 	Run(ctx context.Context, dir string, command []string) (domain.ChecksRun, error)
 }
 
-// diffs lists the files a worktree changed against where its branch left
-// base.
+// bases is what the gate needs of ports.BaseLog: the commit recorded when
+// the job's worktree was made, or ports.ErrNoBase.
+type bases interface {
+	Base(ctx context.Context, job domain.JobID) (string, error)
+}
+
+// diffs lists the files a worktree changed against base, the commit its
+// branch was made from.
 type diffs interface {
 	Changes(ctx context.Context, dir, base string) ([]domain.FileChange, error)
 }

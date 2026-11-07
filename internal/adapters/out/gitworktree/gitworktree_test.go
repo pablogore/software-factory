@@ -11,6 +11,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/gitworktree"
+	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/ports"
 )
@@ -50,6 +51,15 @@ func newRepo(ctx *specs.Context) string {
 	return dir
 }
 
+// newWorkspace is a Workspace over repo recording bases in a fresh store,
+// returned too.
+func newWorkspace(ctx *specs.Context, repo string) (*gitworktree.Workspace, *memstore.Store) {
+	ctx.Testing().Helper()
+	store, err := memstore.New()
+	ctx.Expect(err).To(specs.BeNil())
+	return gitworktree.New(repo, base, store), store
+}
+
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -77,7 +87,9 @@ func TestWorkspace(t *testing.T) {
 		s.It("creates a new job's worktree in .worktrees/<job-id> on a new branch factory/<job-id> off the base", func(ctx *specs.Context) {
 			repo := newRepo(ctx)
 
-			wt, err := gitworktree.New(repo, base).Prepare(bg, job)
+			ws, _ := newWorkspace(ctx, repo)
+
+			wt, err := ws.Prepare(bg, job)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(wt).ToEqual(ports.Worktree{Job: job, Path: filepath.Join(repo, ".worktrees", "job-1"), Branch: "factory/job-1"})
@@ -85,9 +97,88 @@ func TestWorkspace(t *testing.T) {
 			ctx.Expect(must(ctx, wt.Path, "rev-parse", "HEAD")).ToEqual(must(ctx, repo, "rev-parse", base))
 		})
 
+		s.It("records the commit the base is at when it makes a job's worktree, which a later move of the base leaves alone", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			ws, store := newWorkspace(ctx, repo)
+			baseSHA := must(ctx, repo, "rev-parse", base)
+
+			wt, err := ws.Prepare(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+			must(ctx, wt.Path, "commit", "-q", "--allow-empty", "-m", "job work")
+			must(ctx, wt.Path, "branch", "-f", base, "HEAD")
+			_, err = ws.Prepare(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+
+			got, err := store.Base(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(baseSHA)
+		})
+
+		s.It("makes a job's worktree again from the commit recorded for it, not from where the base is now", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			ws, store := newWorkspace(ctx, repo)
+			recorded := must(ctx, repo, "rev-parse", base)
+			ctx.Expect(store.RecordBase(bg, job, recorded)).To(specs.BeNil())
+			must(ctx, repo, "branch", "-f", base, "main")
+
+			wt, err := ws.Prepare(bg, job)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(must(ctx, wt.Path, "rev-parse", "HEAD")).ToEqual(recorded)
+			got, err := store.Base(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(recorded)
+		})
+
+		s.It("makes a job's worktree from the base's own commit, whatever refs/replace/ says it stands for", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			ws, store := newWorkspace(ctx, repo)
+			baseSHA := must(ctx, repo, "rev-parse", base)
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "planted.txt"), []byte("planted\n"), 0o600)).To(specs.BeNil())
+			must(ctx, repo, "add", "planted.txt")
+			must(ctx, repo, "commit", "-q", "-m", "planted")
+			must(ctx, repo, "replace", baseSHA, "main")
+
+			wt, err := ws.Prepare(bg, job)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(exists(filepath.Join(wt.Path, "planted.txt"))).To(specs.BeFalse())
+			ctx.Expect(must(ctx, wt.Path, "--no-replace-objects", "rev-parse", "HEAD")).ToEqual(baseSHA)
+			got, err := store.Base(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(baseSHA)
+		})
+
+		s.It("records no base for a worktree it reuses without one", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			ws, _ := newWorkspace(ctx, repo)
+			_, err := ws.Prepare(bg, job)
+			ctx.Expect(err).To(specs.BeNil())
+			fresh, store := newWorkspace(ctx, repo)
+
+			_, err = fresh.Prepare(bg, job)
+
+			ctx.Expect(err).To(specs.BeNil())
+			_, err = store.Base(bg, job)
+			ctx.Expect(err).To(specs.MatchError(ports.ErrNoBase))
+		})
+
+		s.It("makes no worktree when the base is not a commit", func(ctx *specs.Context) {
+			repo := newRepo(ctx)
+			store, err := memstore.New()
+			ctx.Expect(err).To(specs.BeNil())
+
+			_, err = gitworktree.New(repo, "no-such-base", store).Prepare(bg, job)
+
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(exists(filepath.Join(repo, ".worktrees", "job-1"))).To(specs.BeFalse())
+			_, err = store.Base(bg, job)
+			ctx.Expect(err).To(specs.MatchError(ports.ErrNoBase))
+		})
+
 		s.It("reuses an existing worktree without error, leaving what is in it", func(ctx *specs.Context) {
 			repo := newRepo(ctx)
-			ws := gitworktree.New(repo, base)
+			ws, _ := newWorkspace(ctx, repo)
 			first, err := ws.Prepare(bg, job)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(os.WriteFile(filepath.Join(first.Path, "README.md"), []byte("work in progress\n"), 0o600)).To(specs.BeNil())
@@ -106,7 +197,7 @@ func TestWorkspace(t *testing.T) {
 
 		s.It("cleans a job without pending changes: its worktree and local branch go, the base and other jobs stay", func(ctx *specs.Context) {
 			repo := newRepo(ctx)
-			ws := gitworktree.New(repo, base)
+			ws, _ := newWorkspace(ctx, repo)
 			baseSHA := must(ctx, repo, "rev-parse", base)
 			wt, err := ws.Prepare(bg, job)
 			ctx.Expect(err).To(specs.BeNil())
@@ -146,7 +237,7 @@ func TestWorkspace(t *testing.T) {
 			return "cleans a worktree with " + r.name + ", saving it first in a backup commit that outlives the branch"
 		}, func(ctx *specs.Context, r dirtyRow) {
 			repo := newRepo(ctx)
-			ws := gitworktree.New(repo, base)
+			ws, _ := newWorkspace(ctx, repo)
 			wt, err := ws.Prepare(bg, job)
 			ctx.Expect(err).To(specs.BeNil())
 			must(ctx, wt.Path, "commit", "-q", "--allow-empty", "-m", "job work")
@@ -181,7 +272,7 @@ func TestWorkspace(t *testing.T) {
 
 		s.It("makes no backup when cleaning a worktree without uncommitted changes", func(ctx *specs.Context) {
 			repo := newRepo(ctx)
-			ws := gitworktree.New(repo, base)
+			ws, _ := newWorkspace(ctx, repo)
 			_, err := ws.Prepare(bg, job)
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -193,7 +284,7 @@ func TestWorkspace(t *testing.T) {
 
 		s.It("deletes nothing and returns the error when the backup can't be saved", func(ctx *specs.Context) {
 			repo := newRepo(ctx)
-			ws := gitworktree.New(repo, base)
+			ws, _ := newWorkspace(ctx, repo)
 			wt, err := ws.Prepare(bg, job)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(os.WriteFile(filepath.Join(wt.Path, "README.md"), []byte("changed\n"), 0o600)).To(specs.BeNil())
@@ -215,7 +306,9 @@ func TestWorkspace(t *testing.T) {
 		s.It("refuses a job id that would leave .worktrees", func(ctx *specs.Context) {
 			repo := newRepo(ctx)
 
-			_, err := gitworktree.New(repo, base).Prepare(bg, "../escape")
+			ws, _ := newWorkspace(ctx, repo)
+
+			_, err := ws.Prepare(bg, "../escape")
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 			ctx.Expect(exists(filepath.Join(repo, "escape"))).To(specs.BeFalse())

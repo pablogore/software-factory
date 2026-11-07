@@ -50,6 +50,33 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
 		})
 
+		s.It("with -db, makes the job's worktree first, then fails a commit to the Makefile even after the base ref is moved onto it", func(ctx *specs.Context) {
+			bg := context.Background()
+			repo := ctx.Testing().TempDir()
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "Makefile"), []byte("check:\n"), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "init", "-q", "-b", "main")
+			git(ctx, repo, "add", ".")
+			git(ctx, repo, "commit", "-q", "-m", "base")
+			git(ctx, repo, "branch", "arch/base")
+			db := filepath.Join(ctx.Testing().TempDir(), "factory.db")
+			args := []string{"-dir", repo, "-base", "arch/base", "-db", db, "-checks", "true"}
+
+			var made bytes.Buffer
+			ctx.Expect(gateDemo(bg, args, &made)).To(specs.BeNil())
+			ctx.Expect(made.String()).To(specs.Contain("job gate-demo made: worktree"))
+			wt := filepath.Join(repo, ".worktrees", "gate-demo")
+			ctx.Expect(os.WriteFile(filepath.Join(wt, "Makefile"), []byte("check:\n\ttrue\n"), 0o600)).To(specs.BeNil())
+			git(ctx, wt, "commit", "-q", "-am", "skip the checks")
+			git(ctx, wt, "branch", "-f", "arch/base", "HEAD")
+
+			var out bytes.Buffer
+			err := gateDemo(bg, args, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).To(specs.Contain("rule broken: the diff modifies the protected path Makefile"))
+			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+		})
+
 		s.It("refuses a role file that is not a build role", func(ctx *specs.Context) {
 			role := filepath.Join(ctx.Testing().TempDir(), "reviewer.yaml")
 			ctx.Expect(os.WriteFile(role, []byte("name: reviewer-code\nkind: review\nmode: blocking\n"), 0o600)).To(specs.BeNil())
