@@ -99,7 +99,7 @@ func status(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, ports.ErrJobNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, decide.ErrIllegalTransition), errors.Is(err, decide.ErrUnsupported),
+	case errors.Is(err, jobtoken.ErrStale), errors.Is(err, decide.ErrIllegalTransition), errors.Is(err, decide.ErrUnsupported),
 		errors.Is(err, decide.ErrStopped), errors.Is(err, ports.ErrVersionConflict):
 		return http.StatusConflict
 	case errors.Is(err, domain.ErrMissingField), errors.Is(err, domain.ErrInvalidValue):

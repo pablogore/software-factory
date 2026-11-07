@@ -48,7 +48,7 @@ func start(ctx *specs.Context) factoryd {
 	f := factoryd{store: store, tokens: map[domain.JobID]string{}}
 	for _, id := range []domain.JobID{"j-1", "j-2"} {
 		ctx.Expect(store.Create(context.Background(), domain.Job{ID: id, Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
-		f.tokens[id], err = tokens.Issue(jobtoken.Grant{Job: id, Role: "builder", Kind: domain.KindBuild})
+		f.tokens[id], err = tokens.Issue(jobtoken.Grant{Job: id, Role: "builder", Kind: domain.KindBuild, Round: 1})
 		ctx.Expect(err).To(specs.BeNil())
 	}
 	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, stopped{}))
@@ -141,6 +141,35 @@ func TestWorkerSubmitResult(t *testing.T) {
 				ctx.Expect(r.stderr).To(specs.Contain("FACTORY_JOB_TOKEN"))
 				ctx.Expect(f.events(ctx, "j-1")).To(specs.BeEmpty())
 			})
+		})
+
+		s.It("refuses a second result with the same token and records nothing more", func(ctx *specs.Context) {
+			f := start(ctx)
+			ctx.Expect(cli(f.env("j-1", f.tokens["j-1"]), `{"status":"READY"}`, "submit-result").code).ToEqual(0)
+			r := cli(f.env("j-1", f.tokens["j-1"]), `{"status":"READY"}`, "submit-result")
+			ctx.Expect(r.code).ToEqual(1)
+			ctx.Expect(r.stderr).To(specs.Contain("401"))
+			ctx.Expect(f.events(ctx, "j-1")).ToEqual([]string{"StageEntered"})
+		})
+
+		s.It("refuses a token of an earlier round, saying so, though the job is back in build", func(ctx *specs.Context) {
+			f := start(ctx)
+			for _, ev := range []domain.Event{
+				domain.ResultSubmitted{Job: "j-1", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at},
+				domain.GateFailed{Job: "j-1", At: at},
+			} {
+				_, v, err := f.store.Load(context.Background(), "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				p, _ := onePipeline{}.Pipeline(context.Background(), "default")
+				_, _, err = f.store.Apply(context.Background(), "j-1", v, p, ev)
+				ctx.Expect(err).To(specs.BeNil())
+			}
+			before := f.events(ctx, "j-1")
+			r := cli(f.env("j-1", f.tokens["j-1"]), `{"status":"READY"}`, "submit-result")
+			ctx.Expect(r.code).ToEqual(1)
+			ctx.Expect(r.stderr).To(specs.Contain("409"))
+			ctx.Expect(r.stderr).To(specs.Contain("job token from an earlier round: issued in round 1"))
+			ctx.Expect(f.events(ctx, "j-1")).ToEqual(before)
 		})
 
 		s.It("knows no other worker command", func(ctx *specs.Context) {

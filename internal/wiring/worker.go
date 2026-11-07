@@ -23,8 +23,15 @@ type SystemClock struct{}
 // Now implements ports.Clock.
 func (SystemClock) Now() time.Time { return time.Now() }
 
+// WorkerStore keeps jobs and reads back their history, which tells whether a
+// token's stage entry is still the job's.
+type WorkerStore interface {
+	ports.JobStore
+	ports.EventLog
+}
+
 // WorkerAPI is the worker HTTP API over jobs, deciding results with the
 // tokens issued from tokens.
-func WorkerAPI(tokens *jobtoken.Tokens, jobs ports.JobStore, p Pipelines, clock ports.Clock) http.Handler {
+func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, clock ports.Clock) http.Handler {
 	return mcpworker.Handler(&worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Clock: clock})
 }

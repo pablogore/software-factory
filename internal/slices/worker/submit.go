@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -23,27 +24,41 @@ type Submitter struct {
 	Jobs      jobs
 	Pipelines pipelines
 	Clock     ports.Clock
+
+	// mu runs one submission at a time, so a token is revoked after its
+	// result is saved before another submission can check it.
+	mu sync.Mutex
 }
 
 // Submit decodes data as a result of the kind token was issued for, checks
 // it and decides it on job as a ResultSubmitted from token's role. It
-// returns the events the job saved. A token not for job, or for no
-// submission, is a jobtoken error; a result that does not decode or validate
-// wraps domain.ErrMissingField or domain.ErrInvalidValue, naming what is
-// wrong; one the job's stage does not take is Decide's error. In every case
-// nothing is saved.
+// returns the events the job saved and revokes token, so a token submits
+// one result. A token not for job, for no submission, or from a round or
+// stage entry the job has left is a jobtoken error; a result that does not
+// decode or validate wraps domain.ErrMissingField or domain.ErrInvalidValue,
+// naming what is wrong; one the job's stage does not take is Decide's error.
+// In every case nothing is saved.
 func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	g, err := s.Tokens.Authorize(token, jobtoken.OpSubmitResult, job)
 	if err != nil {
+		return nil, fmt.Errorf("worker: submit result: %w", err)
+	}
+	j, v, err := s.Jobs.Load(ctx, job)
+	if err != nil {
+		return nil, fmt.Errorf("worker: submit result: %w", err)
+	}
+	hist, err := s.Jobs.History(ctx, job)
+	if err != nil {
+		return nil, fmt.Errorf("worker: submit result: %w", err)
+	}
+	if err := g.Current(j, hist); err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)
 	}
 	r, err := decode(g.Kind, data)
 	if err != nil {
 		return nil, fmt.Errorf("worker: %s result: %w", g.Kind, err)
-	}
-	j, v, err := s.Jobs.Load(ctx, job)
-	if err != nil {
-		return nil, fmt.Errorf("worker: submit result: %w", err)
 	}
 	p, err := s.Pipelines.Pipeline(ctx, j.Pipeline)
 	if err != nil {
@@ -54,6 +69,7 @@ func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, 
 	if err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)
 	}
+	s.Tokens.Revoke(token)
 	return evs, nil
 }
 
