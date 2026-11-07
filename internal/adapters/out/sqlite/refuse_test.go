@@ -2,13 +2,10 @@ package sqlite_test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
-	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/domain/decide"
 	"github.com/pablogore/software-factory/internal/ports"
@@ -84,7 +81,16 @@ func refuseContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 			_, _, err = st.Load(bg, jobID)
 			ctx.Expect(err).To(specs.MatchError(ports.ErrJobNotFound))
 		})
+	})
+}
 
+// plantedRefuseContract is what a store refuses of a job already saved
+// broken, which only a planted row holds.
+func plantedRefuseContract(s *specs.Spec, newStore func(ctx *specs.Context) plantedStore) {
+	bg := context.Background()
+	stop := domain.StopRequested{Job: jobID, By: "ana", At: at(1)}
+
+	s.When("a saved job breaks an invariant", func(s *specs.Spec) {
 		specs.Table(s, invalidJobs(), func(r invalidRow) string {
 			return "refuses to load a saved job with " + r.name + ", naming the field"
 		}, func(ctx *specs.Context, r invalidRow) {
@@ -121,17 +127,13 @@ func refuseContract(s *specs.Spec, newStore func(ctx *specs.Context) store) {
 
 func TestStoreRefuses(t *testing.T) {
 	specs.Describe(t, "sqlite.Store refuses", func(s *specs.Spec) {
-		refuseContract(s, func(ctx *specs.Context) store {
-			st, err := sqlite.Open(context.Background(), filepath.Join(ctx.Testing().TempDir(), "factory.db"))
-			ctx.Expect(err).To(specs.BeNil())
-			ctx.Cleanup(func() { _ = st.Close() })
-			return st
-		})
+		refuseContract(s, func(ctx *specs.Context) store { return openStore(ctx) })
+		plantedRefuseContract(s, func(ctx *specs.Context) plantedStore { return openStore(ctx) })
 	})
 }
 
 func TestMemstoreRefuses(t *testing.T) {
 	specs.Describe(t, "memstore.Store (fake) refuses", func(s *specs.Spec) {
-		refuseContract(s, func(*specs.Context) store { return memstore.New() })
+		refuseContract(s, func(ctx *specs.Context) store { return newMemstore(ctx) })
 	})
 }

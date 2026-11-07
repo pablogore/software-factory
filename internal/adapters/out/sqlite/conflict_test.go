@@ -11,7 +11,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/domain/decide"
@@ -118,7 +117,7 @@ func TestStoreConflict(t *testing.T) {
 
 func TestMemstoreConflict(t *testing.T) {
 	specs.Describe(t, "memstore.Store (fake) version conflict", func(s *specs.Spec) {
-		conflictContract(s, func(*specs.Context) store { return memstore.New() })
+		conflictContract(s, func(ctx *specs.Context) store { return newMemstore(ctx) })
 	})
 }
 

@@ -19,19 +19,37 @@ import (
 // encoded, so a caller never shares slices with what was saved and both
 // refuse the same unknown events.
 type Store struct {
-	mu       sync.Mutex
-	jobs     map[domain.JobID][]byte
-	versions map[domain.JobID]ports.Version
-	events   map[domain.JobID][]eventjson.Envelope
+	mu        sync.Mutex
+	jobs      map[domain.JobID][]byte
+	versions  map[domain.JobID]ports.Version
+	events    map[domain.JobID][]eventjson.Envelope
+	maxReason int
 }
 
-// New returns an empty store.
-func New() *Store {
-	return &Store{
-		jobs:     map[domain.JobID][]byte{},
-		versions: map[domain.JobID]ports.Version{},
-		events:   map[domain.JobID][]eventjson.Envelope{},
+// Option sets how New configures the store.
+type Option func(*Store)
+
+// WithMaxReason keeps at most n characters of an override's reason, instead
+// of eventjson.DefaultMaxReason. n must be at least 1.
+func WithMaxReason(n int) Option {
+	return func(s *Store) { s.maxReason = n }
+}
+
+// New returns an empty store, or an error for an invalid option.
+func New(opts ...Option) (*Store, error) {
+	s := &Store{
+		jobs:      map[domain.JobID][]byte{},
+		versions:  map[domain.JobID]ports.Version{},
+		events:    map[domain.JobID][]eventjson.Envelope{},
+		maxReason: eventjson.DefaultMaxReason,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if err := eventjson.CheckMaxReason(s.maxReason); err != nil {
+		return nil, fmt.Errorf("memstore: new: %w", err)
+	}
+	return s, nil
 }
 
 // Create implements ports.JobStore.
@@ -98,6 +116,7 @@ func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p dom
 	if len(evs) == 0 {
 		return nil, v, nil
 	}
+	evs = eventjson.CapReasons(evs, s.maxReason)
 	next := decide.Apply(job, evs)
 	if err := next.Validate(); err != nil {
 		return nil, 0, fmt.Errorf("memstore: save: %w", err)
@@ -118,32 +137,6 @@ func (s *Store) Apply(_ context.Context, id domain.JobID, v ports.Version, p dom
 	s.versions[id] = v + 1
 	s.events[id] = append(s.events[id], envs...)
 	return evs, v + 1, nil
-}
-
-// Plant saves job and evs as they are, past Decide and Validate, so a test
-// can hold what no Apply would save: a job breaking an invariant, or events
-// of any type to read back. It keeps the job's version, or starts it at 1.
-func (s *Store) Plant(_ context.Context, job domain.Job, evs ...domain.Event) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, err := json.Marshal(job)
-	if err != nil {
-		return fmt.Errorf("memstore: encode job %q: %w", job.ID, err)
-	}
-	envs := make([]eventjson.Envelope, 0, len(evs))
-	for _, ev := range evs {
-		env, err := eventjson.Encode(ev)
-		if err != nil {
-			return fmt.Errorf("memstore: job %q: %w", job.ID, err)
-		}
-		envs = append(envs, env)
-	}
-	if _, ok := s.versions[job.ID]; !ok {
-		s.versions[job.ID] = 1
-	}
-	s.jobs[job.ID] = data
-	s.events[job.ID] = append(s.events[job.ID], envs...)
-	return nil
 }
 
 // History implements ports.EventLog.
