@@ -108,8 +108,8 @@ func happyPath() []step {
 			[]domain.Event{entered("build", 3)}},
 		{"build READY enters gate", result("builder", 4, domain.BuildResult{Status: domain.BuildReady}),
 			[]domain.Event{entered(domain.StageGate, 4)}},
-		{"gate OK enters review", domain.GatePassed{Job: jobID, At: at(5)},
-			[]domain.Event{entered("review", 5)}},
+		{"gate OK keeps the checks run and enters review", domain.GatePassed{Job: jobID, Run: passingRun, At: at(5)},
+			[]domain.Event{ran(1, 5, passingRun), entered("review", 5)}},
 		{"reviewer-security PASS", pass("reviewer-security", 6), []domain.Event{passed("reviewer-security", 6)}},
 		{"reviewer-ux PASS", pass("reviewer-ux", 7), []domain.Event{passed("reviewer-ux", 7)}},
 		{"reviewer-ui PASS", pass("reviewer-ui", 8), []domain.Event{passed("reviewer-ui", 8)}},
@@ -195,7 +195,7 @@ func TestDecide(t *testing.T) {
 				{"intake result while in approve", "approve", result("intake", 1, domain.IntakeResult{Decision: domain.IntakeAccept})},
 				{"build result while in specgate", domain.StageSpecgate, result("builder", 1, domain.BuildResult{Status: domain.BuildReady})},
 				{"specgate OK while in build", "build", domain.SpecgatePassed{Job: jobID, At: at(1)}},
-				{"gate OK while in specgate", domain.StageSpecgate, domain.GatePassed{Job: jobID, At: at(1)}},
+				{"gate OK while in specgate", domain.StageSpecgate, domain.GatePassed{Job: jobID, Run: passingRun, At: at(1)}},
 				{"review from a role outside the stage", "review", pass("reviewer-docs", 1)},
 				{"approve result from the builder", "approve", result("builder", 1, domain.ApproveResult{Decision: domain.ApproveApprove})},
 				{"build result from the approver", "build", result("approver", 1, domain.BuildResult{Status: domain.BuildReady})},
@@ -322,7 +322,7 @@ func TestDecide(t *testing.T) {
 			toReview := func(ctx *specs.Context, job domain.Job, minute int) domain.Job {
 				for _, ev := range []domain.Event{
 					result("builder", minute, domain.BuildResult{Status: domain.BuildReady}),
-					domain.GatePassed{Job: jobID, At: at(minute)},
+					domain.GatePassed{Job: jobID, Run: passingRun, At: at(minute)},
 				} {
 					evs, err := decide.Decide(job, ev, defaultPipeline())
 					ctx.Expect(err).To(specs.BeNil())
@@ -529,6 +529,8 @@ func eventTime(ev domain.Event) time.Time {
 	case domain.NeedsInfo:
 		return e.At
 	case domain.InfoAnswered:
+		return e.At
+	case domain.ChecksRan:
 		return e.At
 	}
 	return time.Time{}

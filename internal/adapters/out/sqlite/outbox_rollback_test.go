@@ -51,7 +51,7 @@ func TestOutboxDatabase(t *testing.T) {
 		s.It("rolls back the state and its events when SQLite refuses the action insert", func(ctx *specs.Context) {
 			st := open(ctx, `CREATE TRIGGER refuse BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 
-			_, _, err := st.Apply(bg, job.ID, 1, p, domain.GateFailed{Job: job.ID, At: at}, act)
+			_, _, err := st.Apply(bg, job.ID, 1, p, domain.GateFailed{Job: job.ID, Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at}, act)
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			unsaved(ctx, st)
@@ -61,7 +61,7 @@ func TestOutboxDatabase(t *testing.T) {
 			st := open(ctx, `CREATE TRIGGER refuse BEFORE INSERT ON events WHEN NEW.name = 'StageEntered'
 				BEGIN SELECT RAISE(ABORT, 'refused'); END`)
 
-			_, _, err := st.Apply(bg, job.ID, 1, p, domain.GateFailed{Job: job.ID, At: at}, act)
+			_, _, err := st.Apply(bg, job.ID, 1, p, domain.GateFailed{Job: job.ID, Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at}, act)
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			unsaved(ctx, st)

@@ -95,7 +95,7 @@ func feedContract(s *specs.Spec, open restartable) {
 		createJobs(ctx, st)
 		apply(ctx, st, jobID, ready(jobID, 1))
 		apply(ctx, st, "job-2", ready("job-2", 2))
-		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, At: at(3)})
+		apply(ctx, st, jobID, domain.GatePassed{Job: jobID, Run: domain.ChecksRun{Command: "make check"}, At: at(3)})
 
 		got, err := st.Pending(bg, "board", []string{"StageEntered"})
 
@@ -110,7 +110,7 @@ func feedContract(s *specs.Spec, open restartable) {
 		createJobs(ctx, st)
 		apply(ctx, st, jobID, ready(jobID, 1))
 		// A failed gate in round 1 saves RoundStarted, then StageEntered.
-		apply(ctx, st, jobID, domain.GateFailed{Job: jobID, At: at(2)})
+		apply(ctx, st, jobID, domain.GateFailed{Job: jobID, Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at(2)})
 
 		got, err := st.Pending(bg, "board", []string{"RoundStarted"})
 		ctx.Expect(err).To(specs.BeNil())

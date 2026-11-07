@@ -108,7 +108,7 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	case domain.SpecgatePassed:
 		return afterGate(job, ev, domain.StageSpecgate, domain.KindSpec, e.At, p)
 	case domain.GatePassed:
-		return afterGate(job, ev, domain.StageGate, domain.KindBuild, e.At, p)
+		return gatePassed(job, e, p)
 	case domain.SpecgateFailed:
 		return specgateFailed(job, e, p)
 	case domain.GateFailed:
@@ -732,10 +732,24 @@ func specgateFailed(job domain.Job, e domain.SpecgateFailed, p domain.Pipeline) 
 	return append(evs, domain.StageEntered{Job: job.ID, Stage: p.Stages[i].Name, At: e.At}), nil
 }
 
-// gateFailed sends the job back to build for another round, or to needs-human
-// when it fails in the last one. A failing gate uses up a round, as in the
-// current factory, so the limit is the review stage's rounds; the new
-// round keeps job.Reviewers because none of them got to run.
+// gatePassed keeps the checks run with the job and moves it on from the gate
+// to the stage after build.
+func gatePassed(job domain.Job, e domain.GatePassed, p domain.Pipeline) ([]domain.Event, error) {
+	evs, err := afterGate(job, e, domain.StageGate, domain.KindBuild, e.At, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.Run.Validate(); err != nil {
+		return nil, fmt.Errorf("decide: gate passed: %w", err)
+	}
+	return append([]domain.Event{checksRan(job, e.Run, e.At)}, evs...), nil
+}
+
+// gateFailed keeps the checks run with the job, so the next round's builder
+// gets its log, and sends the job back to build for another round, or to
+// needs-human when it fails in the last one. A failing gate uses up a round,
+// as in the current factory, so the limit is the review stage's rounds; the
+// new round keeps job.Reviewers because none of them got to run.
 func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domain.Event, error) {
 	b := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Kind == domain.KindBuild })
 	if job.Stage != domain.StageGate || b < 0 {
@@ -745,14 +759,25 @@ func gateFailed(job domain.Job, e domain.GateFailed, p domain.Pipeline) ([]domai
 	if r < 0 {
 		return nil, fmt.Errorf("decide: pipeline %q has no review stage", p.Name)
 	}
+	if err := e.Run.Validate(); err != nil {
+		return nil, fmt.Errorf("decide: gate failed: %w", err)
+	}
+	ran := checksRan(job, e.Run, e.At)
 	if limit := roundLimit(job, p, p.Stages[r]); job.Round >= limit {
 		reason := fmt.Sprintf("gate failed in the last round (%d of %d)", job.Round, limit)
-		return wall(job, p, domain.CauseGateFailed, reason, e.At), nil
+		return append([]domain.Event{ran}, wall(job, p, domain.CauseGateFailed, reason, e.At)...), nil
 	}
 	return []domain.Event{
+		ran,
 		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: slices.Clone(job.Reviewers), At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: p.Stages[b].Name, At: e.At},
 	}, nil
+}
+
+// checksRan is the history entry for the checks run the gate judged in the
+// job's current round.
+func checksRan(job domain.Job, run domain.ChecksRun, at time.Time) domain.ChecksRan {
+	return domain.ChecksRan{Job: job.ID, Round: job.Round, Run: run, At: at}
 }
 
 // budgetExhausted stops a job in a pipeline stage or in triage, the only

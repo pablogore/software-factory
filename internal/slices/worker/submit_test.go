@@ -79,7 +79,7 @@ func (w world) apply(ctx *specs.Context, id domain.JobID, ev domain.Event) {
 // round 2, without its builder's token.
 func (w world) newRound(ctx *specs.Context, id domain.JobID) {
 	w.apply(ctx, id, domain.ResultSubmitted{Job: id, Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at})
-	w.apply(ctx, id, domain.GateFailed{Job: id, At: at})
+	w.apply(ctx, id, domain.GateFailed{Job: id, Run: domain.ChecksRun{Command: "make check", ExitCode: 2}, At: at})
 	job, _, err := w.store.Load(context.Background(), id)
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(job.Stage).ToEqual("build")
@@ -232,7 +232,7 @@ func TestSubmit(t *testing.T) {
 			s.It("refuses a token of an earlier entry into the same stage, in the same round", func(ctx *specs.Context) {
 				w := newWorld(ctx)
 				w.apply(ctx, "j-1", domain.ResultSubmitted{Job: "j-1", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at})
-				w.apply(ctx, "j-1", domain.GatePassed{Job: "j-1", At: at})
+				w.apply(ctx, "j-1", domain.GatePassed{Job: "j-1", Run: domain.ChecksRun{Command: "make check"}, At: at})
 				job, _, err := w.store.Load(context.Background(), "j-1")
 				ctx.Expect(err).To(specs.BeNil())
 				hist, err := w.store.History(context.Background(), "j-1")
