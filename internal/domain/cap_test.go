@@ -10,8 +10,8 @@ import (
 
 func TestIssueCap(t *testing.T) {
 	specs.Describe(t, "IssueCap", func(s *specs.Spec) {
-		s.It("accepts the two caps", func(ctx *specs.Context) {
-			ctx.Expect(domain.IssueCaps()).ToEqual([]domain.IssueCap{domain.CapSlices, domain.CapUSD})
+		s.It("accepts the three caps", func(ctx *specs.Context) {
+			ctx.Expect(domain.IssueCaps()).ToEqual([]domain.IssueCap{domain.CapSlices, domain.CapUSD, domain.CapBudget})
 			for _, c := range domain.IssueCaps() {
 				ctx.Expect(c.Validate()).To(specs.BeNil())
 			}

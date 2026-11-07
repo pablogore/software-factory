@@ -64,6 +64,8 @@ var codecs = func() map[string]codec {
 	add(register[domain.MergeOverridden]())
 	add(register[domain.LimitOverrideRequested]())
 	add(register[domain.LimitOverridden]())
+	add(register[domain.CapRaiseRequested]())
+	add(register[domain.CapRaised]())
 	add(register[domain.StopRequested]())
 	add(register[domain.JobStopped]())
 	add(register[domain.ReplanRequested]())

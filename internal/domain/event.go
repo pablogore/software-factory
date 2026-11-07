@@ -166,12 +166,14 @@ func (e RoundStarted) JobID() JobID { return e.Job }
 // NeedsHuman records that the job stops until a person acts, and why: Cause
 // is one of HumanCauses, and what a person's OK or feedback does is decided
 // from it alone; Reason is the same cause in words for a person. After a
-// wall, Question is the closed question the person answers, data only.
+// wall, Question is the closed question the person answers, data only. For
+// a spent budget, Spent is what the job had spent, in USD.
 type NeedsHuman struct {
 	Job      JobID      `json:"job"`
 	Reason   string     `json:"reason"`
 	Question string     `json:"question,omitempty"`
 	Cause    HumanCause `json:"cause"`
+	Spent    float64    `json:"spent_usd,omitempty"`
 	At       time.Time  `json:"at"`
 }
 
@@ -230,10 +232,12 @@ func (MergeFailed) EventName() string { return "MergeFailed" }
 func (e MergeFailed) JobID() JobID { return e.Job }
 
 // BudgetExhausted records that the job was about to launch an agent with
-// its whole budget already spent, so the agent never ran.
+// its whole budget already spent, so the agent never ran. Spent is what the
+// job had spent, in USD: a person's raise of its budget must pass it.
 type BudgetExhausted struct {
-	Job JobID     `json:"job"`
-	At  time.Time `json:"at"`
+	Job   JobID     `json:"job"`
+	Spent float64   `json:"spent_usd"`
+	At    time.Time `json:"at"`
 }
 
 // EventName implements Event.
@@ -460,6 +464,47 @@ func (LimitOverridden) EventName() string { return "LimitOverridden" }
 
 // JobID implements Event.
 func (e LimitOverridden) JobID() JobID { return e.Job }
+
+// CapRaiseRequested asks to raise one cap of the job's issue: its slices or
+// its USD, so an issue stopped at that cap starts slices again, or the job's
+// own budget, so a job stopped for its spent budget goes back to the stage it
+// was in. It is the only way either resumes. Like LimitOverrideRequested, the
+// event source decides Allowed and AuthorKind, and only an allowed person's
+// raise acts; By names that person. Cap is one of IssueCaps and Value the new
+// cap, which must pass the value reached. WaitSeq is the wait it answers: the
+// job's for its budget, the issue's stop for its slices or USD.
+type CapRaiseRequested struct {
+	Job        JobID      `json:"job"`
+	By         string     `json:"by"`
+	AuthorKind AuthorKind `json:"author_kind"`
+	Allowed    bool       `json:"allowed"`
+	Cap        IssueCap   `json:"cap"`
+	Value      float64    `json:"value"`
+	WaitSeq    int        `json:"wait_seq"`
+	At         time.Time  `json:"at"`
+}
+
+// EventName implements Event.
+func (CapRaiseRequested) EventName() string { return "CapRaiseRequested" }
+
+// JobID implements Event.
+func (e CapRaiseRequested) JobID() JobID { return e.Job }
+
+// CapRaised is the job's history entry for an accepted raise of its budget:
+// who raised it to what, and when. The event that resumes the job follows it.
+type CapRaised struct {
+	Job   JobID     `json:"job"`
+	By    string    `json:"by"`
+	Cap   IssueCap  `json:"cap"`
+	Value float64   `json:"value"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (CapRaised) EventName() string { return "CapRaised" }
+
+// JobID implements Event.
+func (e CapRaised) JobID() JobID { return e.Job }
 
 // StopRequested asks to stop the job for good. Like HumanApproved, the event
 // source vouches that an allowed person sent it; By names that person.
