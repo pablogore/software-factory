@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"path"
+)
 
 // Role is an instance of a Kind, declared in configuration with its own prompt.
 // Adding a role of an existing kind needs no code (04-roles.md).
@@ -15,6 +18,10 @@ type Role struct {
 	Mode        Mode   `json:"mode,omitempty"`
 	// AlwaysRerun makes a review role run in every round, even after it passed.
 	AlwaysRerun bool `json:"always_rerun,omitempty"`
+	// AllowedPaths are the only files a build role's diff may add, modify or
+	// delete, from the repo root: an entry ending in "/" covers everything
+	// under it, any other is a path.Match pattern. None means no limit.
+	AllowedPaths []string `json:"allowed_paths,omitempty"`
 }
 
 // When says when a role runs; a role whose conditions don't apply is skipped
@@ -83,7 +90,9 @@ func ValidateRoleName(name string) error {
 	return nil
 }
 
-// Validate checks the role's name, kind and mode; the error names the role.
+// Validate checks the role's name, kind and mode, and that only a build role
+// declares allowed paths, each a well-formed pattern; the error names the
+// role.
 func (r Role) Validate() error {
 	if err := ValidateRoleName(r.Name); err != nil {
 		return err
@@ -93,6 +102,16 @@ func (r Role) Validate() error {
 	}
 	if err := r.Mode.Validate(); err != nil {
 		return fmt.Errorf("role %s: %w", r.Name, err)
+	}
+	// Only the gate after build reads them; on another kind they would look
+	// like a limit that nothing enforces.
+	if len(r.AllowedPaths) > 0 && r.Kind != KindBuild {
+		return fmt.Errorf("role %s: %w: allowed_paths on a %s role, want only on a build role", r.Name, ErrInvalidValue, r.Kind)
+	}
+	for _, p := range r.AllowedPaths {
+		if _, err := path.Match(p, ""); p == "" || err != nil {
+			return fmt.Errorf("role %s: %w: allowed path %q", r.Name, ErrInvalidValue, p)
+		}
 	}
 	return nil
 }

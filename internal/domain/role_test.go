@@ -100,6 +100,38 @@ func TestRole(t *testing.T) {
 		})
 	})
 
+	specs.Describe(t, "Role.Validate allowed paths", func(s *specs.Spec) {
+		s.It("accepts folders and patterns on a build role", func(ctx *specs.Context) {
+			role := domain.Role{Name: "builder", Kind: domain.KindBuild, Mode: domain.ModeBlocking, AllowedPaths: []string{"internal/slices/build/", "docs/*.md"}}
+
+			ctx.Expect(role.Validate()).To(specs.BeNil())
+		})
+
+		s.It("rejects them on a role of another kind", func(ctx *specs.Context) {
+			role := domain.Role{Name: "reviewer-code", Kind: domain.KindReview, Mode: domain.ModeBlocking, AllowedPaths: []string{"internal/"}}
+
+			err := role.Validate()
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual("role reviewer-code: invalid value: allowed_paths on a review role, want only on a build role")
+		})
+
+		s.It("rejects a malformed pattern", func(ctx *specs.Context) {
+			role := domain.Role{Name: "builder", Kind: domain.KindBuild, Mode: domain.ModeBlocking, AllowedPaths: []string{"internal/["}}
+
+			err := role.Validate()
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`role builder: invalid value: allowed path "internal/["`)
+		})
+
+		s.It("rejects an empty entry", func(ctx *specs.Context) {
+			role := domain.Role{Name: "builder", Kind: domain.KindBuild, Mode: domain.ModeBlocking, AllowedPaths: []string{""}}
+
+			ctx.Expect(role.Validate()).To(specs.MatchError(domain.ErrInvalidValue))
+		})
+	})
+
 	specs.Describe(t, "Role.AlwaysRerun", func(s *specs.Spec) {
 		s.It("is off unless the role is marked", func(ctx *specs.Context) {
 			var r domain.Role
