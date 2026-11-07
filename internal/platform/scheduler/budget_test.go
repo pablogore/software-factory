@@ -130,12 +130,12 @@ func TestSchedulerBudget(t *testing.T) {
 
 		rows := []float64{0, -1, math.NaN()}
 		specs.Table(s, rows, func(usd float64) string { return "refuses a budget of USD " + strconv.FormatFloat(usd, 'f', -1, 64) }, func(ctx *specs.Context, usd float64) {
-			_, err := scheduler.New(1, usd, newCosts())
+			_, err := scheduler.New(1, usd, newCosts(), plentyGitHub())
 			ctx.Expect(err).To(specs.MatchError(scheduler.ErrBudget))
 		})
 
 		s.It("refuses a budget without a cost source", func(ctx *specs.Context) {
-			_, err := scheduler.New(1, budget, nil)
+			_, err := scheduler.New(1, budget, nil, plentyGitHub())
 			ctx.Expect(err).To(specs.MatchError(scheduler.ErrBudget))
 		})
 	})
