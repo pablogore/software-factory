@@ -77,6 +77,7 @@ var codecs = func() map[string]codec {
 	add(register[domain.InitiativeEnded]())
 	add(register[domain.InitiativeNeedsHumanRaised]())
 	add(register[domain.InitiativeAnswered]())
+	add(register[domain.AgentProgressed]())
 	// Result is an interface, so ResultSubmitted carries its kind to decode.
 	m[domain.ResultSubmitted{}.EventName()] = codec{reflect.TypeFor[domain.ResultSubmitted](), decodeResultSubmitted}
 	return m
