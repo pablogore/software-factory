@@ -1,0 +1,118 @@
+package mcpworker_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/getsyntegrity/go-specs/specs"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
+	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+)
+
+// withAuth sets an Authorization header on every request, as an agent's
+// MCP client does with the headers its session was given.
+type withAuth struct{ auth string }
+
+func (a withAuth) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	if a.auth != "" {
+		r.Header.Set("Authorization", a.auth)
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+// connect opens an MCP session with job's server on h, sending auth.
+func connect(ctx *specs.Context, h http.Handler, job, auth string) *mcp.ClientSession {
+	srv := httptest.NewServer(h)
+	ctx.Cleanup(srv.Close)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil)
+	cs, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:             srv.URL + "/worker/jobs/" + job + "/mcp",
+		HTTPClient:           &http.Client{Transport: withAuth{auth}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+// submitTool calls submit_result with args and returns its text and
+// whether it is a tool error.
+func submitTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (string, bool) {
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolSubmitResult, Arguments: json.RawMessage(args)})
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(len(res.Content)).ToEqual(1)
+	text, ok := res.Content[0].(*mcp.TextContent)
+	ctx.Expect(ok).ToEqual(true)
+	return text.Text, res.IsError
+}
+
+func TestMCP(t *testing.T) {
+	specs.Describe(t, "the worker MCP server", func(s *specs.Spec) {
+		s.It("offers submit_result as its only tool", func(ctx *specs.Context) {
+			cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer tok")
+			res, err := cs.ListTools(context.Background(), nil)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(len(res.Tools)).ToEqual(1)
+			ctx.Expect(res.Tools[0].Name).ToEqual("submit_result")
+		})
+
+		s.It("hands the bearer token, the job of its path and the arguments to the submitter and names the saved events", func(ctx *specs.Context) {
+			sub := &submitter{}
+			cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+			text, isErr := submitTool(ctx, cs, `{"status":"READY"}`)
+			ctx.Expect(isErr).ToEqual(false)
+			ctx.Expect(text).ToEqual("result recorded for job j-1: StageEntered")
+			ctx.Expect(sub.calls).ToEqual([]call{{"tok", "j-1", `{"status":"READY"}`}})
+		})
+
+		s.It("hands no token over when the request has no bearer token", func(ctx *specs.Context) {
+			sub := &submitter{err: jobtoken.ErrNoToken}
+			cs := connect(ctx, mcpworker.Handler(sub), "j-1", "")
+			text, isErr := submitTool(ctx, cs, `{}`)
+			ctx.Expect(isErr).ToEqual(true)
+			ctx.Expect(text).ToEqual("refused (401): no job token")
+			ctx.Expect(sub.calls[0].token).ToEqual("")
+		})
+
+		s.It("answers a refusal as a tool error worded as the HTTP route words it", func(ctx *specs.Context) {
+			err := fmt.Errorf("w: build result: %w: status", domain.ErrInvalidValue)
+			cs := connect(ctx, mcpworker.Handler(&submitter{err: err}), "j-1", "Bearer tok")
+			text, isErr := submitTool(ctx, cs, `{"status":"DONE"}`)
+			ctx.Expect(isErr).ToEqual(true)
+			ctx.Expect(text).ToEqual("refused (422): " + err.Error())
+		})
+
+		s.It("hides an unexpected error", func(ctx *specs.Context) {
+			cs := connect(ctx, mcpworker.Handler(&submitter{err: fmt.Errorf("sqlite: disk I/O at /var/x")}), "j-1", "Bearer tok")
+			text, isErr := submitTool(ctx, cs, `{}`)
+			ctx.Expect(isErr).ToEqual(true)
+			ctx.Expect(text).ToEqual("refused (500): internal error")
+		})
+
+		s.It("refuses a result over the size limit without submitting it", func(ctx *specs.Context) {
+			sub := &submitter{}
+			cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+			text, isErr := submitTool(ctx, cs, `{"summary":"`+strings.Repeat("x", mcpworker.MaxResultBytes)+`"}`)
+			ctx.Expect(isErr).ToEqual(true)
+			ctx.Expect(text).ToEqual("refused (413): result over 1 MiB")
+			ctx.Expect(sub.calls).To(specs.BeEmpty())
+		})
+
+		s.It("knows no other tool", func(ctx *specs.Context) {
+			sub := &submitter{}
+			cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+			_, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "job_approve", Arguments: map[string]any{}})
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(sub.calls).To(specs.BeEmpty())
+		})
+	})
+}
