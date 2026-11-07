@@ -153,7 +153,7 @@ func TestQueue(t *testing.T) {
 		s.When("there is a tech lead order", func(s *specs.Spec) {
 			s.It("hands issues to the scheduler in that order, the unlisted ones after by number", func(ctx *specs.Context) {
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{TechLead: []int{9, 3}, Priority: []int{5, 1}}, r)
+				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{TechLead: []int{9, 3}, Priority: []int{5, 1}}, noDeps{}, r)
 				q.Add(context.Background(), issues(3, 5, 9, 1)...)
 				ctx.Expect(takeAll(ctx, r, 4)).ToEqual([]int{9, 3, 1, 5})
 			})
@@ -162,7 +162,7 @@ func TestQueue(t *testing.T) {
 		s.When("there is no tech lead order", func(s *specs.Spec) {
 			s.It("hands issues over by the product owner's priority, the unlisted ones after by number", func(ctx *specs.Context) {
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{Priority: []int{5, 1}}, r)
+				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{Priority: []int{5, 1}}, noDeps{}, r)
 				q.Add(context.Background(), issues(9, 1, 3, 5)...)
 				ctx.Expect(takeAll(ctx, r, 4)).ToEqual([]int{5, 1, 3, 9})
 			})
@@ -171,7 +171,7 @@ func TestQueue(t *testing.T) {
 		s.When("issues wait for a slot", func(s *specs.Spec) {
 			s.It("lists them in the order they will be taken", func(ctx *specs.Context) {
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{TechLead: []int{9, 3}}, r)
+				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{TechLead: []int{9, 3}}, noDeps{}, r)
 				q.Add(context.Background(), issues(3, 5, 9, 1)...)
 				r.awaitStart(ctx, 9)
 				ctx.Expect(numbers(q.Waiting())).ToEqual([]int{3, 1, 5})
@@ -187,7 +187,7 @@ func TestQueue(t *testing.T) {
 
 			s.It("puts an issue added later in its place among them", func(ctx *specs.Context) {
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{TechLead: []int{9, 3, 7}}, r)
+				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{TechLead: []int{9, 3, 7}}, noDeps{}, r)
 				q.Add(context.Background(), issues(9, 3, 1)...)
 				r.awaitStart(ctx, 9)
 				q.Add(context.Background(), issues(7)...)
@@ -197,7 +197,7 @@ func TestQueue(t *testing.T) {
 
 			s.It("takes an issue added twice only once", func(ctx *specs.Context) {
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{}, r)
+				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{}, noDeps{}, r)
 				q.Add(context.Background(), issues(1, 2)...)
 				r.awaitStart(ctx, 1)
 				q.Add(context.Background(), issues(1, 2)...)
@@ -209,7 +209,7 @@ func TestQueue(t *testing.T) {
 		s.When("the scheduler has two slots", func(s *specs.Spec) {
 			s.It("starts the first two in order and keeps the rest waiting", func(ctx *specs.Context) {
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 2, costs{}), queue.Order{Priority: []int{4, 2}}, r)
+				q := queue.New(newScheduler(ctx, 2, costs{}), queue.Order{Priority: []int{4, 2}}, noDeps{}, r)
 				q.Add(context.Background(), issues(1, 2, 3, 4)...)
 				r.awaitStart(ctx, 4)
 				r.awaitStart(ctx, 2)
@@ -232,7 +232,7 @@ func TestQueue(t *testing.T) {
 				release := make(chan struct{})
 				busy := sch.Submit(context.Background(), "busy", func(context.Context) error { <-release; return nil })
 				waits := sch.Submit(context.Background(), "waits", func(context.Context) error { return nil })
-				q := queue.New(sch, queue.Order{}, r)
+				q := queue.New(sch, queue.Order{}, noDeps{}, r)
 				q.Add(context.Background(), issues(1)...)
 				ctx.Expect(numbers(q.Waiting())).ToEqual([]int{1})
 				ctx.Expect(r.started()).To(specs.BeEmpty())
@@ -249,7 +249,7 @@ func TestQueue(t *testing.T) {
 		s.When("an issue's work ends", func(s *specs.Spec) {
 			s.It("hands the work's error to the runner", func(ctx *specs.Context) {
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{}, r)
+				q := queue.New(newScheduler(ctx, 1, costs{}), queue.Order{}, noDeps{}, r)
 				q.Add(context.Background(), issues(1)...)
 				r.awaitStart(ctx, 1)
 				ctx.Expect(r.end(ctx, 1, errAgent)).To(specs.MatchError(errAgent))
@@ -258,7 +258,7 @@ func TestQueue(t *testing.T) {
 			s.It("hands over why the scheduler never ran it, and takes the next", func(ctx *specs.Context) {
 				errCosts := errors.New("costs unreadable")
 				r := newRunner()
-				q := queue.New(newScheduler(ctx, 1, costs{err: errCosts}), queue.Order{}, r)
+				q := queue.New(newScheduler(ctx, 1, costs{err: errCosts}), queue.Order{}, noDeps{}, r)
 				q.Add(context.Background(), issues(1, 2)...)
 				ctx.Expect(r.awaitResult(ctx, 1)).To(specs.MatchError(errCosts))
 				ctx.Expect(r.awaitResult(ctx, 2)).To(specs.MatchError(errCosts))

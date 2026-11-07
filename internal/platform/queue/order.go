@@ -9,6 +9,8 @@ import (
 type Issue struct {
 	Number int
 	Title  string
+	// Body is read for the issue's "Depends on #N" lines.
+	Body string
 }
 
 // Order is the explicit order to take issues in, issue numbers first to
