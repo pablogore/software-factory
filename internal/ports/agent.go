@@ -43,7 +43,9 @@ type SessionSpec struct {
 // agent it is and how it is spoken to (ACP, a native CLI).
 type Agent interface {
 	// Start launches the agent and creates a session in s.Dir with
-	// s.MCPServers. The session lives until Close, not until ctx ends.
+	// s.MCPServers. The session lives until Close, Cancel or its agent's
+	// time limit, not until ctx ends; a running turn that hits the limit
+	// ends as Cancel ends it, with domain.StopTimedOut.
 	Start(ctx context.Context, s SessionSpec) (Session, error)
 }
 
@@ -54,12 +56,15 @@ type Session interface {
 	// and role, and ends with one domain.ProgressEnded, then closes. Events
 	// are dropped once ctx ends.
 	Prompt(ctx context.Context, msg string) (<-chan domain.AgentProgressed, error)
-	// Cancel asks the agent to stop the running turn; the turn still ends
-	// with its ProgressEnded.
+	// Cancel asks the agent to stop and ends the session: a running turn
+	// ends with a ProgressEnded whose StopReason is domain.StopCancelled.
+	// An agent that has not stopped after a short grace period is killed,
+	// with its child processes. Work goes on with Resume or a new session.
 	Cancel() error
 	// Resume loads the session again in the agent, or is
 	// ErrResumeUnsupported.
 	Resume(ctx context.Context) error
-	// Close ends the session and its agent. Closing again is a no-op.
+	// Close ends the session and kills its agent, with its child processes.
+	// Closing again is a no-op.
 	Close() error
 }

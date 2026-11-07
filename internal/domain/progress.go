@@ -20,6 +20,15 @@ const (
 	ProgressEnded ProgressKind = "ended"
 )
 
+// Stop reasons of a turn that factoryd ended itself rather than the agent.
+const (
+	// StopCancelled is a turn of a session that was cancelled. It is ACP's
+	// own reason for it, so agents that stop when asked report it too.
+	StopCancelled = "cancelled"
+	// StopTimedOut is a turn of a session that ran past its time limit.
+	StopTimedOut = "timed_out"
+)
+
 // AgentProgressed records what an agent working on the job reported during a
 // session, for the agents' log and the channels (06-interfaz-y-
 // observabilidad.md). It changes no state.
