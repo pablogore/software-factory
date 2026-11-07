@@ -2,6 +2,8 @@
 // a job. Submit takes a role's result as JSON, with the session's job token,
 // and turns it into the job's ResultSubmitted, the same for the MCP tool
 // submit_result and for `factory worker submit-result` (01-diseno.md).
+// Progress records what the agent says it is doing, for the MCP tool
+// progress, as an event of the job.
 package worker
 
 import (
