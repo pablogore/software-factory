@@ -79,6 +79,7 @@ func samples() []sample {
 		{"InitiativeEnded", domain.InitiativeEnded{Job: id, Initiative: ini, At: t}},
 		{"InitiativeNeedsHumanRaised", domain.InitiativeNeedsHumanRaised{Job: id, Initiative: ini, Reason: "unclear", At: t}},
 		{"InitiativeAnswered", domain.InitiativeAnswered{Job: id, Initiative: ini, By: "ana", Text: "do S2", At: t}},
+		{"AgentProgressed", domain.AgentProgressed{Job: id, Role: "builder", Kind: domain.ProgressEnded, Text: "read a.go", ToolCall: "call-1", ToolStatus: "completed", InputTokens: 120, OutputTokens: 40, StopReason: "end_turn", Error: "agent exited", At: t}},
 	}
 }
 
