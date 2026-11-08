@@ -186,11 +186,14 @@ func (e RoundStarted) JobID() JobID { return e.Job }
 // is one of HumanCauses, and what a person's OK or feedback does is decided
 // from it alone; Reason is the same cause in words for a person. After a
 // wall, Question is the closed question the person answers, data only. For
-// a spent budget, Spent is what the job had spent, in USD.
+// a spent budget, Spent is what the job had spent, in USD. After an agent's
+// question, Question is that question and From the stage that asked, which
+// gets the answer.
 type NeedsHuman struct {
 	Job      JobID      `json:"job"`
 	Reason   string     `json:"reason"`
 	Question string     `json:"question,omitempty"`
+	From     string     `json:"from,omitempty"`
 	Cause    HumanCause `json:"cause"`
 	Spent    float64    `json:"spent_usd,omitempty"`
 	At       time.Time  `json:"at"`
@@ -301,11 +304,13 @@ func (AttemptFailed) EventName() string { return "AttemptFailed" }
 func (e AttemptFailed) JobID() JobID { return e.Job }
 
 // NeedsInfo records that the job waits for a person to answer a question
-// from stage From, which gets the answer.
+// from stage From, which gets the answer. Question is the question an
+// agent asked with ask_human, empty when intake asked for more information.
 type NeedsInfo struct {
-	Job  JobID     `json:"job"`
-	From string    `json:"from"`
-	At   time.Time `json:"at"`
+	Job      JobID     `json:"job"`
+	From     string    `json:"from"`
+	Question string    `json:"question,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // EventName implements Event.

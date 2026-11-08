@@ -40,6 +40,7 @@ func causeRows() []causeRow {
 		{"a refused external action records action-failed", func() domain.Job { return atGate(1, nil) }, refused(1), domain.CauseActionFailed},
 		{"a failed merge records merge-failed", merging, mergeFailed("conflict in go.sum", 1), domain.CauseMergeFailed},
 		{"a spent budget records budget-exhausted", func() domain.Job { return building(2) }, budgetSpent(1), domain.CauseBudget},
+		{"an approver's question records asked", approving, approverAsks(1), domain.CauseAsked},
 	}
 }
 
@@ -186,6 +187,7 @@ func TestNeedsHumanCause(t *testing.T) {
 				{"after a refused external action it is refused, naming the cause", domain.CauseActionFailed, nil, decide.ErrOKRefused},
 				{"after a failed merge it is refused, naming the cause", domain.CauseMergeFailed, nil, decide.ErrOKRefused},
 				{"after a spent budget it is refused, naming the cause", domain.CauseBudget, nil, decide.ErrOKRefused},
+				{"after an approver's question it is refused, naming the cause", domain.CauseAsked, nil, decide.ErrOKRefused},
 			}
 			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
 				job := waitingFor(ctx, r.cause)
@@ -255,6 +257,8 @@ func TestNeedsHumanCause(t *testing.T) {
 				{"after a refused external action it sends the job back to build", domain.CauseActionFailed, toBuild, nil},
 				{"after a failed merge it sends the job back to build", domain.CauseMergeFailed, toBuild, nil},
 				{"after a spent budget it is refused and the job keeps waiting", domain.CauseBudget, nil, decide.ErrUnsupported},
+				{"after an approver's question it is the answer and the job goes back to approve", domain.CauseAsked,
+					[]domain.Event{domain.InfoAnswered{Job: jobID, By: "pablogore", Text: "rename the flag", At: at(2)}, entered("approve", 2)}, nil},
 			}
 			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
 				job := waitingFor(ctx, r.cause)
