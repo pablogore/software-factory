@@ -18,15 +18,18 @@ import (
 // was asked to check. With hold, a check of a job in it says it started on
 // started and answers only once hold is closed or its ctx ends, then with
 // the ctx's error, as a cancelled run does; stopped has the jobs whose
-// check ended so.
+// check ended so. With linger, a cancelled check says so on cancelled and
+// takes until linger is closed to stop, instead of a moment.
 type gate struct {
-	mu      sync.Mutex
-	run     domain.ChecksRun
-	err     error
-	jobs    []domain.JobID
-	stopped []domain.JobID
-	hold    map[domain.JobID]chan struct{}
-	started chan domain.JobID
+	mu        sync.Mutex
+	run       domain.ChecksRun
+	err       error
+	jobs      []domain.JobID
+	stopped   []domain.JobID
+	hold      map[domain.JobID]chan struct{}
+	started   chan domain.JobID
+	linger    chan struct{}
+	cancelled chan domain.JobID
 }
 
 func (g *gate) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error) {
@@ -39,7 +42,12 @@ func (g *gate) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, er
 		select {
 		case <-hold:
 		case <-ctx.Done():
-			time.Sleep(50 * time.Millisecond)
+			if g.linger != nil {
+				g.cancelled <- id
+				<-g.linger
+			} else {
+				time.Sleep(50 * time.Millisecond)
+			}
 			g.mu.Lock()
 			g.stopped = append(g.stopped, id)
 			g.mu.Unlock()
@@ -72,6 +80,36 @@ func (g *gate) holding(jobs ...domain.JobID) func() {
 			close(h)
 		}
 	}
+}
+
+// lingering makes g's cancelled checks stop only once the returned func is
+// called.
+func (g *gate) lingering() func() {
+	g.linger, g.cancelled = make(chan struct{}), make(chan domain.JobID, 1)
+	return func() { close(g.linger) }
+}
+
+// runHeld starts token's run_gate on job, held by g, and returns once its
+// check started.
+func runHeld(w world, g *gate, token string, job domain.JobID) {
+	go func() { _, _ = w.sub.RunGate(context.Background(), token, job) }()
+	<-g.started
+}
+
+// submitting submits data with token on job in the background, and returns
+// the channel its error comes on.
+func submitting(w world, token string, job domain.JobID, data string) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.sub.Submit(context.Background(), token, job, []byte(data))
+		done <- err
+	}()
+	return done
+}
+
+// pending tells whether the submission done comes from has not answered.
+func pending(done <-chan error) bool {
+	return len(done) == 0
 }
 
 var gated = domain.ChecksRun{Command: "make check", ExitCode: 2, Output: "--- FAIL: TestSave", Violations: []string{"Makefile is protected"}}
@@ -214,6 +252,77 @@ func TestRunGate(t *testing.T) {
 				ctx.Expect(a.err).To(specs.MatchError(gatelock.ErrPreempted))
 				ctx.Expect(errors.Is(a.err, domain.ErrBusy)).To(specs.BeFalse())
 				ctx.Expect(a.run).ToEqual(domain.ChecksRun{})
+			})
+
+			s.It("holds up no other job's submission or progress while it waits for the run to stop", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				release := g.holding("j-1")
+				defer release()
+				stop := g.lingering()
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				runHeld(w, g, token, "j-1")
+				first := submitting(w, token, "j-1", `{"status":"READY"}`)
+				<-g.cancelled
+
+				var progressed, err error
+				var evs []domain.Event
+				other := make(chan struct{})
+				go func() {
+					_, progressed = w.sub.Progress(context.Background(), w.j2, "j-2", "still building")
+					evs, err = w.sub.Submit(context.Background(), w.j2, "j-2", []byte(`{"status":"READY"}`))
+					close(other)
+				}()
+				answered := false
+				select {
+				case <-other:
+					answered = true
+				case <-time.After(5 * time.Second):
+				}
+
+				ctx.Expect(answered).To(specs.BeTrue())
+				if !answered {
+					stop()
+					<-other
+				}
+				ctx.Expect(progressed).To(specs.BeNil())
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.StageEntered{Job: "j-2", Stage: domain.StageGate, At: at}})
+				ctx.Expect(pending(first)).To(specs.BeTrue())
+				w.untouched(ctx, "j-1")
+				stop()
+				ctx.Expect(<-first).To(specs.BeNil())
+				job, _, err := w.store.Load(context.Background(), "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual(domain.StageGate)
+				ctx.Expect(g.stoppedJobs()).ToEqual([]domain.JobID{"j-1"})
+			})
+
+			s.It("takes one of two submissions made at once with the same token and refuses the other", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				release := g.holding("j-1")
+				defer release()
+				stop := g.lingering()
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				runHeld(w, g, token, "j-1")
+				a := submitting(w, token, "j-1", `{"status":"READY"}`)
+				b := submitting(w, token, "j-1", `{"status":"READY"}`)
+				<-g.cancelled
+				stop()
+
+				errs := []error{<-a, <-b}
+				saved := 0
+				for _, err := range errs {
+					if err == nil {
+						saved++
+						continue
+					}
+					ctx.Expect(err).To(specs.MatchError(jobtoken.ErrUnknownToken))
+				}
+				ctx.Expect(saved).ToEqual(1)
+				hist, err := w.store.History(context.Background(), "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(hist).To(specs.HaveLen(1))
+				ctx.Expect(hist[0].Event).ToEqual(domain.StageEntered{Job: "j-1", Stage: domain.StageGate, At: at})
 			})
 
 			s.It("cancels no run for a result it refuses", func(ctx *specs.Context) {
