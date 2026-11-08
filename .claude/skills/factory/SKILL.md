@@ -292,7 +292,9 @@ then moves the job to `merged`; stop any agents still running for it.
 2. Start every `resume` and `new` line, nothing else. Don't judge issues
    yourself: every new issue goes to intake, which decides whether it gets
    built. For a new issue, `factory/bin/job create <n>` prints the job id;
-   start it at **intake**. `create` and `plan-check` fetch `origin/<base>`
+   start it at **intake**, unless `create` says the job went to `needs-info`:
+   the issue names paths that aren't in `origin/<base>`, so it already asked the
+   author for the right base and waits. `create` and `plan-check` fetch `origin/<base>`
    first, so intake and the tech-lead read the base as it is on GitHub now. If
    the fetch fails they print a warning and go on: tell the user that intake
    and the tech-lead may read a stale copy, and carry on.
