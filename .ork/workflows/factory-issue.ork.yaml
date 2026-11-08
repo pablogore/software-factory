@@ -97,7 +97,9 @@ nodes:
 
       {{nodes.spec.output.spec}}
     verify:
-      command: "{{inputs.checks}}"
+      script: eval "$CHECKS"
+      env:
+        CHECKS: "{{inputs.checks}}"
       timeout: 20m
       attempts: 2
   code:
