@@ -245,6 +245,11 @@ class E2E(E2EBase):
         self.assertEqual((j["round"], j["round_limit"], j["tl_retry_used"]), (2, 2, True))
         self.build(jid3, 3, {"BROKEN": "x"}, "oops")
         self.assertIn("GATE: FAIL", self.to_review(jid3))
+        self.assertIn("build (round 2)", self.job("advance", jid3, "build").stdout)  # a gate retry, same round
+        self.build(jid3, 3, {"BROKEN": None}, "fix")
+        self.assertIn("GATE: PASS", self.to_review(jid3))
+        self.job("advance", jid3, "review")
+        self.reviews(jid3, 2, code="CHANGES")
         self.assertIn("triage", self.job("advance", jid3, "needs-human").stdout)
         self.assertIn("already retried", self.job("advance", jid3, "build", ok=False).stderr)
         self.jobfile(jid3, "triage.md", "ESCALATE\n\n## For the human\nKeep provider X? (yes/no)\n")
@@ -253,7 +258,7 @@ class E2E(E2EBase):
         self.assertEqual(j["stage"], "needs-human")
         last = self.gh()["prs"][str(j["pr"])]["comments"][-1]["body"]
         self.assertIn("Keep provider X? (yes/no)", last)
-        self.assertIn("The gate failed in round 2", last)
+        self.assertIn("Review rounds exhausted", last)
         self.assertIn("factory:needs-human", self.gh()["issues"]["3"]["labels"])
 
 
@@ -325,6 +330,66 @@ class FetchBaseE2E(E2EBase):
             self.assertEqual(self.stage(res.stdout.strip())["issue"], int(m))
         finally:
             self.sh(f"git remote set-url origin {self.tmp / 'origin.git'}")
+
+
+class GateRetryE2E(E2EBase):
+    """A failing gate sends the job back to its builder in the same round, with
+    the tail of checks.log; the retries run out to needs-human."""
+
+    def built(self, title):
+        n = self.sh(f"gh issue create --label factory --title '{title}' --body x").stdout.strip().rsplit("/", 1)[1]
+        jid = self.job("create", n).stdout.strip()
+        self.legacy(jid)
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
+        self.sh(f"factory/bin/route {jid}")
+        self.job("advance", jid, "spec")
+        self.jobfile(jid, "spec.md", "# x\n")
+        self.job("advance", jid, "build")
+        return jid, int(n)
+
+    def fail_gate(self, jid, n, k):
+        self.build(jid, n, {"BROKEN": f"{k}\n"}, f"oops {k}")
+        self.assertIn("GATE: FAIL", self.to_review(jid))
+
+    def test_demo_gate_retry_fail_keeps_the_round_and_pass_goes_to_review(self):
+        jid, n = self.built("Retry then pass")
+        self.fail_gate(jid, n, 1)
+        rd = self.repo / f"factory/jobs/{jid}/round-1"
+        (rd / "checks.log").write_text("".join(f"log line {i}\n" for i in range(2000)) + "last line of the log\n")
+        self.assertEqual(self.job("advance", jid, "build").stdout.strip(), f"{jid}: build (round 1)")
+        j = self.stage(jid)
+        self.assertEqual((j["round"], j["gate_retries"]), (1, 1))
+        tail = (rd / "gate-retry-1.log").read_text()
+        self.assertLessEqual(len(tail.encode()), 8192)
+        self.assertGreater(len(tail.encode()), 8000)
+        self.assertTrue(tail.endswith("last line of the log\n"))
+        self.assertFalse((self.repo / f"factory/jobs/{jid}/round-2").exists())
+
+        self.build(jid, n, {"BROKEN": None}, "fix")
+        self.assertIn("GATE: PASS (" + jid + " round 1", self.to_review(jid))
+        self.assertIn("review (round 1)", self.job("advance", jid, "review").stdout)
+        self.reviews(jid, 1, code="PASS")
+        self.assertIn("approve (round 1)", self.job("advance", jid, "approve").stdout)
+
+    def test_demo_gate_retry_exhausted_goes_to_needs_human_with_the_last_checks(self):
+        jid, n = self.built("Retry until out")
+        for k in (1, 2):
+            self.fail_gate(jid, n, k)
+            self.assertIn(f"gate retry {k - 1} of 2 in round 1: go to build",
+                          self.job("advance", jid, "needs-human", ok=False).stderr)
+            self.assertIn("build (round 1)", self.job("advance", jid, "build").stdout)
+        self.fail_gate(jid, n, 3)
+        self.assertIn("go to needs-human", self.job("advance", jid, "build", ok=False).stderr)
+        self.assertEqual(self.job("advance", jid, "needs-human").stdout.strip(), f"{jid}: needs-human (round 1)")
+        j = self.stage(jid)
+        self.assertEqual((j["round"], j["gate_retries"]), (1, 2))
+        checks = (self.repo / f"factory/jobs/{jid}/round-1/checks.md").read_text()
+        decision = (self.repo / f"factory/jobs/{jid}/decision.md").read_text()
+        self.assertIn("The gate failed 3 times in round 1, after 2 retries", decision)
+        self.assertIn(checks.strip(), decision)
+        last = self.gh()["prs"][str(j["pr"])]["comments"][-1]["body"]
+        self.assertIn(checks.split("\n", 1)[1].strip(), last)
+        self.assertIn("factory:needs-human", self.gh()["issues"][str(n)]["labels"])
 
 
 class InitiativeE2E(E2EBase):

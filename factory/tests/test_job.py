@@ -34,6 +34,9 @@ class JobBase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         shutil.copytree(SRC, self.tmp / "factory", ignore=shutil.ignore_patterns("tests", "jobs"))
         self.job = load_job_module(self.tmp)
+        self.setUp_fakes()
+
+    def setUp_fakes(self):
         self.labels, self.comments = [], []
         self.job.label = lambda *a, **k: self.labels.append((a, k))
         self.job.comment = lambda *a: self.comments.append(a)
@@ -87,8 +90,47 @@ class JobTest(JobBase):
         j["stage"] = "gate"
         self.write("round-2/checks.md", "GATE: FAIL\nCOMMIT: abc\n")
         j = self.job.advance(j, "build")
-        self.assertEqual(j["round"], 3)
+        self.assertEqual(j["round"], 2)
         self.assertEqual(self.job.round_reviewers(j), ["code", "ui"])
+
+    # ---- gate retries -------------------------------------------------------
+
+    def failed_gate(self, **extra):
+        self.job.git = lambda job, *a, check=True: type("R", (), {"stdout": "abc\n", "returncode": 0})()
+        j = self.make("gate", **extra)
+        self.write("round-1/checks.md", "GATE: FAIL\nCOMMIT: abc\n")
+        self.write("round-1/checks.log", "boom\n")
+        return self.job.sync(j)
+
+    def test_gate_retry_cap_comes_from_config_gate_retries(self):
+        cfg = self.tmp / "factory" / "config.json"
+        cfg.write_text(json.dumps({**json.loads(cfg.read_text()), "gate_retries": 1}))
+        self.job = load_job_module(self.tmp)
+        self.setUp_fakes()
+        j = self.job.advance(self.failed_gate(), "build")
+        self.assertEqual((j["stage"], j["round"], j["gate_retries"]), ("build", 1, 1))
+        j["stage"] = "gate"
+        with self.assertRaisesRegex(self.job.Refused, "gate retry 1 of 1 in round 1: go to needs-human"):
+            self.job.advance(j, "build")
+
+    def test_gate_retry_counter_starts_over_each_round(self):
+        self.pr["isDraft"] = False
+        j = self.job.advance(self.failed_gate(gate_retries=2), "needs-human")
+        self.assertEqual(j["stage"], "needs-human")  # retries out: no triage
+        j = self.make("review", gate_retries=2)
+        self.write("round-1/review-code.md", "VERDICT: CHANGES\n")
+        self.write("round-1/review-ux.md", "VERDICT: PASS\n")
+        self.write("round-1/review-ui.md", "VERDICT: PASS\n")
+        j = self.job.advance(self.job.sync(j), "build")
+        self.assertEqual((j["round"], j["gate_retries"]), (2, 0))
+
+    def test_gate_retry_over_the_cost_cap_goes_to_needs_human(self):
+        self.job.cost_usd = lambda j: 9.0
+        self.pr["isDraft"] = False
+        with self.assertRaisesRegex(self.job.Refused, "so gate retry 1 of round 1 was not started"):
+            self.job.advance(self.failed_gate(), "build")
+        saved = self.job.load("007-test")
+        self.assertEqual((saved["stage"], saved["round"], saved.get("gate_retries", 0)), ("needs-human", 1, 0))
 
     def test_check_reviews_done_only_waits_for_this_rounds_reviewers(self):
         j = self.make("review", round_=2, round_reviewers=["code", "ux"])

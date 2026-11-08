@@ -77,11 +77,17 @@ CONCURRENCY = CONFIG["concurrency"]
 # PR authors whose comments count as feedback, besides the operator.
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # Escalations the scripts raise go to the tech-lead first; the approver's go
-# straight to the human, since it already judged the job.
-TRIAGED_FROM = {"build", "gate", "review", "merging"}
+# straight to the human, since it already judged the job, and so do the gate's
+# once its retries run out.
+TRIAGED_FROM = {"build", "review", "merging"}
 # The most an issue may cost (every job of its initiative) before another
 # build round needs a human; the skill's between-slice cap is the same USD 8.
 ISSUE_CAP_USD = 8.0
+# A failing gate sends the job back to its builder this many times per round
+# before it needs a human; config.json `gate_retries` overrides it.
+GATE_RETRIES = CONFIG.get("gate_retries", 2)
+# How much of checks.log the builder gets back after a failing gate.
+GATE_TAIL_BYTES = 8192
 PLAN = JOBS / "plan.md"
 
 
@@ -639,14 +645,15 @@ def issue_cost(job):
     return round(job["cost_usd"] + sum(cost_usd(j) for j in others), 2)
 
 
-def over_cap(job):
-    """Why the next round waits for a human, with decision.md written, when the
-    issue is over ISSUE_CAP_USD; None when it may start."""
+def over_cap(job, what=None):
+    """Why the next round (or `what`) waits for a human, with decision.md written,
+    when the issue is over ISSUE_CAP_USD; None when it may start."""
     spent = issue_cost(job)
     if spent <= ISSUE_CAP_USD:
         return None
+    what = what or f"round {job['round'] + 1}"
     why = (f"Issue #{job['issue']} has cost ${spent:.2f}, over the ${ISSUE_CAP_USD:.2f} cap per issue, "
-           f"so round {job['round'] + 1} was not started.")
+           f"so {what} was not started.")
     escalate(job, why)
     return why
 
@@ -657,6 +664,15 @@ def git(job, *args, check=True):
 
 def pr_state(job):
     return gh_json("pr", "view", str(job["pr"]), "--json", "state")["state"]
+
+
+def log_tail(path):
+    """The last GATE_TAIL_BYTES of `path`, starting at a whole line."""
+    data = path.read_bytes() if path.exists() else b""
+    if len(data) > GATE_TAIL_BYTES:
+        data = data[-GATE_TAIL_BYTES:]
+        data = data[data.find(b"\n") + 1:]
+    return data.decode(errors="replace")
 
 
 def check_reviews_done(job):
@@ -674,6 +690,7 @@ def next_round(job, only=None):
     job["gate"] = None
     job["reviews"] = {}
     job["round_reviewers"] = only
+    job["gate_retries"] = 0
 
 
 def start_slice(job, row):
@@ -951,16 +968,22 @@ def advance(job, stage):
             job["reviews"] = {r: "pending" for r in round_reviewers(job)}
         else:
             require(h.get("GATE") == "FAIL", "the gate passed")
-            last = job["round"] >= job["round_limit"]
-            require(last == (stage == "needs-human"),
-                    f"round {job['round']} of {job['round_limit']}: go to {'needs-human' if last else 'build'}")
-            if last:
-                escalate(job, f"The gate failed in round {job['round']}, the last allowed round. "
-                              f"See round-{job['round']}/checks.md.")
-            elif capped := over_cap(job):
+            # A failing gate doesn't spend a round: the builder retries in this one.
+            retries = job.get("gate_retries", 0)
+            out = retries >= GATE_RETRIES
+            require(out == (stage == "needs-human"),
+                    f"gate retry {retries} of {GATE_RETRIES} in round {job['round']}: "
+                    f"go to {'needs-human' if out else 'build'}")
+            if out:
+                escalate(job, f"The gate failed {retries + 1} times in round {job['round']}, "
+                              f"after {GATE_RETRIES} retries. The last round-{job['round']}/checks.md:\n\n"
+                              + checks.read_text().strip())
+            elif capped := over_cap(job, f"gate retry {retries + 1} of round {job['round']}"):
                 stage = "needs-human"
             else:
-                next_round(job, only=job.get("round_reviewers"))
+                job["gate_retries"] = retries + 1
+                tail = round_dir(job) / f"gate-retry-{retries + 1}.log"
+                tail.write_text(log_tail(round_dir(job) / "checks.log"))
 
     elif old == "review":
         check_reviews_done(job)
