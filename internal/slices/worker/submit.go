@@ -3,7 +3,8 @@
 // and turns it into the job's ResultSubmitted, the same for the MCP tool
 // submit_result and for `factory worker submit-result` (01-diseno.md).
 // Progress records what the agent says it is doing, for the MCP tool
-// progress, as an event of the job.
+// progress, as an event of the job. RunGate runs the job's checks for its
+// builder, for the MCP tool run_gate and `factory worker run-gate`.
 package worker
 
 import (
@@ -31,6 +32,8 @@ type Submitter struct {
 	Jobs      jobs
 	Pipelines pipelines
 	Clock     ports.Clock
+	// Gate runs a job's checks for RunGate.
+	Gate gate
 
 	// mu runs one submission at a time, so a token is revoked after its
 	// result is saved before another submission can check it.

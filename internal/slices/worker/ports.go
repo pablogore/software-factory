@@ -33,3 +33,9 @@ type results interface {
 type pipelines interface {
 	Pipeline(ctx context.Context, name string) (domain.Pipeline, error)
 }
+
+// gate runs a job's deterministic checks in its worktree, as the gate does,
+// without deciding anything on the job.
+type gate interface {
+	Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error)
+}
