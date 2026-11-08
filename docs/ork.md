@@ -31,6 +31,8 @@ npm install --global @krapht/ork
 ork doctor
 ork validate .ork/workflows/factory.ork.yaml
 ork run factory --input issue=42
+# a repo whose checks live elsewhere:
+ork run factory --input issue=42 --input checks="python3 -m pytest factory/tests -q"
 ork ui          # the run in your browser: graph, logs, costs, questions
 ```
 

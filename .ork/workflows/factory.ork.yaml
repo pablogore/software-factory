@@ -11,6 +11,10 @@ inputs:
     type: string
     default: main
     description: The branch the pull request goes into.
+  checks:
+    type: string
+    default: bash factory/checks.sh
+    description: The command that must pass on the builder's branch before review.
 layers:
   project:
     instructions: inherit
@@ -80,7 +84,7 @@ nodes:
 
       {{nodes.spec.output.spec}}
     verify:
-      command: bash factory/checks.sh
+      command: "{{inputs.checks}}"
       timeout: 20m
       attempts: 2
   code:
