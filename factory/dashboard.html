@@ -536,7 +536,14 @@ async function loadJobs() {
     .filter((h) => h.endsWith('/'))
     .map((h) => h.slice(0, -1))
     .sort()
-  return Promise.all(ids.map(async (id) => JSON.parse(await fetchText(`jobs/${id}/job.json`))))
+  // A folder without job.json (jobs/po/, the product owner's drafts) is not a job.
+  const all = await Promise.all(ids.map(async (id) => {
+    const res = await fetch(`jobs/${id}/job.json`, { cache: 'no-store' })
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`jobs/${id}/job.json: HTTP ${res.status}`)
+    return JSON.parse(await res.text())
+  }))
+  return all.filter((job) => job)
 }
 
 // ---- Drawer --------------------------------------------------------------
