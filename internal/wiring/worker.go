@@ -7,6 +7,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/slices/worker"
@@ -37,16 +38,18 @@ type GateChecks interface {
 }
 
 // WorkerAPI is the worker HTTP API over jobs, deciding results with the
-// tokens issued from tokens and running a builder's checks with gate.
-func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, clock ports.Clock) http.Handler {
-	h, _ := Worker(tokens, jobs, p, gate, clock)
+// tokens issued from tokens and running a builder's checks with gate under
+// the job's lock in locks, the one the job's real gate takes: a result
+// submitted cancels a run in progress.
+func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock) http.Handler {
+	h, _ := Worker(tokens, jobs, p, gate, locks, clock)
 	return h
 }
 
 // Worker is WorkerAPI and the Attempts that run agents' turns over the same
 // submissions, so an attempt sees the results its agent handed in through
 // the API.
-func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, clock ports.Clock) (http.Handler, *worker.Attempts) {
-	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Gate: gate, Clock: clock}
+func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock) (http.Handler, *worker.Attempts) {
+	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Gate: gate, Locks: locks, Clock: clock}
 	return mcpworker.Handler(sub), &worker.Attempts{Results: sub, Jobs: jobs, Pipelines: p, Clock: clock}
 }

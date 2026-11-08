@@ -17,6 +17,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/wiring"
 )
@@ -82,7 +83,7 @@ func newWorkerWorld(ctx *specs.Context) workerWorld {
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 	tokens := jobtoken.New()
 	g := &gate{}
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, g, fixedClock{}))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, g, gatelock.New(), fixedClock{}))
 	ctx.Cleanup(srv.Close)
 	return workerWorld{store: store, tokens: tokens, gate: g, url: srv.URL}
 }

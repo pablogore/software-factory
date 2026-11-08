@@ -19,6 +19,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/slices/build"
 	"github.com/pablogore/software-factory/internal/wiring"
@@ -149,7 +150,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	} else if err != nil {
 		return err
 	}
-	g := wiring.Gate(store, rolePipelines{role}, ws, store, wiring.SystemClock{}, strings.Fields(*command), strings.Fields(*count))
+	g := wiring.Gate(store, rolePipelines{role}, ws, store, wiring.SystemClock{}, gatelock.New(), strings.Fields(*command), strings.Fields(*count))
 	_, _ = fmt.Fprintf(out, "job %s at the gate in round %d; running `%s` in %s and judging its diff against the base commit recorded for it: %s\n", job.ID, job.Round, strings.Join(g.Command, " "), wt.Path, commit)
 	if len(role.AllowedPaths) > 0 {
 		_, _ = fmt.Fprintf(out, "build role %s may touch only [%s]\n", role.Name, strings.Join(role.AllowedPaths, ", "))

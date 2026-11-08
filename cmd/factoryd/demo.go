@@ -16,6 +16,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/slices/build"
 	"github.com/pablogore/software-factory/internal/wiring"
@@ -106,7 +107,8 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	if *timeout <= 0 || *maxOutput <= 0 {
 		return fmt.Errorf("%w: -gate-timeout and -gate-max-output must be positive", domain.ErrInvalidValue)
 	}
-	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, strings.Fields(*command), nil, *timeout, *maxOutput)
+	locks := gatelock.New()
+	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, locks, strings.Fields(*command), nil, *timeout, *maxOutput)
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *addr)
 	if err != nil {
 		return err
@@ -124,7 +126,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 
 	var mu sync.Mutex
 	mux := http.NewServeMux()
-	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, gate, wiring.SystemClock{}))
+	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, gate, locks, wiring.SystemClock{}))
 	mux.HandleFunc("POST "+newRoundPath, func(w http.ResponseWriter, r *http.Request) {
 		id := domain.JobID(r.PathValue("job"))
 		token, err := newRound(r.Context(), store, tokens, id)

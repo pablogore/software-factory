@@ -13,6 +13,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/wiring"
 )
@@ -48,7 +49,7 @@ func checkWith(ctx *specs.Context, command []string, timeout time.Duration, maxO
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 	ctx.Expect(store.RecordBase(context.Background(), "j-1", base)).To(specs.BeNil())
-	g := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, command, nil, timeout, maxOutput)
+	g := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), command, nil, timeout, maxOutput)
 	run, err := g.Check(context.Background(), "j-1")
 	ctx.Expect(err).To(specs.BeNil())
 	return run
@@ -59,7 +60,7 @@ func TestRunGateLimits(t *testing.T) {
 		s.It("kills checks past its timeout and fails the run, saying so", func(ctx *specs.Context) {
 			run := checkWith(ctx, []string{"sh", "-c", "sleep 30"}, 300*time.Millisecond, wiring.DefaultRunGateMaxOutput)
 			ctx.Expect(run.Passed()).To(specs.BeFalse())
-			ctx.Expect(run.Notes).To(specs.Contain("timed out: the checks ran over 300ms and were killed with their process group"))
+			ctx.Expect(run.Notes).To(specs.Contain("timed out: the checks ran over 300ms and were stopped with their process group"))
 		})
 
 		s.It("keeps at most its output limit, saying it cut the rest", func(ctx *specs.Context) {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/wiring"
 )
@@ -74,7 +75,7 @@ func start(ctx *specs.Context) factoryd {
 		f.tokens[id], err = tokens.Issue(jobtoken.Grant{Job: id, Role: "builder", Kind: domain.KindBuild, Round: 1})
 		ctx.Expect(err).To(specs.BeNil())
 	}
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, f.gate, stopped{}))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, f.gate, gatelock.New(), stopped{}))
 	ctx.Cleanup(srv.Close)
 	f.url = srv.URL
 	return f
