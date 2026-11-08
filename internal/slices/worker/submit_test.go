@@ -12,6 +12,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/domain/decide"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/slices/worker"
 )
@@ -57,7 +58,7 @@ func newWorld(ctx *specs.Context) world {
 	}
 	w.j1 = w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Round: 1})
 	w.j2 = w.issue(ctx, jobtoken.Grant{Job: "j-2", Role: "builder", Kind: domain.KindBuild, Round: 1})
-	w.sub = &worker.Submitter{Tokens: tokens, Jobs: store, Pipelines: pipelines{"default": pipeline()}, Clock: stopped{}}
+	w.sub = &worker.Submitter{Tokens: tokens, Jobs: store, Pipelines: pipelines{"default": pipeline()}, Locks: gatelock.New(), Clock: stopped{}}
 	return w
 }
 

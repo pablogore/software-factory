@@ -39,3 +39,11 @@ type pipelines interface {
 type gate interface {
 	Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error)
 }
+
+// locks is the per-job lock a job's checks run under, shared with the gate:
+// a run_gate run takes it with Try, and a submitted result cancels that run
+// with Preempt, waiting until it stopped.
+type locks interface {
+	Try(ctx context.Context, job domain.JobID) (context.Context, func(), error)
+	Preempt(ctx context.Context, job domain.JobID) error
+}

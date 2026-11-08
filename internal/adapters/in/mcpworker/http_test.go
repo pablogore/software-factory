@@ -15,6 +15,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/domain/decide"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/ports"
 )
@@ -118,6 +119,7 @@ func TestHandler(t *testing.T) {
 			{"a result the stage does not take", fmt.Errorf("w: %w", decide.ErrIllegalTransition), http.StatusConflict},
 			{"a job saved meanwhile", fmt.Errorf("w: %w", ports.ErrVersionConflict), http.StatusConflict},
 			{"checks already running for the job", fmt.Errorf("w: run gate: %w: the checks of job %q are running", domain.ErrBusy, "j-1"), http.StatusConflict},
+			{"checks cancelled by the job's result", fmt.Errorf("w: run gate: %w", gatelock.ErrPreempted), http.StatusConflict},
 		}
 		specs.Table(s, rows, func(r statusRow) string { return fmt.Sprintf("answers %d with the error to %s", r.code, r.name) },
 			func(ctx *specs.Context, r statusRow) {

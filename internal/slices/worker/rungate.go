@@ -6,11 +6,16 @@ import (
 	"fmt"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 )
 
-// errNoGate means the Submitter was built without a Gate.
-var errNoGate = errors.New("worker: run gate: no gate configured")
+// errNoGate means the Submitter was built without a Gate, and errNoLocks
+// without Locks.
+var (
+	errNoGate  = errors.New("worker: run gate: no gate configured")
+	errNoLocks = errors.New("worker: no gate locks configured")
+)
 
 // RunGate runs job's deterministic checks for token's role and returns the
 // run, deciding and saving nothing: the builder learns whether its work
@@ -18,58 +23,59 @@ var errNoGate = errors.New("worker: run gate: no gate configured")
 // token and the job, so what runs is only what the Gate is configured with.
 // A token not for job, of a role that may not call run_gate, or from a
 // round or stage entry the job has left is a jobtoken error, and then no
-// check runs. A job runs one at a time: a call while its checks are running
-// is refused with domain.ErrBusy, neither waiting nor queued, and runs
-// none. The checks run outside the lock Submit and Progress take, so a long
-// run never holds up a result or a progress message.
+// check runs. The checks run under the job's lock in Locks: while another
+// run_gate or the gate holds it, the call is refused with domain.ErrBusy,
+// neither waiting nor queued, and runs none. A result submitted meanwhile
+// cancels the run, whose answer is then an error wrapping
+// gatelock.ErrPreempted, never a failed run. The checks run outside the
+// lock Submit and Progress take, so a long run never holds up a progress
+// message.
 func (s *Submitter) RunGate(ctx context.Context, token string, job domain.JobID) (domain.ChecksRun, error) {
-	if err := s.startGate(ctx, token, job); err != nil {
+	run, release, err := s.startGate(ctx, token, job)
+	if err != nil {
 		return domain.ChecksRun{}, err
 	}
-	defer s.endGate(job)
+	defer release()
 	if s.Gate == nil {
 		return domain.ChecksRun{}, errNoGate
 	}
-	run, err := s.Gate.Check(ctx, job)
+	checks, err := s.Gate.Check(run, job)
+	if cause := context.Cause(run); errors.Is(cause, gatelock.ErrPreempted) {
+		return domain.ChecksRun{}, fmt.Errorf("worker: run gate: %w", cause)
+	}
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("worker: run gate: %w", err)
 	}
-	return run, nil
+	return checks, nil
 }
 
-// startGate checks token may run job's checks now and marks them running,
+// startGate checks token may run job's checks now and takes the job's lock,
 // under the lock Submit revokes tokens under, so a token whose result was
 // saved runs none.
-func (s *Submitter) startGate(ctx context.Context, token string, job domain.JobID) error {
+func (s *Submitter) startGate(ctx context.Context, token string, job domain.JobID) (context.Context, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g, err := s.Tokens.Authorize(token, jobtoken.OpRunGate, job)
 	if err != nil {
-		return fmt.Errorf("worker: run gate: %w", err)
+		return nil, nil, fmt.Errorf("worker: run gate: %w", err)
 	}
 	j, _, err := s.Jobs.Load(ctx, job)
 	if err != nil {
-		return fmt.Errorf("worker: run gate: %w", err)
+		return nil, nil, fmt.Errorf("worker: run gate: %w", err)
 	}
 	hist, err := s.Jobs.History(ctx, job)
 	if err != nil {
-		return fmt.Errorf("worker: run gate: %w", err)
+		return nil, nil, fmt.Errorf("worker: run gate: %w", err)
 	}
 	if err := g.Current(j, hist); err != nil {
-		return fmt.Errorf("worker: run gate: %w", err)
+		return nil, nil, fmt.Errorf("worker: run gate: %w", err)
 	}
-	if s.gating[job] {
-		return fmt.Errorf("worker: run gate: %w: the checks of job %q are running; call again once that run answers", domain.ErrBusy, job)
+	if s.Locks == nil {
+		return nil, nil, errNoLocks
 	}
-	if s.gating == nil {
-		s.gating = map[domain.JobID]bool{}
+	run, release, err := s.Locks.Try(ctx, job)
+	if err != nil {
+		return nil, nil, fmt.Errorf("worker: run gate: %w", err)
 	}
-	s.gating[job] = true
-	return nil
-}
-
-func (s *Submitter) endGate(job domain.JobID) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.gating, job)
+	return run, release, nil
 }

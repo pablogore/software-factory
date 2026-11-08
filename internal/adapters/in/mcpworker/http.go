@@ -16,6 +16,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/domain/decide"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/ports"
 )
@@ -147,7 +148,8 @@ func status(err error) int {
 	case errors.Is(err, ports.ErrJobNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, jobtoken.ErrStale), errors.Is(err, decide.ErrIllegalTransition), errors.Is(err, decide.ErrUnsupported),
-		errors.Is(err, decide.ErrStopped), errors.Is(err, ports.ErrVersionConflict), errors.Is(err, domain.ErrBusy):
+		errors.Is(err, decide.ErrStopped), errors.Is(err, ports.ErrVersionConflict), errors.Is(err, domain.ErrBusy),
+		errors.Is(err, gatelock.ErrPreempted):
 		return http.StatusConflict
 	case errors.Is(err, domain.ErrMissingField), errors.Is(err, domain.ErrInvalidValue):
 		return http.StatusUnprocessableEntity

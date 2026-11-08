@@ -5,35 +5,54 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 )
 
 // gate answers every check with run, or with err, and records the jobs it
 // was asked to check. With hold, a check of a job in it says it started on
-// started and answers only once hold is closed.
+// started and answers only once hold is closed or its ctx ends, then with
+// the ctx's error, as a cancelled run does; stopped has the jobs whose
+// check ended so.
 type gate struct {
 	mu      sync.Mutex
 	run     domain.ChecksRun
 	err     error
 	jobs    []domain.JobID
+	stopped []domain.JobID
 	hold    map[domain.JobID]chan struct{}
 	started chan domain.JobID
 }
 
-func (g *gate) Check(_ context.Context, id domain.JobID) (domain.ChecksRun, error) {
+func (g *gate) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error) {
 	g.mu.Lock()
 	g.jobs = append(g.jobs, id)
 	hold := g.hold[id]
 	g.mu.Unlock()
 	if hold != nil {
 		g.started <- id
-		<-hold
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			time.Sleep(50 * time.Millisecond)
+			g.mu.Lock()
+			g.stopped = append(g.stopped, id)
+			g.mu.Unlock()
+			return domain.ChecksRun{}, ctx.Err()
+		}
 	}
 	return g.run, g.err
+}
+
+func (g *gate) stoppedJobs() []domain.JobID {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]domain.JobID{}, g.stopped...)
 }
 
 func (g *gate) checked() []domain.JobID {
@@ -166,6 +185,54 @@ func TestRunGate(t *testing.T) {
 				ctx.Expect(first).To(specs.Not(specs.BeNil()))
 				ctx.Expect(second).To(specs.BeNil())
 				ctx.Expect(g.checked()).To(specs.HaveLen(2))
+			})
+		})
+
+		s.When("the job's result is submitted while its checks run", func(s *specs.Spec) {
+			s.It("cancels the run, saves the result only once it stopped, and answers the run as cancelled, not failed", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				release := g.holding("j-1")
+				defer release()
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				type answer struct {
+					run domain.ChecksRun
+					err error
+				}
+				first := make(chan answer, 1)
+				go func() {
+					run, err := w.sub.RunGate(context.Background(), token, "j-1")
+					first <- answer{run, err}
+				}()
+				<-g.started
+
+				evs, err := w.sub.Submit(context.Background(), token, "j-1", []byte(`{"status":"READY"}`))
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{domain.StageEntered{Job: "j-1", Stage: domain.StageGate, At: at}})
+				ctx.Expect(g.stoppedJobs()).ToEqual([]domain.JobID{"j-1"})
+				a := <-first
+				ctx.Expect(a.err).To(specs.MatchError(gatelock.ErrPreempted))
+				ctx.Expect(errors.Is(a.err, domain.ErrBusy)).To(specs.BeFalse())
+				ctx.Expect(a.run).ToEqual(domain.ChecksRun{})
+			})
+
+			s.It("cancels no run for a result it refuses", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				release := g.holding("j-1")
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				first := make(chan error, 1)
+				go func() {
+					_, err := w.sub.RunGate(context.Background(), token, "j-1")
+					first <- err
+				}()
+				<-g.started
+
+				_, err := w.sub.Submit(context.Background(), token, "j-1", []byte(`{"status":"DONE"}`))
+				release()
+
+				ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+				ctx.Expect(<-first).To(specs.BeNil())
+				ctx.Expect(g.stoppedJobs()).To(specs.BeEmpty())
 			})
 		})
 
