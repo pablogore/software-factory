@@ -504,5 +504,14 @@ class MissingPathsE2E(E2EBase):
         self.assertTrue(self.branch_exists(jid))
 
 
+class NoPathsE2E(E2EBase):
+    """An accepted issue that names no paths goes on as before (own repo: the class above fills the slots)."""
+    accept = MissingPathsE2E.accept
+
+    def test_no_paths_go_on(self):
+        n, jid = self.accept("Reword the readme intro.")
+        self.assertEqual(self.stage(jid)["stage"], "initiative")
+
+
 if __name__ == "__main__":
     unittest.main()
