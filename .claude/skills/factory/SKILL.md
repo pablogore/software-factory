@@ -319,7 +319,9 @@ following their checkpoint. Crash `resume`s are not new work.
 passes **5 slices or USD 8**, tell the user in one line
 (`#<n>: 6 slices, $9.40 — pausing this issue`) and hold this issue: its running
 agents finish, but no new slice job (`next-slice` / `checkpoint-ok`) starts
-until the user says `continuar`. Other issues are unaffected.
+until the user says `continuar`. Other issues are unaffected. Between rounds
+`job advance <job> build` checks the same USD 8 itself: over it, it fails and
+leaves the job in `needs-human` (no triage), with the cost in decision.md.
 
 **The pause message**, once everything running has settled (or right away if
 nothing runs), in under ~12 lines:
