@@ -8,7 +8,8 @@ orchestrator never improvises them.
 
 Usage:
   job queue                      what /factory run should do with each labeled issue
-  job create <issue>             new job for an open `factory` issue; fetches origin/<base> first; prints the job id
+  job create <issue>             new job for an open `factory` issue; fetches origin/<base> first; prints the job id;
+                                 an issue naming paths not in origin/<base> goes straight to needs-info
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job> [--direction]  needs-human → spec (old jobs) | build (rework) | replan (direction); stdin and PR comments
@@ -1064,6 +1065,62 @@ def fetch_base():
               f"{(res.stderr or res.stdout).strip()}", file=sys.stderr)
 
 
+def issue_texts(issue):
+    """The body and the comments the intake reads (the author's and the operator's, not the factory's)."""
+    trusted = {issue["author"]["login"], operator()}
+    return [issue["body"] or ""] + [c["body"] for c in issue["comments"]
+                                    if c["author"]["login"] in trusted and not c["body"].startswith(MARKER)]
+
+
+def missing_paths(issue):
+    """Backticked tokens of the issue that look like repo paths but aren't in origin/<base>.
+    A token looks like a path when it has a `/` or an extension some file in the base has;
+    refs, URLs, commands and placeholders don't count. None when origin/<base> can't be read."""
+    tree = run(["git", "ls-tree", "-r", "--name-only", f"origin/{BASE}"], check=False)
+    if tree.returncode != 0:
+        print(f"warning: couldn't list origin/{BASE}; the issue's paths aren't checked: "
+              f"{(tree.stderr or tree.stdout).strip()}", file=sys.stderr)
+        return None
+    files = set(tree.stdout.splitlines())
+    dirs = {str(p) for f in files for p in Path(f).parents if str(p) != "."}
+    exts = {Path(f).suffix for f in files if Path(f).suffix}
+    remotes = run(["git", "remote"], check=False).stdout.split()
+    refs = set()
+    for r in run(["git", "for-each-ref", "--format=%(refname)"], check=False).stdout.split():
+        refs.add(r)
+        short = re.sub(r"^refs/(heads|tags|remotes)/", "", r)
+        refs.add(short)
+        if r.startswith("refs/remotes/"):
+            refs.add(short.partition("/")[2])
+    missing = []
+    for text in issue_texts(issue):
+        text = re.sub(r"```.*?```", "", text, flags=re.S)
+        for token in re.findall(r"`([^`\n]+)`", text):
+            path = re.sub(r":\d+(-\d+)?$", "", token.strip()).removeprefix("./")
+            if (not path or re.search(r"[\s:<>*?{}\[\]$|;=]", path) or path[0] in "-/~"
+                    or path in refs or any(path.startswith(f"{r}/") for r in remotes)
+                    or not ("/" in path or Path(path).suffix in exts)):
+                continue
+            if path.rstrip("/") not in files | dirs and path not in missing:
+                missing.append(path)
+    return missing
+
+
+def write_base_question(job, missing):
+    """intake.md for an issue that names paths origin/<base> doesn't have: ask for the right base."""
+    names = ", ".join(f"`{p}`" for p in missing)
+    (job_dir(job["id"]) / "intake.md").write_text(
+        "DECISION: NEEDS-INFO\n\n"
+        "## Summary\n"
+        f"- The issue names paths that aren't in `origin/{BASE}`: {names}.\n"
+        "- Intake didn't run: the job would be built on the wrong base.\n\n"
+        "## Why\n"
+        f"`job create` checked the issue's backticked paths against `origin/{BASE}` and these are missing: {names}.\n\n"
+        "## Questions\n"
+        f"1. {names} {'is' if len(missing) == 1 else 'are'} not in `origin/{BASE}`. "
+        "Which base branch should this issue be built on?\n")
+
+
 def slugify(title):
     words = re.findall(r"[a-z0-9]+", title.lower())[:4]
     return "-".join(words) or "issue"
@@ -1099,6 +1156,12 @@ def cmd_create(number):
     }
     write_issue_md(job)
     save(job)
+    missing = missing_paths(issue)
+    if missing:
+        write_base_question(job, missing)
+        save(advance(sync(job), "needs-info"))
+        print(f"{job_id}: needs-info, not intake: the issue names paths not in origin/{BASE}: "
+              f"{', '.join(missing)}", file=sys.stderr)
     print(job_id)
 
 

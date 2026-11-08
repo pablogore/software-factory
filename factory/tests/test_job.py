@@ -324,6 +324,71 @@ class InitiativeTest(JobBase):
                                          file_path=str(g.REPO / "factory/initiatives/i1" / f)), want)
 
 
+class TestDemoCreateChecksIssuePaths(JobBase):
+    """`job create` checks the issue's backticked paths against origin/main before intake."""
+
+    def setUp(self):
+        super().setUp()
+        self.origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.origin)
+        git = lambda *a, cwd=self.tmp: subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+        git("init", "--bare", "-b", "main", str(self.origin), cwd=self.origin)
+        git("init", "-b", "main")
+        (self.tmp / "src").mkdir()
+        (self.tmp / "src" / "app.py").write_text("print('hi')\n")
+        (self.tmp / "README.md").write_text("# x\n")
+        git("add", "src", "README.md")
+        git("commit", "-m", "base")
+        git("remote", "add", "origin", str(self.origin))
+        git("push", "origin", "main")
+        git("push", "origin", "main:arch/other")
+        self.job.cost_usd = lambda j: 0.0
+
+    def create(self, body, comments=()):
+        self.job.fetch_issue = lambda n: {
+            "number": 7, "title": "Do a thing", "body": body, "author": {"login": "ana"},
+            "labels": [{"name": "factory"}], "state": "OPEN", "url": "https://x/7",
+            "comments": [{"author": {"login": "ana"}, "createdAt": "2026-11-08T00:00:00Z", "body": c}
+                         for c in comments]}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.job.main(["create", "7"])
+        return self.job.load(out.getvalue().strip())
+
+    def test_demo_missing_path_goes_to_needs_info_asking_the_base(self):
+        j = self.create("Change `src/app.py` and `lib/gone.py`.", comments=["Also `docs/new.md`."])
+        self.assertEqual(j["stage"], "needs-info")
+        intake = (self.job.job_dir(j["id"]) / "intake.md").read_text()
+        self.assertTrue(intake.startswith("DECISION: NEEDS-INFO\n"))
+        question = self.job.section(self.job.job_dir(j["id"]) / "intake.md", "Questions")
+        self.assertIn("Which base branch", question)
+        self.assertIn("`lib/gone.py`, `docs/new.md`", question)
+        self.assertNotIn("src/app.py", question)
+        self.assertTrue(any(k.get("add") == "factory:needs-info" for _, k in self.labels))
+        self.assertEqual(self.comments[-1][:2], ("issue", 7))
+        self.assertIn("### Factory intake: NEEDS-INFO", self.comments[-1][2])
+        self.assertIn("Which base branch", self.comments[-1][2])
+
+    def test_demo_existing_paths_go_to_intake(self):
+        j = self.create("Change `src/app.py`, `src/` and `README.md:3`.")
+        self.assertEqual(j["stage"], "intake")
+        self.assertFalse((self.job.job_dir(j["id"]) / "intake.md").exists())
+        self.assertEqual((self.labels, self.comments), ([], []))
+
+    def test_demo_issue_without_paths_goes_to_intake(self):
+        j = self.create("Make the button blue.\n\n```\nsrc/missing.py\n```\n")
+        self.assertEqual(j["stage"], "intake")
+        self.assertEqual((self.labels, self.comments), ([], []))
+
+    def test_demo_tokens_that_arent_repo_paths_dont_stop_the_issue(self):
+        j = self.create("Base is `origin/main`, not `arch/other` or `origin/gone`. See `https://example.com/a/b`, "
+                        "run `git diff main...HEAD` or `npm run dev`, needs `node.js`, edit `factory/jobs/<id>/x.md`, "
+                        "`~/.claude/x`, `/etc/hosts`, `--base/x`.")
+        self.assertEqual(j["stage"], "intake")
+        self.assertEqual((self.labels, self.comments), ([], []))
+
+
 class GuardTest(unittest.TestCase):
     GUARD = SRC / "bin" / "guard"
     REPO = SRC.parent
