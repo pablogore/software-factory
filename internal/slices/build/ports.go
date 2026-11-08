@@ -56,3 +56,10 @@ type snapshots interface {
 	Checkout(ctx context.Context, dir, commit string) (string, error)
 	Remove(ctx context.Context, dir, path string) error
 }
+
+// repoConfig is the test count command the repo configures at base, the
+// full object name of a commit, read from the repo dir is in; none when it
+// configures none.
+type repoConfig interface {
+	CountCommand(ctx context.Context, dir, base string) ([]string, error)
+}
