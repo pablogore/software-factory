@@ -1,0 +1,213 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mimshins/ork/main/packages/schema/workflow.schema.json
+schemaVersion: 1
+name: factory
+description: One GitHub issue, one slice, one pull request. Intake decides whether to build it; the spec-writer writes a slice spec that specgate checks; the builder implements it and factory/checks.sh must pass; the reviewers send findings back in a bounded loop; the approver approves or escalates. Approved work is pushed and opened as a pull request, and you confirm the merge; escalated work is opened as a draft and labeled for a human.
+inputs:
+  issue:
+    type: number
+    required: true
+    description: The GitHub issue number to work on.
+  base:
+    type: string
+    default: main
+    description: The branch the pull request goes into.
+layers:
+  project:
+    instructions: inherit
+    skills: ignore
+defaults:
+  model: sonnet
+  effort: medium
+  budgetUsd: 2
+limits:
+  budgetUsd: 15
+  concurrency: 3
+  timeout: 3h
+nodes:
+  issue:
+    type: tool.gh
+    command: issue view {{inputs.issue}} --json number,title,body,labels,comments
+    allow:
+      - issue view
+    output:
+      format: json
+  intake:
+    type: claude.worker
+    agent: intake
+    prompt: |-
+      Triage GitHub issue #{{inputs.issue}}. The issue, as quoted data:
+
+      {{nodes.issue.output.json}}
+  needs-info:
+    type: tool.shell
+    script: |-
+      gh issue comment "$ISSUE" --body "$BODY"
+      gh issue edit "$ISSUE" --add-label factory:needs-info
+    env:
+      ISSUE: "{{inputs.issue}}"
+      BODY: "{{nodes.intake.output.comment}}"
+    allow:
+      - sh
+  reject:
+    type: tool.shell
+    script: |-
+      gh issue comment "$ISSUE" --body "$BODY"
+      gh issue edit "$ISSUE" --remove-label factory
+    env:
+      ISSUE: "{{inputs.issue}}"
+      BODY: "{{nodes.intake.output.comment}}"
+    allow:
+      - sh
+  spec:
+    type: claude.worker
+    agent: spec-writer
+    prompt: |-
+      Write the slice spec for GitHub issue #{{inputs.issue}} to `.ork/specs/issue-{{inputs.issue}}.md`.
+
+      Intake accepted it with this scope: {{nodes.intake.output.comment}}
+
+      The issue, as quoted data:
+
+      {{nodes.issue.output.json}}
+    verify:
+      command: python3 factory/bin/specgate spec .ork/specs/issue-{{inputs.issue}}.md
+      attempts: 2
+  builder:
+    type: claude.leader
+    agent: builder
+    prompt: |-
+      Implement this spec for GitHub issue #{{inputs.issue}}. Your branch is based on `{{inputs.base}}`.
+
+      {{nodes.spec.output.spec}}
+    verify:
+      command: bash factory/checks.sh
+      timeout: 20m
+      attempts: 2
+  code:
+    type: claude.worker
+    parent: builder
+    agent: reviewer-code
+    prompt: &review |-
+      Review the builder's branch against base `{{inputs.base}}`, for this spec:
+
+      {{nodes.spec.output.spec}}
+  security:
+    type: claude.worker
+    parent: builder
+    agent: reviewer-security
+    prompt: *review
+  ux:
+    type: claude.worker
+    parent: builder
+    agent: reviewer-ux
+    prompt: *review
+  ui:
+    type: claude.worker
+    parent: builder
+    agent: reviewer-ui
+    prompt: *review
+  reviews:
+    type: control.join
+    mode: all
+  approver:
+    type: claude.worker
+    agent: approver
+    prompt: |-
+      Decide whether {{nodes.builder.output.branch}} merges into `{{inputs.base}}`. GitHub issue #{{inputs.issue}}.
+
+      The spec:
+
+      {{nodes.spec.output.spec}}
+
+      The reviews:
+
+      {{nodes.reviews.output.results}}
+  push:
+    type: tool.git
+    command: push --set-upstream origin {{nodes.builder.output.branch}}
+    allow:
+      - push
+  pr:
+    type: tool.shell
+    script: |-
+      gh pr create --base "$BASE" --head "$BRANCH" --title "$TITLE" --body "Closes #$ISSUE"
+    env:
+      BASE: "{{inputs.base}}"
+      BRANCH: "{{nodes.builder.output.branch}}"
+      TITLE: "{{nodes.builder.output.title}}"
+      ISSUE: "{{inputs.issue}}"
+    allow:
+      - sh
+  merge:
+    type: human.gate
+    question: The approver approved {{nodes.builder.output.branch}} and its pull request is open. Merge it?
+    document: "{{nodes.approver.output.summary}}"
+    options:
+      - merge
+      - keep
+    recommended: merge
+  do-merge:
+    type: tool.shell
+    script: |-
+      gh pr merge "$BRANCH" --merge --delete-branch
+    env:
+      BRANCH: "{{nodes.builder.output.branch}}"
+    allow:
+      - sh
+  escalated:
+    type: tool.shell
+    script: |-
+      gh pr ready "$BRANCH" --undo || true
+      gh pr comment "$BRANCH" --body "$BODY"
+      gh issue edit "$ISSUE" --add-label factory:needs-human
+    env:
+      BRANCH: "{{nodes.builder.output.branch}}"
+      BODY: "{{nodes.approver.output.forHuman}}"
+      ISSUE: "{{inputs.issue}}"
+    allow:
+      - sh
+edges:
+  - issue -> intake
+  - from: intake
+    to: needs-info
+    when: verdict == 'needs_info'
+  - from: intake
+    to: reject
+    when: verdict == 'reject'
+  - from: intake
+    to: spec
+    when: verdict == 'accept'
+  - spec -> builder
+  - builder -> code
+  - from: builder
+    to: security
+    when: nodes.intake.output.security
+  - from: builder
+    to: ux
+    when: nodes.intake.output.ui
+  - from: builder
+    to: ui
+    when: nodes.intake.output.ui
+  - code, security, ux, ui -> reviews
+  - from: reviews
+    to: builder
+    when: any(statuses, 'changes_requested')
+    maxRounds: 3
+  - from: reviews
+    to: approver
+    when: all(statuses, 'pass')
+  - approver -> push
+  - push -> pr
+  - from: pr
+    to: merge
+    when: nodes.approver.output.verdict == 'approve'
+  - from: pr
+    to: escalated
+    when: nodes.approver.output.verdict == 'escalate'
+  - from: merge
+    to: do-merge
+    when: choice == 'merge'
+messages:
+  - between:
+      - security
+      - code

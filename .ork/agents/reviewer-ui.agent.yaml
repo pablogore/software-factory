@@ -1,0 +1,5 @@
+model: haiku
+effort: medium
+isolation: readonly
+budgetUsd: 1.5
+maxTurns: 40

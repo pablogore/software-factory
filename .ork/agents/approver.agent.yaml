@@ -1,0 +1,9 @@
+model: opus
+effort: high
+isolation: readonly
+budgetUsd: 2
+maxTurns: 60
+output:
+  schema:
+    verdict: [approve, escalate]
+    forHuman: string

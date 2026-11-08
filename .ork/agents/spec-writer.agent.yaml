@@ -1,0 +1,9 @@
+model: opus
+effort: high
+isolation: shared
+budgetUsd: 2
+maxTurns: 40
+output:
+  schema:
+    spec: string
+    title: string

@@ -1,0 +1,8 @@
+model: opus
+effort: high
+isolation: worktree
+budgetUsd: 4
+maxTurns: 120
+output:
+  schema:
+    title: string

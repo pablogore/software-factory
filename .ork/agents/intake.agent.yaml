@@ -1,0 +1,12 @@
+model: sonnet
+effort: medium
+isolation: readonly
+budgetUsd: 1
+maxTurns: 30
+output:
+  schema:
+    verdict: [accept, needs_info, reject]
+    comment: string
+    risk: [low, medium, high]
+    ui: boolean
+    security: boolean
