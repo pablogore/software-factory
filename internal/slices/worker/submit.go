@@ -4,7 +4,9 @@
 // submit_result and for `factory worker submit-result` (01-diseno.md).
 // Progress records what the agent says it is doing, for the MCP tool
 // progress, as an event of the job. RunGate runs the job's checks for its
-// builder, for the MCP tool run_gate and `factory worker run-gate`.
+// builder, for the MCP tool run_gate and `factory worker run-gate`. AskHuman
+// records a spec-writer's or approver's question to a person, for the MCP
+// tool ask_human and `factory worker ask-human`.
 package worker
 
 import (
@@ -37,8 +39,8 @@ type Submitter struct {
 	Gate  gate
 	Locks locks
 
-	// byJob runs one call on a job at a time, Submit, Progress or the
-	// start of RunGate, so a token, which is for one job, is revoked after
+	// byJob runs one call on a job at a time, Submit, Progress, AskHuman or
+	// the start of RunGate, so a token, which is for one job, is revoked after
 	// its result is saved before another call can check it. Calls on other
 	// jobs go on meanwhile, even while a submission waits for its job's
 	// run_gate run to stop.
@@ -52,10 +54,11 @@ type Submitter struct {
 }
 
 // Outcome is what a token's submissions came to: Saved once one result was
-// saved, else Refused, the error the last one was refused with, or nil when
-// none was made.
+// saved, Asked once a question to a person was saved instead, else Refused,
+// the error the last result was refused with, or nil when none was made.
 type Outcome struct {
 	Saved   bool
+	Asked   bool
 	Refused error
 }
 
@@ -79,6 +82,17 @@ func (s *Submitter) record(token string, err error) {
 		s.outcomes = map[[sha256.Size]byte]Outcome{}
 	}
 	s.outcomes[sha256.Sum256([]byte(token))] = Outcome{Saved: err == nil, Refused: err}
+}
+
+// recordAsked keeps that token's session asked a person a question, which
+// hands in its turn as a result would.
+func (s *Submitter) recordAsked(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.outcomes == nil {
+		s.outcomes = map[[sha256.Size]byte]Outcome{}
+	}
+	s.outcomes[sha256.Sum256([]byte(token))] = Outcome{Asked: true}
 }
 
 // Submit decodes data as a result of the kind token was issued for, checks
@@ -167,16 +181,25 @@ func decode(k domain.Kind, data []byte) (domain.Result, error) {
 // sees instead of a field silently left empty.
 func decodeAs[T domain.Result](data []byte) (domain.Result, error) {
 	var r T
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&r); err != nil {
-		return nil, fmt.Errorf("%w: not a JSON object of this kind: %w", domain.ErrInvalidValue, err)
-	}
-	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("%w: more than one JSON value", domain.ErrInvalidValue)
+	if err := decodeStrict(data, &r); err != nil {
+		return nil, err
 	}
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
 	return r, nil
+}
+
+// decodeStrict reads data into v strictly: one JSON object, no field v has
+// not, so a misspelt field is an error the agent sees.
+func decodeStrict(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("%w: not a JSON object of this kind: %w", domain.ErrInvalidValue, err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: more than one JSON value", domain.ErrInvalidValue)
+	}
+	return nil
 }

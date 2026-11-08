@@ -24,7 +24,8 @@ type Role struct {
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
 	// Tools are the only worker tools the role's sessions may call; none
 	// means submit_result and progress. run_gate must be listed, and only a
-	// build role's sessions may call it.
+	// build role's sessions may call it; ask_human too, and only a spec or
+	// approve role's sessions may call it.
 	Tools []string `json:"tools,omitempty"`
 }
 

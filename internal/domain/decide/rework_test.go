@@ -66,9 +66,12 @@ func toSpec(cause domain.HumanCause) bool {
 }
 
 // buildBound is causeRows whose feedback sends the job back to build; after
-// a spent budget feedback sends it nowhere.
+// a spent budget feedback sends it nowhere, and after an agent's question it
+// is the answer, back to the stage that asked.
 func buildBound() []causeRow {
-	return slices.DeleteFunc(causeRows(), func(r causeRow) bool { return toSpec(r.cause) || r.cause == domain.CauseBudget })
+	return slices.DeleteFunc(causeRows(), func(r causeRow) bool {
+		return toSpec(r.cause) || r.cause == domain.CauseBudget || r.cause == domain.CauseAsked
+	})
 }
 
 // specBound is causeRows whose feedback sends the job back to spec.

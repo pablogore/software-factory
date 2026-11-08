@@ -53,6 +53,7 @@ func TestOverride(t *testing.T) {
 				{"after a refused external action it is refused, naming the cause", domain.CauseActionFailed, nil, decide.ErrOverrideRefused},
 				{"after a failed merge it is refused, naming the cause", domain.CauseMergeFailed, nil, decide.ErrOverrideRefused},
 				{"after a spent budget it is refused, naming the cause", domain.CauseBudget, nil, decide.ErrOverrideRefused},
+				{"after an approver's question it is refused, naming the cause", domain.CauseAsked, nil, decide.ErrOverrideRefused},
 			}
 			specs.Table(s, rows, func(r overrideRow) string { return r.name }, func(ctx *specs.Context, r overrideRow) {
 				job := waitingFor(ctx, r.cause)

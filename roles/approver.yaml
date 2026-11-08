@@ -5,3 +5,4 @@ prompt: roles/approver.md
 agent: claude
 model: opus
 mode: blocking
+tools: [submit_result, progress, ask_human]

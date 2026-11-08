@@ -1,6 +1,7 @@
 package jobtoken_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,41 @@ func TestTokens(t *testing.T) {
 			s.It("refuse another job's checks", func(ctx *specs.Context) {
 				tokens := jobtoken.New()
 				_, err := tokens.Authorize(issue(ctx, tokens, gating), jobtoken.OpRunGate, "j-2")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			})
+		})
+
+		s.When("asked to put a question to a person", func(s *specs.Spec) {
+			asking := []jobtoken.Grant{
+				{Job: "j-1", Role: "spec-writer", Kind: domain.KindSpec, Tools: []string{"submit_result", "progress", "ask_human"}, Round: 1},
+				{Job: "j-1", Role: "approver", Kind: domain.KindApprove, Tools: []string{"submit_result", "progress", "ask_human"}, Round: 1},
+			}
+			specs.Table(s, asking, func(g jobtoken.Grant) string { return "authorize a " + string(g.Kind) + " role that lists ask_human" }, func(ctx *specs.Context, g jobtoken.Grant) {
+				tokens := jobtoken.New()
+				got, err := tokens.Authorize(issue(ctx, tokens, g), jobtoken.OpAskHuman, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(got).ToEqual(g)
+			})
+
+			refused := []jobtoken.Grant{
+				{Job: "j-1", Role: "spec-writer", Kind: domain.KindSpec, Round: 1},
+				{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: []string{"submit_result", "progress", "run_gate", "ask_human"}, Round: 1},
+				{Job: "j-1", Role: "reviewer-code", Kind: domain.KindReview, Tools: []string{"ask_human"}, Round: 1},
+				{Job: "j-1", Role: "intake", Kind: domain.KindIntake, Tools: []string{"ask_human"}, Round: 1},
+				{Job: "j-1", Role: "tech-lead", Kind: domain.KindTriage, Tools: []string{"ask_human"}, Round: 1},
+			}
+			specs.Table(s, refused, func(g jobtoken.Grant) string {
+				return "refuse " + g.Role + " with tools [" + strings.Join(g.Tools, " ") + "], naming the tool and the role"
+			}, func(ctx *specs.Context, g jobtoken.Grant) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, g), jobtoken.OpAskHuman, "j-1")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+				ctx.Expect(err.Error()).ToEqual(`job token not allowed: role "` + g.Role + `" may not use tool "ask_human"`)
+			})
+
+			s.It("refuse a question on another job", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, asking[0]), jobtoken.OpAskHuman, "j-2")
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
 			})
 		})

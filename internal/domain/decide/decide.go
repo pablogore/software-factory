@@ -160,6 +160,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return attemptFailed(e)
 	case domain.AgentProgressed:
 		return agentProgressed(e)
+	case domain.HumanAsked:
+		return asked(job, e, p)
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
 			evs := []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}
@@ -200,6 +202,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.NeedsInfo:
 			job.Stage, job.InfoFrom, job.Passed, job.Changes = domain.StageNeedsInfo, e.From, nil, nil
 			job = leftNeedsHuman(job)
+			job.Question = e.Question
 			job.WaitSeq++
 		case domain.ReviewPassed:
 			job.Passed = append(slices.Clip(job.Passed), e.Role)
@@ -225,7 +228,7 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Round, job.Reviewers, job.Passed, job.Changes = e.Round, e.Reviewers, nil, nil
 		case domain.NeedsHuman:
 			job.Paused = paused(job, e)
-			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, "", nil, nil, nil
+			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageNeedsHuman, e.From, nil, nil, nil
 			job.Reason, job.Cause, job.Question, job.Wall = e.Reason, e.Cause, e.Question, ""
 			job.WaitSeq++
 		case domain.TriageRequested:
@@ -500,8 +503,9 @@ func decideMessage(job domain.Job, e domain.MessageReceived, p domain.Pipeline) 
 // cause, never from Reason or the text: after specgate's escalation or on a
 // length exception the spec is rewritten with it (not read from the rejection
 // count, which can be stale), after a spent budget it is refused and the job
-// keeps waiting for a raise of its budget, and after every other cause the job goes back to build with
-// it. A missing or unknown cause fails closed, and the switch
+// keeps waiting for a raise of its budget, after an agent's question it is
+// the answer, so the job goes back to the stage that asked, and after every
+// other cause the job goes back to build with it. A missing or unknown cause fails closed, and the switch
 // refuses by default, so a future cause is never routed by accident. Once the
 // job has used every rework its human_reworks allows (a person's override for
 // this job, else the pipeline's), feedback back to build is refused; feedback
@@ -515,6 +519,8 @@ func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 		return respecified(job, e, p, true)
 	case domain.CauseSpecException:
 		return respecified(job, e, p, false)
+	case domain.CauseAsked:
+		return answered(job, e, p)
 	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated, domain.CauseActionFailed, domain.CauseMergeFailed:
 		if limit, ok := humanReworks(job, p); ok && job.HumanReworks >= limit {
 			return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
@@ -573,12 +579,40 @@ func dropped(job domain.Job, e domain.MessageReceived) []domain.Event {
 	}
 }
 
-// answered sends a job in needs-info back to the stage recorded as the one
-// that asked, with the answer as its input. The recorded stage must be one of
+// asked records an agent's question and stops the job until a person answers
+// it, the call itself never waiting for one. Only the roles of the stage the
+// job is in ask, and only from a spec stage, whose question waits in
+// needs-info, or an approve stage, whose question waits in needs-human for a
+// person to decide: no other stage's agent asks a person anything. Either way
+// the stage that asked is recorded and gets the answer.
+func asked(job domain.Job, e domain.HumanAsked, p domain.Pipeline) ([]domain.Event, error) {
+	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage })
+	if i < 0 {
+		return nil, illegal(job, e)
+	}
+	stage := p.Stages[i]
+	if len(stage.Roles) > 0 && !slices.Contains(stage.Roles, e.Role) {
+		return nil, illegal(job, e)
+	}
+	if err := e.Validate(); err != nil {
+		return nil, fmt.Errorf("decide: question from %q: %w", e.Role, err)
+	}
+	switch stage.Kind {
+	case domain.KindSpec:
+		return []domain.Event{e, domain.NeedsInfo{Job: job.ID, From: stage.Name, Question: e.Question, At: e.At}}, nil
+	case domain.KindApprove:
+		reason := fmt.Sprintf("%s asks the %s person a question", e.Role, e.To)
+		return []domain.Event{e, domain.NeedsHuman{Job: job.ID, Reason: reason, Question: e.Question, From: stage.Name, Cause: domain.CauseAsked, At: e.At}}, nil
+	}
+	return nil, illegal(job, e)
+}
+
+// answered sends a job in needs-info, or in needs-human after an agent's
+// question, back to the stage recorded as the one that asked, with the answer as its input. The recorded stage must be one of
 // the pipeline's, so a corrupt job never jumps to a gate or a terminal state.
 func answered(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]domain.Event, error) {
 	if !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.InfoFrom }) {
-		return nil, fmt.Errorf("decide: needs-info asked by %q, not a stage of pipeline %q: %w", job.InfoFrom, p.Name, domain.ErrInvalidValue)
+		return nil, fmt.Errorf("decide: %s asked by %q, not a stage of pipeline %q: %w", job.Stage, job.InfoFrom, p.Name, domain.ErrInvalidValue)
 	}
 	return []domain.Event{
 		domain.InfoAnswered{Job: job.ID, By: e.Author, Text: e.Text, At: e.At},
