@@ -60,7 +60,7 @@ var gateSchema = map[string]any{
 }
 
 // mcpHandler serves, at MCPPath, an MCP server whose only tools are
-// submit_result, progress and run_gate. It is stateless: every request names the job by its path
+// submit_result, progress, run_gate and ask_human. It is stateless: every request names the job by its path
 // and brings its token, so no session outlives a request or carries a job
 // or a token from one request to the next.
 func mcpHandler(s Submitter) http.Handler {
@@ -97,7 +97,40 @@ func mcpServer(s Submitter, job domain.JobID) *mcp.Server {
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return gateTool(ctx, s, job, req), nil
 	})
+	srv.AddTool(&mcp.Tool{
+		Name: ToolAskHuman,
+		Description: "Asks a person a question only they can answer, with the options they may choose from and who should answer it, product or tech, " +
+			"as `factory worker ask-human` does. The job waits for the answer, and your stage runs again with the question and the answer: " +
+			"the call does not wait for it, and once it is recorded you hand in no result, so end your turn.",
+		InputSchema: askSchema,
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return askTool(ctx, s, job, req), nil
+	})
 	return srv
+}
+
+// askTool records the call's arguments as they came as a question on job,
+// so they are decoded and checked exactly as the body of POST AskPath is.
+func askTool(ctx context.Context, s Submitter, job domain.JobID, req *mcp.CallToolRequest) *mcp.CallToolResult {
+	data := []byte(req.Params.Arguments)
+	if len(data) > MaxResultBytes {
+		return toolError(http.StatusRequestEntityTooLarge, "question over 1 MiB")
+	}
+	evs, err := s.AskHuman(ctx, bearer(header(req)), job, data)
+	if err != nil {
+		return toolError(refusal(err))
+	}
+	a := accepted(job, evs)
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: asked(a)}},
+		StructuredContent: a,
+	}
+}
+
+// asked is how a recorded question reads to the agent that asked it.
+func asked(a Accepted) string {
+	return fmt.Sprintf("question recorded for job %s: %s. The job waits for a person's answer and your stage runs again with it; "+
+		"hand in no result and end your turn.\n", a.Job, strings.Join(a.Events, ", "))
 }
 
 // progressTool records the call's message on job. Arguments over 1 MiB, or

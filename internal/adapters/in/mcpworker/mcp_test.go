@@ -68,7 +68,7 @@ func progressTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (strin
 
 func TestMCP(t *testing.T) {
 	specs.Describe(t, "the worker MCP server", func(s *specs.Spec) {
-		s.It("offers progress, run_gate and submit_result as its only tools", func(ctx *specs.Context) {
+		s.It("offers ask_human, progress, run_gate and submit_result as its only tools", func(ctx *specs.Context) {
 			cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer tok")
 			res, err := cs.ListTools(context.Background(), nil)
 			ctx.Expect(err).To(specs.BeNil())
@@ -76,7 +76,7 @@ func TestMCP(t *testing.T) {
 			for i, tool := range res.Tools {
 				names[i] = tool.Name
 			}
-			ctx.Expect(names).ToEqual([]string{"progress", "run_gate", "submit_result"})
+			ctx.Expect(names).ToEqual([]string{"ask_human", "progress", "run_gate", "submit_result"})
 		})
 
 		s.It("hands the bearer token, the job of its path and the arguments to the submitter and names the saved events", func(ctx *specs.Context) {
@@ -160,6 +160,31 @@ func TestMCP(t *testing.T) {
 				err := fmt.Errorf("worker: run gate: %w: role %q may not use tool %q", jobtoken.ErrForbidden, "reviewer-code", "run_gate")
 				cs := connect(ctx, mcpworker.Handler(&submitter{err: err}), "j-1", "Bearer tok")
 				res, callErr := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolRunGate, Arguments: map[string]any{}})
+				ctx.Expect(callErr).To(specs.BeNil())
+				ctx.Expect(res.IsError).ToEqual(true)
+				ctx.Expect(res.Content[0].(*mcp.TextContent).Text).ToEqual("refused (403): " + err.Error())
+			})
+		})
+
+		s.When("an agent asks a person a question", func(s *specs.Spec) {
+			const question = `{"question":"Dark mode for everyone?","options":["yes","beta only"],"to":"product"}`
+
+			s.It("hands the bearer token, the job of its path and the arguments to the submitter, as POST AskPath does, and tells it to end its turn", func(ctx *specs.Context) {
+				sub := &submitter{}
+				cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+				res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolAskHuman, Arguments: json.RawMessage(question)})
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(res.IsError).ToEqual(false)
+				ctx.Expect(res.Content[0].(*mcp.TextContent).Text).ToEqual("question recorded for job j-1: HumanAsked, NeedsInfo. " +
+					"The job waits for a person's answer and your stage runs again with it; hand in no result and end your turn.\n")
+				ctx.Expect(sub.asks).ToEqual([]call{{"tok", "j-1", question}})
+				ctx.Expect(sub.calls).To(specs.BeEmpty())
+			})
+
+			s.It("answers a role that may not ask with a tool error worded as the HTTP route words it", func(ctx *specs.Context) {
+				err := fmt.Errorf("worker: ask human: %w: role %q may not use tool %q", jobtoken.ErrForbidden, "builder", "ask_human")
+				cs := connect(ctx, mcpworker.Handler(&submitter{err: err}), "j-1", "Bearer tok")
+				res, callErr := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolAskHuman, Arguments: json.RawMessage(question)})
 				ctx.Expect(callErr).To(specs.BeNil())
 				ctx.Expect(res.IsError).ToEqual(true)
 				ctx.Expect(res.Content[0].(*mcp.TextContent).Text).ToEqual("refused (403): " + err.Error())
