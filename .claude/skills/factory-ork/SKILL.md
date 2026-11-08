@@ -37,8 +37,10 @@ For each issue:
    a node finishes (with its cost), a check fails, or the run ends.
 4. When the log shows a question (`? ` or `asks`), run `ork decide --json` and
    handle it as **Decisions** says.
-5. When the run ends, run `ork logs <run>` for the ending and `ork usage` for
-   the cost, and report: what happened (PR link, needs-info, rejected,
+5. When the run ends, run `factory/bin/ork-job <run>`: it writes the job
+   folder `.ork/jobs/issue-<n>-<run>/` (job.md, intake.md, spec.md, build.md,
+   review-<role>.md, approver.md, one file per round). Read job.md, and
+   report: what happened (PR link, needs-info, rejected,
    escalated, failed), the cost, and what the user needs to do, if anything.
 
 Several issues run at the same time; the workflow's `limits` cap each run's
@@ -73,8 +75,14 @@ go on: `ork stop <run> --node <node>`. Pause and go on: `ork pause <run>` /
 `ork continue <run>`. A crashed or stopped run comes back with
 `ork resume <run> --detach`.
 
+## `/factory-ork job [<run>]`
+
+Run `factory/bin/ork-job <run>` (it works while the run is still going) and
+give the user the folder and its job.md table.
+
 ## Questions about a run
 
-Read before answering: `ork logs <run> [--node <n>]`, `ork tree <run>`,
+Read the job folder first (`factory/bin/ork-job <run>` refreshes it), then, if
+you need more: `ork logs <run> [--node <n>]`, `ork tree <run>`,
 `ork worktrees`. The spec is `.ork/specs/issue-<n>.md`; the builder's work is
 in the worktree on branch `ork/<run>/builder`.

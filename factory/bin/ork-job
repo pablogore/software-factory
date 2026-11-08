@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Write an Ork run's reports as a job folder of Markdown files.
+
+    factory/bin/ork-job [<run>] [--out <dir>]
+
+Reads `ork logs <run> --json` (the newest run when <run> is left out) and
+writes one file per step into .ork/jobs/issue-<n>-<run>/ (or --out):
+intake.md, spec.md, build.md, review-<role>.md, approver.md, and job.md with
+the status, the branch, the cost of each step and the questions answered.
+A step that ran more than once gets one file per round: build-r2.md, ...
+It only reads Ork's store, so it can run while the job is still going.
+"""
+import json
+import os
+import subprocess
+import sys
+
+NAMES = {
+    "builder": "build",
+    "code": "review-code",
+    "security": "review-security",
+    "ux": "review-ux",
+    "ui": "review-ui",
+}
+SKIP_FIELDS = {"status", "summary"}
+
+
+def load_events(run):
+    cmd = ["ork", "logs", "--json"] + ([run] if run else [])
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"ork-job: {' '.join(cmd)} failed: {out.stderr.strip()}")
+    events = []
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        item = json.loads(line)
+        events.append((item.get("runId"), item.get("at"), item.get("event", item)))
+    return events
+
+
+def cost_of(event):
+    usage = event.get("usage") or {}
+    for key in ("costUsd", "totalCostUsd", "cost_usd"):
+        if isinstance(usage.get(key), (int, float)):
+            return float(usage[key])
+    return 0.0
+
+
+def render_value(value):
+    if isinstance(value, str):
+        return value
+    return "```json\n" + json.dumps(value, indent=2, ensure_ascii=False) + "\n```"
+
+
+def step_file(node, round_, rounds):
+    base = NAMES.get(node, node)
+    return f"{base}.md" if rounds == 1 or round_ == 1 else f"{base}-r{round_}.md"
+
+
+def main(argv):
+    run, out_dir = None, None
+    args = list(argv)
+    while args:
+        arg = args.pop(0)
+        if arg == "--out":
+            out_dir = args.pop(0)
+        elif arg in ("-h", "--help"):
+            print(__doc__.strip())
+            return 0
+        else:
+            run = arg
+
+    events = load_events(run)
+    if not events:
+        sys.exit("ork-job: the run has no events")
+    run_id = run or next((r for r, _, _ in events if r), "run")
+
+    inputs, status, finished = {}, "running", []
+    asked = []
+    for _, at, event in events:
+        kind = event.get("type")
+        if kind == "run.started":
+            run_id = event.get("runId", run_id)
+            inputs = event.get("inputs") or {}
+        elif kind == "node.finished":
+            finished.append((at, event))
+        elif kind == "run.finished":
+            result = event.get("result") or {}
+            status = result.get("status") or event.get("status") or "finished"
+        elif kind and kind.startswith("decision."):
+            asked.append((at, event))
+
+    issue = inputs.get("issue", "x")
+    short = str(run_id)[:8]
+    out_dir = out_dir or os.path.join(".ork", "jobs", f"issue-{issue}-{short}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    rounds = {}
+    for _, event in finished:
+        rounds[event["id"]] = max(rounds.get(event["id"], 0), event.get("round", 1))
+
+    rows, total, branch = [], 0.0, ""
+    for at, event in finished:
+        node, round_ = event["id"], event.get("round", 1)
+        output = event.get("output") or {}
+        cost = cost_of(event)
+        total += cost
+        branch = output.get("branch", branch) if node == "builder" else branch
+        name = step_file(node, round_, rounds[node])
+        lines = [
+            f"# {node}" + (f" (round {round_})" if rounds[node] > 1 else ""),
+            "",
+            f"STATUS: {output.get('status', 'ok' if event.get('ok') else 'fail')}",
+            f"Finished: {at} · cost USD {cost:.4f}",
+            "",
+        ]
+        if event.get("error"):
+            lines += ["## Error", "", event["error"], ""]
+        if output.get("summary"):
+            lines += ["## Summary", "", output["summary"], ""]
+        if node == "spec" and output.get("spec"):
+            lines += [output["spec"], ""]
+        for key, value in output.items():
+            if key in SKIP_FIELDS or (node == "spec" and key == "spec"):
+                continue
+            if value in (None, "", [], {}):
+                continue
+            lines += [f"## {key}", "", render_value(value), ""]
+        with open(os.path.join(out_dir, name), "w") as f:
+            f.write("\n".join(lines).rstrip() + "\n")
+        rows.append(f"| {node} | {round_} | {output.get('status', '')} | {cost:.4f} | [{name}]({name}) |")
+
+    job = [
+        f"# Issue #{issue} · run {run_id}",
+        "",
+        f"STATUS: {status}",
+        f"Branch: {branch or '-'}",
+        f"Cost: USD {total:.4f}",
+        "",
+        "| Step | Round | Status | USD | File |",
+        "|---|---|---|---|---|",
+        *rows,
+        "",
+    ]
+    if asked:
+        job += ["## Questions", ""]
+        for at, event in asked:
+            text = event.get("question") or event.get("prompt") or event.get("tool") or ""
+            answer = event.get("choice") or event.get("answer") or ""
+            job.append(f"- {at} · {event.get('type')} · {event.get('node', '')} {text} {answer}".rstrip())
+        job.append("")
+    with open(os.path.join(out_dir, "job.md"), "w") as f:
+        f.write("\n".join(job))
+    print(out_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

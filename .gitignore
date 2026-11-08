@@ -2,3 +2,4 @@ __pycache__/
 # Ork run state
 .ork/runs/
 .ork/specs/
+.ork/jobs/

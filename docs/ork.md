@@ -29,6 +29,14 @@ the orchestrator: it starts the run in the background, follows it, asks you in
 the chat whenever Ork needs a decision, and reports the result. `ork ui` is for
 watching. `/factory-ork status` and `/factory-ork stop` do what they say.
 
+## The job folder
+
+Each step's report lives in Ork's store. `factory/bin/ork-job <run>` writes
+them as Markdown into `.ork/jobs/issue-<n>-<run>/`: `job.md` (status, branch,
+cost per step, links), `intake.md`, `spec.md`, `build.md`, `review-<role>.md`,
+`approver.md`, with `-r2`, `-r3` for later rounds. `/factory-ork` writes it
+when a run ends.
+
 ## Run it by hand
 
 You need Node 24.20+, git, an authenticated `gh`, and your `claude` login.
