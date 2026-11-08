@@ -10,3 +10,8 @@ output:
     risk: [low, medium, high]
     ui: boolean
     security: boolean
+tools:
+  deny:
+    - Edit
+    - Write
+    - NotebookEdit

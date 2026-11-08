@@ -3,3 +3,8 @@ effort: medium
 isolation: readonly
 budgetUsd: 1.5
 maxTurns: 40
+tools:
+  deny:
+    - Edit
+    - Write
+    - NotebookEdit

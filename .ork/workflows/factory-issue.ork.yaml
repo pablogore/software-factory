@@ -23,6 +23,19 @@ defaults:
   model: sonnet
   effort: medium
   budgetUsd: 2
+rules:
+  permissions:
+    allow:
+      - Bash
+      - Edit
+      - Write
+    deny:
+      - Bash(git push *)
+      - Bash(gh pr merge *)
+      - Bash(gh issue *)
+      - Bash(rm -rf *)
+      - Edit(factory/checks.sh)
+      - Edit(factory/config.json)
 limits:
   budgetUsd: 15
   concurrency: 3

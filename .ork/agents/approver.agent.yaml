@@ -7,3 +7,8 @@ output:
   schema:
     verdict: [approve, escalate]
     forHuman: string
+tools:
+  deny:
+    - Edit
+    - Write
+    - NotebookEdit
