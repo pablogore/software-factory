@@ -67,6 +67,15 @@ class JobBase(unittest.TestCase):
 
 
 class JobTest(JobBase):
+    # ---- spike findings from the builder's reply ---------------------------
+
+    def test_findings_only_for_a_spike_in_build(self):
+        j = self.make("build")
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.job.cmd_findings(self.job.load("007-test"), "## Findings\nx\n")
+        self.assertIn("for a spike in build", err.getvalue())
+        self.assertFalse((self.job.job_dir(j["id"]) / "findings.md").exists())
+
     # ---- partial re-review ------------------------------------------------
 
     def test_rework_round_reruns_only_changed_lenses_plus_code(self):
