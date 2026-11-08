@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,11 +17,20 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+	"github.com/pablogore/software-factory/internal/slices/build"
 	"github.com/pablogore/software-factory/internal/wiring"
 )
 
 // demoJobs wait in build for a builder's result.
 var demoJobs = []domain.JobID{"demo-1", "demo-2"}
+
+// demoBuilder is the builder the demo issues tokens for, with the tools
+// roles/builder.yaml lists, so it may run the job's checks.
+var demoBuilder = domain.Role{Name: "builder", Kind: domain.KindBuild, Tools: []string{"submit_result", "progress", "run_gate"}}
+
+// demoReviewer is a reviewer with no tools list: it may report progress
+// and hand in its result, but not run the job's checks.
+var demoReviewer = domain.Role{Name: "reviewer-code", Kind: domain.KindReview}
 
 type demoPipelines struct{}
 
@@ -40,20 +50,32 @@ func (demoPipelines) Pipeline(_ context.Context, name string) (domain.Pipeline, 
 // round, as a failed gate does, and prints a builder's token for it.
 const newRoundPath = "/demo/jobs/{job}/new-round"
 
-// workerDemo serves the worker API, its HTTP route and its MCP server, over
+// workerDemo serves the worker API, its HTTP routes and its MCP server, over
 // an in-memory store with demoJobs, until ctx ends. It is not a factoryd
-// server: it prints a builder's token per job and, after every request, each
-// job's stage, round and saved events, so a person can try `factory worker submit-result` and an MCP
-// client's submit_result against it.
+// server: it prints a builder's and a reviewer's token per job and, after
+// every request, each job's stage, round and saved events, so a person can
+// try `factory worker submit-result`, `factory worker run-gate` and an MCP
+// client's tools against it. Every job's worktree is -dir, whose HEAD is
+// recorded as its base, and its checks are -checks, as the gate runs them.
 // POST newRoundPath, with no token, sends a job back to build in a new round,
 // so a person can see its old token refused.
 func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("worker-demo", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:0", "address to listen on")
+	dir := fs.String("dir", ".", "the git repo every job's checks run in, as its worktree; its HEAD is the base the diff is judged against")
+	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if err := loopback(*addr); err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(*dir)
+	if err != nil {
+		return err
+	}
+	head, err := revParse(ctx, abs, "HEAD")
+	if err != nil {
 		return err
 	}
 	store, err := memstore.New()
@@ -62,31 +84,41 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	}
 	tokens := jobtoken.New()
 	issued := map[domain.JobID]string{}
+	reviewers := map[domain.JobID]string{}
 	for _, id := range demoJobs {
 		job := domain.Job{ID: id, Title: "Demo job", Pipeline: "demo", Stage: "build", Round: 1}
 		if err := store.Create(ctx, job); err != nil {
 			return err
 		}
-		if issued[id], err = tokens.Issue(jobtoken.For(job, nil, domain.Role{Name: "builder", Kind: domain.KindBuild})); err != nil {
+		if err := store.RecordBase(ctx, id, head); err != nil {
+			return err
+		}
+		if issued[id], err = tokens.Issue(jobtoken.For(job, nil, demoBuilder)); err != nil {
+			return err
+		}
+		if reviewers[id], err = tokens.Issue(jobtoken.For(job, nil, demoReviewer)); err != nil {
 			return err
 		}
 	}
+	gate := wiring.Gate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, strings.Fields(*command), nil)
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *addr)
 	if err != nil {
 		return err
 	}
 	url := "http://" + ln.Addr().String()
 	_, _ = fmt.Fprintf(out, "worker demo on %s; jobs %s wait in build for a builder's result\n", url, joinIDs(demoJobs))
+	_, _ = fmt.Fprintf(out, "run-gate runs `%s` in %s, judging the diff against %s\n", strings.Join(gate.Command, " "), abs, head)
 	_, _ = fmt.Fprintf(out, "\nexport FACTORY_URL=%s\n", url)
 	for _, id := range demoJobs {
-		_, _ = fmt.Fprintf(out, "# job %s\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, issued[id])
-		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tools %s and %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult, mcpworker.ToolProgress)
+		_, _ = fmt.Fprintf(out, "# job %s, builder\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, issued[id])
+		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tools %s, %s and %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult, mcpworker.ToolProgress, mcpworker.ToolRunGate)
+		_, _ = fmt.Fprintf(out, "# job %s, reviewer: may not run the checks\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, reviewers[id])
 	}
 	_, _ = fmt.Fprintln(out)
 
 	var mu sync.Mutex
 	mux := http.NewServeMux()
-	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, wiring.SystemClock{}))
+	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, gate, wiring.SystemClock{}))
 	mux.HandleFunc("POST "+newRoundPath, func(w http.ResponseWriter, r *http.Request) {
 		id := domain.JobID(r.PathValue("job"))
 		token, err := newRound(r.Context(), store, tokens, id)
@@ -96,7 +128,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 		}
 		mu.Lock()
 		_, _ = fmt.Fprintf(out, "# job %s, new build round; its old token is from an earlier round\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, token)
-		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tools %s and %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult, mcpworker.ToolProgress)
+		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tools %s, %s and %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult, mcpworker.ToolProgress, mcpworker.ToolRunGate)
 		mu.Unlock()
 		_, _ = fmt.Fprintf(w, "job %s is in a new build round\n", id)
 	})
@@ -153,7 +185,7 @@ func newRound(ctx context.Context, store *memstore.Store, tokens *jobtoken.Token
 	if err != nil {
 		return "", err
 	}
-	return tokens.Issue(jobtoken.For(job, hist, domain.Role{Name: "builder", Kind: domain.KindBuild}))
+	return tokens.Issue(jobtoken.For(job, hist, demoBuilder))
 }
 
 // errNotLoopback refuses an address other machines could reach: the demo's
