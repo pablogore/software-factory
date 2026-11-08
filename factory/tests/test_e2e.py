@@ -286,7 +286,7 @@ SLICES = "# Slices: card\n\n| ID | Tipo | Valor | Estado |\n|----|------|-------
 
 
 class FetchBaseE2E(E2EBase):
-    def test_create_and_plan_check_fetch_the_base_or_stop(self):
+    def test_create_and_plan_check_fetch_the_base_or_warn(self):
         # Someone pushes to the base from another clone; nobody fetches by hand.
         other = self.tmp / "other"
         self.sh(f"git clone -q {self.tmp / 'origin.git'} {other}", cwd=self.tmp)
@@ -294,7 +294,8 @@ class FetchBaseE2E(E2EBase):
         self.sh("git add demo.txt && git commit -qm demo && git push -q origin HEAD", cwd=other)
         self.assertNotEqual(self.sh("git show origin/main:demo.txt", ok=False).returncode, 0)
 
-        self.job("plan-check")
+        res = self.job("plan-check")
+        self.assertNotIn("warning", res.stderr)
         self.assertEqual(self.sh("git show origin/main:demo.txt").stdout, "pushed elsewhere\n")
 
         (other / "demo.txt").write_text("pushed again\n")
@@ -304,18 +305,24 @@ class FetchBaseE2E(E2EBase):
         self.assertEqual(self.stage(jid)["stage"], "intake")
         self.assertEqual(self.sh("git show origin/main:demo.txt").stdout, "pushed again\n")
 
-        # A failed fetch says so and stops: no job, no plan on a stale copy.
+        # A failed fetch warns, with git's error, and goes on: the job is
+        # created and plan-check prints the same issues, warning kept off stdout.
+        for t in ("Stale one", "Stale two"):
+            self.sh(f"gh issue create --label factory --title '{t}' --body x")
+        planned = self.job("plan-check")
+        self.assertNotEqual(planned.stdout.strip(), "")
         self.sh(f"git remote set-url origin {self.tmp / 'gone.git'}")
         try:
+            res = self.job("plan-check")
+            self.assertEqual(res.stdout, planned.stdout)
+            self.assertIn("warning: couldn't fetch origin/main", res.stderr)
+            self.assertIn("intake and the tech-lead may read a stale copy", res.stderr)
+            self.assertIn("gone.git", res.stderr)
             m = self.sh("gh issue create --label factory --title 'Stale' --body x").stdout.strip().rsplit("/", 1)[1]
-            res = self.job("create", m, ok=False)
-            self.assertNotEqual(res.returncode, 0)
-            self.assertIn("couldn't fetch origin/main", res.stderr)
-            self.assertNotIn(int(m), [json.loads(f.read_text())["issue"]
-                                      for f in (self.repo / "factory/jobs").glob("*/job.json")])
-            res = self.job("plan-check", ok=False)
-            self.assertNotEqual(res.returncode, 0)
-            self.assertIn("stale copy", res.stderr)
+            res = self.job("create", m)
+            self.assertIn("warning: couldn't fetch origin/main", res.stderr)
+            self.assertNotIn("warning", res.stdout)
+            self.assertEqual(self.stage(res.stdout.strip())["issue"], int(m))
         finally:
             self.sh(f"git remote set-url origin {self.tmp / 'origin.git'}")
 

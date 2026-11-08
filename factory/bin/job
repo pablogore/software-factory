@@ -1056,11 +1056,12 @@ def advance(job, stage):
 
 
 def fetch_base():
-    """Fetch origin/<base>, so intake and the tech-lead read the base as it is on GitHub now."""
+    """Fetch origin/<base>, so intake and the tech-lead read the base as it is on GitHub now.
+    A failed fetch warns and goes on."""
     res = run(["git", "fetch", "origin", BASE], check=False)
     if res.returncode != 0:
-        die(f"couldn't fetch origin/{BASE}, so intake and the tech-lead would read a stale copy. "
-            f"Fix it and run again: {(res.stderr or res.stdout).strip()}")
+        print(f"warning: couldn't fetch origin/{BASE}; intake and the tech-lead may read a stale copy: "
+              f"{(res.stderr or res.stdout).strip()}", file=sys.stderr)
 
 
 def slugify(title):
