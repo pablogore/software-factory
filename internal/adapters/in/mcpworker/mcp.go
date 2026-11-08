@@ -79,9 +79,12 @@ func mcpServer(s Submitter, job domain.JobID) *mcp.Server {
 	return srv
 }
 
-// progressTool records the call's message on job. Arguments that are not
-// one message are refused before the Submitter sees them.
+// progressTool records the call's message on job. Arguments over 1 MiB, or
+// that are not one message, are refused before the Submitter sees them.
 func progressTool(ctx context.Context, s Submitter, job domain.JobID, req *mcp.CallToolRequest) *mcp.CallToolResult {
+	if len(req.Params.Arguments) > MaxResultBytes {
+		return toolError(http.StatusRequestEntityTooLarge, "progress arguments over 1 MiB")
+	}
 	var args struct {
 		Message *string `json:"message"`
 	}

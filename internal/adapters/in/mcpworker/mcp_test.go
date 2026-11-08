@@ -149,6 +149,15 @@ func TestMCP(t *testing.T) {
 				ctx.Expect(text).ToEqual("refused (422): " + err.Error())
 			})
 
+			s.It("refuses arguments over the size limit without handing them over", func(ctx *specs.Context) {
+				sub := &submitter{}
+				cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+				text, isErr := progressTool(ctx, cs, `{"message":"`+strings.Repeat("x", mcpworker.MaxResultBytes)+`"}`)
+				ctx.Expect(isErr).ToEqual(true)
+				ctx.Expect(text).ToEqual("refused (413): progress arguments over 1 MiB")
+				ctx.Expect(sub.progress).To(specs.BeEmpty())
+			})
+
 			for _, args := range []string{`{}`, `{"message":7}`, `{"message":"x","role":"approver"}`} {
 				s.It("refuses arguments "+args+" without handing them over", func(ctx *specs.Context) {
 					sub := &submitter{}
