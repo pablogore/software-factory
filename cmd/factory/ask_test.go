@@ -37,7 +37,7 @@ func startAsking(ctx *specs.Context, stage string) asking {
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: stage, Round: 1})).To(specs.BeNil())
 	tokens := jobtoken.New()
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, askingPipeline{}, &gate{}, gatelock.New(), stopped{}))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, askingPipeline{}, &gate{}, gatelock.New(), stopped{}, nil))
 	ctx.Cleanup(srv.Close)
 	return asking{factoryd{url: srv.URL, store: store, issuer: tokens}}
 }

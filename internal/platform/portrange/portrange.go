@@ -10,6 +10,9 @@ package portrange
 import (
 	"errors"
 	"fmt"
+	"net"
+	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/pablogore/software-factory/internal/domain"
@@ -29,6 +32,9 @@ const (
 // ErrNoFreeRange means every range that fits under the highest port is held
 // by an open job.
 var ErrNoFreeRange = errors.New("portrange: no free port range")
+
+// ErrNoFreePort means every port of a job's range is taken or in use.
+var ErrNoFreePort = errors.New("portrange: no free port in the job's range")
 
 // Range is the ports First through Last, both included.
 type Range struct {
@@ -97,4 +103,28 @@ func (a *Allocator) Release(job domain.JobID) {
 func (a *Allocator) rangeOf(n int) Range {
 	first := a.base + a.step*n
 	return Range{First: first, Last: first + a.step - 1}
+}
+
+// Free returns the first port of job's range, acquiring it if need be, that
+// is not in taken and that nothing listens on: a server that was started on
+// a port but does not listen yet is in taken, so two never get the same one.
+func (a *Allocator) Free(job domain.JobID, taken []int) (int, error) {
+	r, err := a.Acquire(job)
+	if err != nil {
+		return 0, err
+	}
+	for p := r.First; p <= r.Last; p++ {
+		if slices.Contains(taken, p) {
+			continue
+		}
+		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)))
+		if err != nil {
+			continue
+		}
+		if err := ln.Close(); err != nil {
+			return 0, fmt.Errorf("port %d: %w", p, err)
+		}
+		return p, nil
+	}
+	return 0, fmt.Errorf("job %s, ports %d-%d: %w", job, r.First, r.Last, ErrNoFreePort)
 }

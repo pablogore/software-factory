@@ -1,8 +1,9 @@
 // Package mcpworker serves the worker surface of factoryd to the agents that
 // work on jobs, with the session's job token. For now it is the HTTP routes
 // `factory worker submit-result`, `factory worker run-gate` and `factory
-// worker ask-human` call and the MCP tools submit_result, progress, run_gate
-// and ask_human, all over one Submitter; it
+// worker dev-server` and `factory worker ask-human` call and the MCP tools
+// submit_result, progress, run_gate, dev_server and ask_human, all over one
+// Submitter; it
 // serves nothing else, so a job token gets no other operation from it
 // (06-interfaz-y-observabilidad.md).
 package mcpworker
@@ -11,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/pablogore/software-factory/internal/domain/decide"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+	"github.com/pablogore/software-factory/internal/platform/portrange"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -33,6 +36,11 @@ const ResultPath = "/worker/jobs/{job}/result"
 // body is never read: nothing but the token and the job reaches the checks.
 const GatePath = "/worker/jobs/{job}/gate"
 
+// DevServerPath is the route a session's dev server is started by, with
+// POST, and stopped by, with DELETE; {job} is its ID. Its body is never
+// read: the command is the repo's and the port the job's.
+const DevServerPath = "/worker/jobs/{job}/dev-server"
+
 // AskPath is the route a question to a person is posted to; {job} is its
 // ID. Its body is the question's JSON object, as the MCP tool ask_human's
 // arguments are, and the Submitter decodes both the same way.
@@ -44,6 +52,8 @@ type Submitter interface {
 	Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
 	Progress(ctx context.Context, token string, job domain.JobID, text string) ([]domain.Event, error)
 	RunGate(ctx context.Context, token string, job domain.JobID) (domain.ChecksRun, error)
+	DevServer(ctx context.Context, token string, job domain.JobID) (int, error)
+	StopDevServer(ctx context.Context, token string, job domain.JobID) error
 	AskHuman(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
 }
 
@@ -64,15 +74,25 @@ type GateRun struct {
 	Report string           `json:"report"`
 }
 
+// DevServer is the answer to a dev server call: the port it runs on, none
+// once stopped, and Report, the answer as the agent reads it, worded here
+// once so the MCP tool and the CLI show the same.
+type DevServer struct {
+	Job    domain.JobID `json:"job"`
+	Port   int          `json:"port,omitempty"`
+	Report string       `json:"report"`
+}
+
 // Refused is the answer to anything else.
 type Refused struct {
 	Error string `json:"error"`
 }
 
-// Handler serves POST ResultPath, POST GatePath, POST AskPath and the MCP
-// server at MCPPath, all with the token as a bearer token and all over s, so
-// a result is decided, the checks are run and a question is recorded the
-// same way whichever one the call comes by. Every other request is refused with 403.
+// Handler serves POST ResultPath, POST GatePath, POST and DELETE
+// DevServerPath, POST AskPath and the MCP server at MCPPath, all with the
+// token as a bearer token and all over s, so a result is decided, the
+// checks are run, the dev server is run and a question is recorded the same
+// way whichever one the call comes by. Every other request is refused with 403.
 func Handler(s Submitter) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+ResultPath, func(w http.ResponseWriter, r *http.Request) {
@@ -81,12 +101,18 @@ func Handler(s Submitter) http.Handler {
 	mux.HandleFunc("POST "+GatePath, func(w http.ResponseWriter, r *http.Request) {
 		runGate(w, r, s)
 	})
+	mux.HandleFunc("POST "+DevServerPath, func(w http.ResponseWriter, r *http.Request) {
+		devServer(w, r, s, false)
+	})
+	mux.HandleFunc("DELETE "+DevServerPath, func(w http.ResponseWriter, r *http.Request) {
+		devServer(w, r, s, true)
+	})
 	mux.HandleFunc("POST "+AskPath, func(w http.ResponseWriter, r *http.Request) {
 		askHuman(w, r, s)
 	})
 	mux.Handle(MCPPath, mcpHandler(s))
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		write(w, http.StatusForbidden, Refused{Error: jobtoken.ErrForbidden.Error() + ": the worker API only takes a job's result, runs its checks and takes its questions to a person"})
+		write(w, http.StatusForbidden, Refused{Error: jobtoken.ErrForbidden.Error() + ": the worker API only takes a job's result, runs its checks and its dev server and takes its questions to a person"})
 	})
 	return mux
 }
@@ -120,6 +146,32 @@ func runGate(w http.ResponseWriter, r *http.Request, s Submitter) {
 		return
 	}
 	write(w, http.StatusOK, gateRun(job, run))
+}
+
+func devServer(w http.ResponseWriter, r *http.Request, s Submitter, stop bool) {
+	d, err := callDevServer(r.Context(), s, bearer(r.Header), domain.JobID(r.PathValue("job")), stop)
+	if err != nil {
+		code, msg := refusal(err)
+		write(w, code, Refused{Error: msg})
+		return
+	}
+	write(w, http.StatusOK, d)
+}
+
+// callDevServer starts job's dev server for token, or stops it, and words
+// the answer, for the route and the MCP tool alike.
+func callDevServer(ctx context.Context, s Submitter, token string, job domain.JobID, stop bool) (DevServer, error) {
+	if stop {
+		if err := s.StopDevServer(ctx, token, job); err != nil {
+			return DevServer{}, err
+		}
+		return DevServer{Job: job, Report: fmt.Sprintf("dev server of job %s stopped\n", job)}, nil
+	}
+	port, err := s.DevServer(ctx, token, job)
+	if err != nil {
+		return DevServer{}, err
+	}
+	return DevServer{Job: job, Port: port, Report: fmt.Sprintf("dev server of job %s on port %d: http://localhost:%d\n", job, port, port)}, nil
 }
 
 func askHuman(w http.ResponseWriter, r *http.Request, s Submitter) {
@@ -179,7 +231,7 @@ func status(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, jobtoken.ErrStale), errors.Is(err, decide.ErrIllegalTransition), errors.Is(err, decide.ErrUnsupported),
 		errors.Is(err, decide.ErrStopped), errors.Is(err, ports.ErrVersionConflict), errors.Is(err, domain.ErrBusy),
-		errors.Is(err, gatelock.ErrPreempted):
+		errors.Is(err, gatelock.ErrPreempted), errors.Is(err, portrange.ErrNoFreePort), errors.Is(err, portrange.ErrNoFreeRange):
 		return http.StatusConflict
 	case errors.Is(err, domain.ErrMissingField), errors.Is(err, domain.ErrInvalidValue):
 		return http.StatusUnprocessableEntity

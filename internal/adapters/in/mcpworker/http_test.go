@@ -30,6 +30,7 @@ type submitter struct {
 	gates    []call
 	asks     []call
 	run      domain.ChecksRun
+	devs     []call
 }
 
 type call struct {
@@ -60,6 +61,19 @@ func (s *submitter) RunGate(_ context.Context, token string, job domain.JobID) (
 		return domain.ChecksRun{}, s.err
 	}
 	return s.run, nil
+}
+
+func (s *submitter) DevServer(_ context.Context, token string, job domain.JobID) (int, error) {
+	s.devs = append(s.devs, call{token, job, "start"})
+	if s.err != nil {
+		return 0, s.err
+	}
+	return 5100, nil
+}
+
+func (s *submitter) StopDevServer(_ context.Context, token string, job domain.JobID) error {
+	s.devs = append(s.devs, call{token, job, "stop"})
+	return s.err
 }
 
 func (s *submitter) AskHuman(_ context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error) {

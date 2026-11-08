@@ -47,3 +47,27 @@ type locks interface {
 	Try(ctx context.Context, job domain.JobID) (context.Context, func(), error)
 	Preempt(ctx context.Context, job domain.JobID) error
 }
+
+// devServers runs the dev server of a role's session in its job's worktree,
+// keyed by job and stage as ports.DevServers is.
+type devServers interface {
+	Start(ctx context.Context, wt ports.Worktree, stage string, port int, cmd ports.DevCommand) error
+	StopStage(ctx context.Context, job domain.JobID, stage string) error
+}
+
+// worktrees gives a job's worktree, the one its session works in.
+type worktrees interface {
+	Prepare(ctx context.Context, job domain.JobID) (ports.Worktree, error)
+}
+
+// devPorts hands out a port of job's own range that is not in taken and
+// that nothing listens on.
+type devPorts interface {
+	Free(job domain.JobID, taken []int) (int, error)
+}
+
+// devCommands tells the dev server command the repo configures for a job,
+// or none.
+type devCommands interface {
+	DevCommand(ctx context.Context, job domain.JobID, wt ports.Worktree) (ports.DevCommand, error)
+}

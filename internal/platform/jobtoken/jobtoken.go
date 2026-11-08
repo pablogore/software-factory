@@ -3,8 +3,9 @@
 // the round and stage entry the job was in when it was issued. It denies by
 // default: a job token authorizes only submitting its own job's result,
 // reporting progress on it, running its checks for a build role that lists
-// it and asking a person a question for a spec or approve role that lists
-// it, and of those only what its role's tools allow, so it never works
+// it, running its dev server for a builder or a UX or UI reviewer that
+// lists it and asking a person a question for a spec or approve role that
+// lists it, and of those only what its role's tools allow, so it never works
 // for another job or for an operator's operation, even one added later, nor
 // once the job moved on.
 package jobtoken
@@ -45,6 +46,7 @@ const (
 	OpSubmitResult Op = "worker.submit_result"
 	OpProgress     Op = "worker.progress"
 	OpRunGate      Op = "worker.run_gate"
+	OpDevServer    Op = "worker.dev_server"
 	OpAskHuman     Op = "worker.ask_human"
 )
 
@@ -54,6 +56,7 @@ var tools = map[Op]string{
 	OpSubmitResult: "submit_result",
 	OpProgress:     "progress",
 	OpRunGate:      "run_gate",
+	OpDevServer:    "dev_server",
 	OpAskHuman:     "ask_human",
 }
 
@@ -67,6 +70,12 @@ var defaults = []string{"submit_result", "progress"}
 var kinds = map[Op][]domain.Kind{
 	OpRunGate:  {domain.KindBuild},
 	OpAskHuman: {domain.KindSpec, domain.KindApprove},
+}
+
+// roles limits a tool to the roles named, even when another lists it: only
+// the builder and the UX and UI reviewers look at the running app (#37).
+var roles = map[Op][]string{
+	OpDevServer: {"builder", "reviewer-ux", "reviewer-ui"},
 }
 
 // Grant is what a token was issued for: the job and role of one session, the
@@ -173,10 +182,10 @@ func (t *Tokens) Revoke(token string) {
 }
 
 // Authorize returns token's grant when it allows op on job: only
-// OpSubmitResult, OpProgress, OpRunGate or OpAskHuman on the job it was
-// issued for, only when the grant lists op's tool, or lists none and the
-// tool is one of defaults, and only for a grant of a kind the tool is
-// limited to, if any.
+// OpSubmitResult, OpProgress, OpRunGate, OpDevServer or OpAskHuman on the
+// job it was issued for, only when the grant lists op's tool, or lists none
+// and the tool is one of defaults, and only for a grant of a kind and of
+// one of the roles the tool is limited to, if any.
 // It decides on the call, not on the tools an agent was shown, so an agent
 // that calls a tool its role may not use is refused with an error naming the
 // tool and the role. The error never says which job the token belongs to.
@@ -201,7 +210,9 @@ func (t *Tokens) Authorize(token string, op Op, job domain.JobID) (Grant, error)
 	if len(allowed) == 0 {
 		allowed = defaults
 	}
-	if only, limited := kinds[op]; !slices.Contains(allowed, tool) || (limited && !slices.Contains(only, g.Kind)) {
+	only, limited := kinds[op]
+	named, byRole := roles[op]
+	if !slices.Contains(allowed, tool) || (limited && !slices.Contains(only, g.Kind)) || (byRole && !slices.Contains(named, g.Role)) {
 		return Grant{}, fmt.Errorf("%w: role %q may not use tool %q", ErrForbidden, g.Role, tool)
 	}
 	return g, nil

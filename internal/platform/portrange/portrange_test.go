@@ -2,6 +2,7 @@ package portrange_test
 
 import (
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 
@@ -129,6 +130,28 @@ func TestPortRange(t *testing.T) {
 				seen[got[i].First] = true
 			}
 			ctx.Expect(seen).To(specs.HaveLen(jobs))
+		})
+	})
+}
+
+func TestFreePort(t *testing.T) {
+	specs.Describe(t, "portrange.Allocator.Free", func(s *specs.Spec) {
+		s.It("skips the ports something listens on and the ones taken, and fails once none is left", func(ctx *specs.Context) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			ctx.Expect(err).To(specs.BeNil())
+			defer func() { _ = ln.Close() }()
+			busy := ln.Addr().(*net.TCPAddr).Port
+			a := newAllocator(ctx, busy, 3)
+
+			first, err := a.Free("job-1", nil)
+			ctx.Expect(err).To(specs.BeNil())
+			second, err := a.Free("job-1", []int{first})
+			ctx.Expect(err).To(specs.BeNil())
+			_, none := a.Free("job-1", []int{first, second})
+
+			ctx.Expect(first).ToEqual(busy + 1)
+			ctx.Expect(second).ToEqual(busy + 2)
+			ctx.Expect(none).To(specs.MatchError(portrange.ErrNoFreePort))
 		})
 	})
 }

@@ -126,6 +126,41 @@ func TestTokens(t *testing.T) {
 			})
 		})
 
+		s.When("asked to run the job's dev server", func(s *specs.Spec) {
+			serving := func(role string, kind domain.Kind) jobtoken.Grant {
+				return jobtoken.Grant{Job: "j-1", Role: role, Kind: kind, Tools: []string{"submit_result", "dev_server"}, Round: 1}
+			}
+
+			s.It("authorize the builder and the UX and UI reviewers that list dev_server", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				for _, g := range []jobtoken.Grant{serving("builder", domain.KindBuild), serving("reviewer-ux", domain.KindReview), serving("reviewer-ui", domain.KindReview)} {
+					got, err := tokens.Authorize(issue(ctx, tokens, g), jobtoken.OpDevServer, "j-1")
+					ctx.Expect(err).To(specs.BeNil())
+					ctx.Expect(got).ToEqual(g)
+				}
+			})
+
+			s.It("refuse a role without a tools list, as dev_server is not one of the tools every role has", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, builder), jobtoken.OpDevServer, "j-1")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+				ctx.Expect(err.Error()).ToEqual(`job token not allowed: role "builder" may not use tool "dev_server"`)
+			})
+
+			s.It("refuse any other role, even one that lists dev_server", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, serving("reviewer-security", domain.KindReview)), jobtoken.OpDevServer, "j-1")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+				ctx.Expect(err.Error()).ToEqual(`job token not allowed: role "reviewer-security" may not use tool "dev_server"`)
+			})
+
+			s.It("refuse another job's dev server", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, serving("builder", domain.KindBuild)), jobtoken.OpDevServer, "j-2")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			})
+		})
+
 		s.When("asked to put a question to a person", func(s *specs.Spec) {
 			asking := []jobtoken.Grant{
 				{Job: "j-1", Role: "spec-writer", Kind: domain.KindSpec, Tools: []string{"submit_result", "progress", "ask_human"}, Round: 1},
