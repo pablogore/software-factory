@@ -22,6 +22,9 @@ type Role struct {
 	// delete, from the repo root: an entry ending in "/" covers everything
 	// under it, any other is a path.Match pattern. None means no limit.
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
+	// Tools are the only worker tools the role's sessions may call; none
+	// means the ones every role has, submit_result and progress.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // When says when a role runs; a role whose conditions don't apply is skipped

@@ -11,9 +11,9 @@ import (
 	"github.com/pablogore/software-factory/internal/domain"
 )
 
-// roleFile lists every key 04-roles.md documents for a role. Tools,
-// permissions and budget are accepted so documented files load, but nothing
-// uses them yet, so they don't reach domain.Role.
+// roleFile lists every key 04-roles.md documents for a role. Permissions
+// and budget are accepted so documented files load, but nothing uses them
+// yet, so they don't reach domain.Role.
 type roleFile struct {
 	Name        string     `yaml:"name"`
 	Kind        string     `yaml:"kind"`
@@ -65,6 +65,7 @@ func LoadRole(data []byte) (domain.Role, error) {
 		Mode:        domain.Mode(f.Mode),
 	}
 	r.AllowedPaths = f.AllowedPaths
+	r.Tools = f.Tools
 	for _, c := range f.When.Any {
 		r.When.Any = append(r.When.Any, domain.Condition{
 			Paths:       c.Paths,

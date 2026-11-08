@@ -58,7 +58,7 @@ func attemptDemo(ctx context.Context, out io.Writer) error {
 		if err := store.Create(ctx, job); err != nil {
 			return err
 		}
-		token, err := tokens.Issue(jobtoken.For(job, nil, "builder", domain.KindBuild))
+		token, err := tokens.Issue(jobtoken.For(job, nil, domain.Role{Name: "builder", Kind: domain.KindBuild}))
 		if err != nil {
 			return err
 		}

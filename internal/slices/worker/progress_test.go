@@ -9,6 +9,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+	"github.com/pablogore/software-factory/internal/slices/worker"
 )
 
 func message(role, text string) domain.AgentProgressed {
@@ -101,6 +102,17 @@ func TestProgress(t *testing.T) {
 			_, err := w.sub.Progress(context.Background(), w.j1, "j-1", "")
 			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 			ctx.Expect(w.sub.Take(w.j1).Refused).To(specs.BeNil())
+		})
+
+		s.It("refuses a role whose tools do not list progress, naming the tool and the role and saving nothing", func(ctx *specs.Context) {
+			w := newWorld(ctx)
+			token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "only-submits", Kind: domain.KindBuild, Tools: []string{"submit_result"}, Round: 1})
+			evs, err := w.sub.Progress(context.Background(), token, "j-1", "sneaking in")
+			ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			ctx.Expect(err.Error()).To(specs.Contain(`role "only-submits" may not use tool "progress"`))
+			ctx.Expect(evs).To(specs.BeEmpty())
+			w.untouched(ctx, "j-1")
+			ctx.Expect(w.sub.Take(token)).ToEqual(worker.Outcome{})
 		})
 	})
 }

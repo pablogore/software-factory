@@ -136,6 +136,17 @@ func TestSubmit(t *testing.T) {
 			w.untouched(ctx, "j-1")
 		})
 
+		s.It("refuses a role whose tools do not list submit_result, saving nothing and keeping no outcome", func(ctx *specs.Context) {
+			w := newWorld(ctx)
+			token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "only-progress", Kind: domain.KindBuild, Tools: []string{"progress"}, Round: 1})
+			evs, err := w.sub.Submit(context.Background(), token, "j-1", []byte(`{"status":"READY"}`))
+			ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			ctx.Expect(err.Error()).To(specs.Contain(`role "only-progress" may not use tool "submit_result"`))
+			ctx.Expect(evs).To(specs.BeEmpty())
+			w.untouched(ctx, "j-1")
+			ctx.Expect(w.sub.Take(token)).ToEqual(worker.Outcome{})
+		})
+
 		s.When("the result is not valid for the kind", func(s *specs.Spec) {
 			specs.Table(s, invalidRows(), func(r invalidRow) string { return "refuses one " + r.name + ", saying what is wrong" },
 				func(ctx *specs.Context, r invalidRow) {
@@ -237,7 +248,7 @@ func TestSubmit(t *testing.T) {
 				ctx.Expect(err).To(specs.BeNil())
 				hist, err := w.store.History(context.Background(), "j-1")
 				ctx.Expect(err).To(specs.BeNil())
-				fresh := w.issue(ctx, jobtoken.For(job, hist, "builder", domain.KindBuild))
+				fresh := w.issue(ctx, jobtoken.For(job, hist, domain.Role{Name: "builder", Kind: domain.KindBuild}))
 				_, err = w.sub.Submit(context.Background(), fresh, "j-1", []byte(`{"status":"READY"}`))
 				ctx.Expect(err).To(specs.BeNil())
 			})
@@ -250,7 +261,7 @@ func TestSubmit(t *testing.T) {
 				ctx.Expect(err).To(specs.BeNil())
 				hist, err := w.store.History(context.Background(), "j-1")
 				ctx.Expect(err).To(specs.BeNil())
-				review := w.issue(ctx, jobtoken.For(job, hist, "reviewer-code", domain.KindReview))
+				review := w.issue(ctx, jobtoken.For(job, hist, domain.Role{Name: "reviewer-code", Kind: domain.KindReview}))
 				w.apply(ctx, "j-1", domain.BudgetExhausted{Job: "j-1", Spent: 9, At: at})
 				w.apply(ctx, "j-1", domain.CapRaiseRequested{Job: "j-1", By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Cap: domain.CapBudget, Value: 20, WaitSeq: 1, At: at})
 				job, _, err = w.store.Load(context.Background(), "j-1")

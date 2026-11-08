@@ -2,8 +2,9 @@
 // one per session, bound to one job, role and kind (01-diseno.md), and to
 // the round and stage entry the job was in when it was issued. It denies by
 // default: a job token authorizes only submitting its own job's result and
-// reporting progress on it, so it never works for another job or for an
-// operator's operation, even one added later, nor once the job moved on.
+// reporting progress on it, and of those only what its role's tools allow,
+// so it never works for another job or for an operator's operation, even one
+// added later, nor once the job moved on.
 package jobtoken
 
 import (
@@ -12,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/pablogore/software-factory/internal/domain"
@@ -42,21 +44,31 @@ const (
 	OpProgress     Op = "worker.progress"
 )
 
+// tools names the worker tool each operation is called by, as a role's
+// `tools:` lists it.
+var tools = map[Op]string{
+	OpSubmitResult: "submit_result",
+	OpProgress:     "progress",
+}
+
 // Grant is what a token was issued for: the job and role of one session, the
-// kind whose result that role submits, and the job's round and stage entry
-// (Entry) when the session started.
+// kind whose result that role submits, the tools the role may call (none
+// means every operation a job token allows), and the job's round and stage
+// entry (Entry) when the session started.
 type Grant struct {
 	Job   domain.JobID
 	Role  string
 	Kind  domain.Kind
+	Tools []string
 	Round int
 	Entry int
 }
 
-// For is the grant for a session of role, submitting kind, on job as it is
-// now: hist is job's history, which tells its stage entry.
-func For(job domain.Job, hist []ports.Record, role string, kind domain.Kind) Grant {
-	return Grant{Job: job.ID, Role: role, Kind: kind, Round: job.Round, Entry: Entry(hist)}
+// For is the grant for a session of role, submitting its kind with its
+// tools, on job as it is now: hist is job's history, which tells its stage
+// entry.
+func For(job domain.Job, hist []ports.Record, role domain.Role) Grant {
+	return Grant{Job: job.ID, Role: role.Name, Kind: role.Kind, Tools: slices.Clone(role.Tools), Round: job.Round, Entry: Entry(hist)}
 }
 
 // Entry numbers a job's entries into a stage from its history: it grows on
@@ -143,8 +155,11 @@ func (t *Tokens) Revoke(token string) {
 }
 
 // Authorize returns token's grant when it allows op on job: only
-// OpSubmitResult or OpProgress on the job it was issued for. The error never says which
-// job the token belongs to.
+// OpSubmitResult or OpProgress on the job it was issued for, and only when
+// the grant lists op's tool or lists none. It decides on the call, not on
+// the tools an agent was shown, so an agent that calls a tool its role does
+// not list is refused with an error naming the tool and the role. The error
+// never says which job the token belongs to.
 func (t *Tokens) Authorize(token string, op Op, job domain.JobID) (Grant, error) {
 	if token == "" {
 		return Grant{}, ErrNoToken
@@ -155,11 +170,15 @@ func (t *Tokens) Authorize(token string, op Op, job domain.JobID) (Grant, error)
 	if !ok {
 		return Grant{}, ErrUnknownToken
 	}
-	if op != OpSubmitResult && op != OpProgress {
+	tool, ok := tools[op]
+	if !ok {
 		return Grant{}, fmt.Errorf("%w: operation %q", ErrForbidden, op)
 	}
 	if job != g.Job {
 		return Grant{}, fmt.Errorf("%w: job %q", ErrForbidden, job)
+	}
+	if len(g.Tools) > 0 && !slices.Contains(g.Tools, tool) {
+		return Grant{}, fmt.Errorf("%w: role %q may not use tool %q", ErrForbidden, g.Role, tool)
 	}
 	return g, nil
 }
