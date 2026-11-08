@@ -78,6 +78,9 @@ TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 # Escalations the scripts raise go to the tech-lead first; the approver's go
 # straight to the human, since it already judged the job.
 TRIAGED_FROM = {"build", "gate", "review", "merging"}
+# The most an issue may cost (every job of its initiative) before another
+# build round needs a human; the skill's between-slice cap is the same USD 8.
+ISSUE_CAP_USD = 8.0
 PLAN = JOBS / "plan.md"
 
 
@@ -627,6 +630,26 @@ def escalate(job, why):
     (job_dir(job["id"]) / "decision.md").write_text(f"ESCALATE\n\n## Why\n{why}\n")
 
 
+def issue_cost(job):
+    """What the issue has cost so far: `job`'s cost plus its initiative's other
+    jobs, each counted as `job summary` counts it."""
+    others = [j for j in all_jobs() if j["initiative_id"] == job["initiative_id"]
+              and j["id"] != job["id"]] if job["initiative_id"] else []
+    return round(job["cost_usd"] + sum(cost_usd(j) for j in others), 2)
+
+
+def over_cap(job):
+    """Why the next round waits for a human, with decision.md written, when the
+    issue is over ISSUE_CAP_USD; None when it may start."""
+    spent = issue_cost(job)
+    if spent <= ISSUE_CAP_USD:
+        return None
+    why = (f"Issue #{job['issue']} has cost ${spent:.2f}, over the ${ISSUE_CAP_USD:.2f} cap per issue, "
+           f"so round {job['round'] + 1} was not started.")
+    escalate(job, why)
+    return why
+
+
 def git(job, *args, check=True):
     return run(["git", *args], cwd=job["worktree"], check=check)
 
@@ -731,6 +754,7 @@ def advance(job, stage):
     d = job_dir(job["id"])
     decision = header(d / "intake.md").get("DECISION") if (d / "intake.md").exists() else None
     intake_body = lambda: "\n".join((d / "intake.md").read_text().split("\n\n", 1)[1:]).strip()
+    capped = None  # why, when the issue's cost cap stops a new round
 
     if old == "intake" and stage == "initiative":
         require(decision == "ACCEPT", f"intake.md says DECISION: {decision}, not ACCEPT")
@@ -932,6 +956,8 @@ def advance(job, stage):
             if last:
                 escalate(job, f"The gate failed in round {job['round']}, the last allowed round. "
                               f"See round-{job['round']}/checks.md.")
+            elif capped := over_cap(job):
+                stage = "needs-human"
             else:
                 next_round(job, only=job.get("round_reviewers"))
 
@@ -948,6 +974,8 @@ def advance(job, stage):
             if last:
                 escalate(job, f"Review rounds exhausted. Outstanding CHANGES in round-{job['round']}/ "
                               f"from: {', '.join(changes)}.")
+            elif capped := over_cap(job):
+                stage = "needs-human"
             else:
                 # Lenses that passed stay passed; re-run the ones that asked for
                 # changes, and code, which sees every fix.
@@ -979,9 +1007,12 @@ def advance(job, stage):
     elif old == "triage" and stage == "build":
         require(first_line(d / "triage.md") == "RETRY", "triage.md doesn't start with RETRY")
         require(not job.get("tl_retry_used"), "the tech-lead already retried this job once")
-        job["tl_retry_used"] = True
-        job["round_limit"] = job["round"] + 1
-        next_round(job, only=job.get("round_reviewers"))
+        if capped := over_cap(job):
+            stage = "needs-human"
+        else:
+            job["tl_retry_used"] = True
+            job["round_limit"] = job["round"] + 1
+            next_round(job, only=job.get("round_reviewers"))
 
     elif old == "triage":  # → needs-human
         require(first_line(d / "triage.md") == "ESCALATE", "triage.md doesn't start with ESCALATE")
@@ -989,7 +1020,7 @@ def advance(job, stage):
         tl = (d / "triage.md").read_text().split("\n", 1)[1].strip()
         (d / "decision.md").write_text(f"ESCALATE\n\n{tl}\n\n## What stopped the job\n{why}\n")
 
-    if stage == "needs-human" and old in TRIAGED_FROM:
+    if stage == "needs-human" and old in TRIAGED_FROM and not capped:
         stage = "triage"  # decision.md holds why; the tech-lead decides what's next
 
     if stage == "needs-human":
@@ -1014,6 +1045,9 @@ def advance(job, stage):
 
     job["stage"] = stage
     job["ended"] = now() if stage in TERMINAL | WAITING else None
+    if capped:  # the job is saved in needs-human, but the move to build failed
+        save(job)
+        raise Refused(f"{job['id']}: needs-human, not build. {capped}")
     return job
 
 

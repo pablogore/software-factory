@@ -4,8 +4,10 @@ Each test copies factory/ into a temporary repo, loads the job script as a
 module, and replaces its GitHub calls with fakes, so nothing touches GitHub.
 """
 
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -94,6 +96,69 @@ class JobTest(JobBase):
         self.write("round-2/review-ux.md", "VERDICT: PASS\n")
         j = self.job.advance(self.job.sync(j), "approve")
         self.assertEqual(j["stage"], "approve")
+
+    # ---- cost cap per issue -------------------------------------------------
+
+    def costs(self, mine, sibling, initiative_id="i1"):
+        """Costs for 007-test and a merged slice 006-older of `initiative_id`."""
+        self.job.cost_usd = lambda j: {"007-test": mine, "006-older": sibling}.get(j["id"], 0.0)
+        self.job.job_dir("006-older").mkdir(parents=True)
+        self.job.save({"id": "006-older", "issue": 7, "stage": "merged", "initiative_id": initiative_id,
+                       "slice_id": "S1", "cost_usd": 0.0})
+
+    def review_wants_changes(self):
+        self.pr["isDraft"] = False
+        j = self.make("review", initiative_id="i1", slice_id="S2")
+        for lens, v in (("code", "CHANGES"), ("ux", "PASS"), ("ui", "PASS")):
+            self.write(f"round-1/review-{lens}.md", f"VERDICT: {v}\n")
+        return j
+
+    def test_over_the_cap_review_to_build_goes_straight_to_needs_human(self):
+        self.review_wants_changes()
+        self.costs(3.01, 5.0)
+        err = io.StringIO()
+        with self.assertRaises(SystemExit) as e, contextlib.redirect_stderr(err):
+            self.job.main(["advance", "007-test", "build"])
+        self.assertEqual(e.exception.code, 1)
+        self.assertIn("needs-human, not build. Issue #7 has cost $8.01, over the $8.00 cap", err.getvalue())
+        saved = self.job.load("007-test")
+        self.assertEqual((saved["stage"], saved["round"]), ("needs-human", 1))
+        self.assertFalse((self.job.job_dir("007-test") / "round-2").exists())
+        decision = (self.job.job_dir("007-test") / "decision.md").read_text()
+        self.assertIn("has cost $8.01, over the $8.00 cap", decision)
+        self.assertEqual(self.comments[-1][:2], ("pr", 42))
+        self.assertIn("round 2 was not started", self.comments[-1][2])
+        self.assertTrue(any(k.get("add") == "factory:needs-human" for _, k in self.labels))
+
+    def test_over_the_cap_gate_failure_and_triage_retry_go_to_needs_human(self):
+        self.job.git = lambda job, *a, check=True: type("R", (), {"stdout": "abc\n", "returncode": 0})()
+        self.job.cost_usd = lambda j: 9.0
+        self.pr["isDraft"] = False
+        j = self.make("gate", initiative_id="i1")
+        self.write("round-1/checks.md", "GATE: FAIL\nCOMMIT: abc\n")
+        with self.assertRaises(self.job.Refused):
+            self.job.advance(self.job.sync(j), "build")
+        self.assertEqual(self.job.load("007-test")["stage"], "needs-human")
+        j = self.make("triage", initiative_id="i1")
+        self.write("triage.md", "RETRY\n\nfix the flaky test\n")
+        with self.assertRaises(self.job.Refused):
+            self.job.advance(self.job.sync(j), "build")
+        saved = self.job.load("007-test")
+        self.assertEqual((saved["stage"], saved["round"]), ("needs-human", 1))
+        self.assertNotIn("tl_retry_used", saved)
+
+    def test_at_the_cap_review_to_build_starts_the_round_as_before(self):
+        j = self.review_wants_changes()
+        self.costs(3.0, 5.0)
+        j = self.job.advance(self.job.sync(j), "build")
+        self.assertEqual((j["stage"], j["round"]), ("build", 2))
+        self.assertFalse((self.job.job_dir("007-test") / "decision.md").exists())
+
+    def test_other_initiatives_dont_count_toward_the_cap(self):
+        j = self.review_wants_changes()
+        self.costs(1.0, 50.0, initiative_id="i0")
+        j = self.job.advance(self.job.sync(j), "build")
+        self.assertEqual(j["round"], 2)
 
     # ---- feedback -----------------------------------------------------------
 
