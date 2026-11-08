@@ -83,7 +83,7 @@ func newWorkerWorld(ctx *specs.Context) workerWorld {
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 	tokens := jobtoken.New()
 	g := &gate{}
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, g, gatelock.New(), fixedClock{}))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, g, gatelock.New(), fixedClock{}, nil))
 	ctx.Cleanup(srv.Close)
 	return workerWorld{store: store, tokens: tokens, gate: g, url: srv.URL}
 }

@@ -68,7 +68,7 @@ func progressTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (strin
 
 func TestMCP(t *testing.T) {
 	specs.Describe(t, "the worker MCP server", func(s *specs.Spec) {
-		s.It("offers progress, run_gate and submit_result as its only tools", func(ctx *specs.Context) {
+		s.It("offers dev_server, progress, run_gate and submit_result as its only tools", func(ctx *specs.Context) {
 			cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer tok")
 			res, err := cs.ListTools(context.Background(), nil)
 			ctx.Expect(err).To(specs.BeNil())
@@ -76,7 +76,7 @@ func TestMCP(t *testing.T) {
 			for i, tool := range res.Tools {
 				names[i] = tool.Name
 			}
-			ctx.Expect(names).ToEqual([]string{"progress", "run_gate", "submit_result"})
+			ctx.Expect(names).ToEqual([]string{"dev_server", "progress", "run_gate", "submit_result"})
 		})
 
 		s.It("hands the bearer token, the job of its path and the arguments to the submitter and names the saved events", func(ctx *specs.Context) {
@@ -205,5 +205,55 @@ func TestMCP(t *testing.T) {
 				})
 			}
 		})
+
+		s.When("an agent calls dev_server", func(s *specs.Spec) {
+			s.It("starts the token's dev server on the job of its path and answers its port", func(ctx *specs.Context) {
+				sub := &submitter{}
+				cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+				text, isErr := devServerTool(ctx, cs, `{"action":"start"}`)
+				ctx.Expect(isErr).ToEqual(false)
+				ctx.Expect(text).ToEqual("dev server of job j-1 on port 5100: http://localhost:5100\n")
+				ctx.Expect(sub.devs).ToEqual([]call{{"tok", "j-1", "start"}})
+			})
+
+			s.It("stops it when asked", func(ctx *specs.Context) {
+				sub := &submitter{}
+				cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+				text, isErr := devServerTool(ctx, cs, `{"action":"stop"}`)
+				ctx.Expect(isErr).ToEqual(false)
+				ctx.Expect(text).ToEqual("dev server of job j-1 stopped\n")
+				ctx.Expect(sub.devs).ToEqual([]call{{"tok", "j-1", "stop"}})
+			})
+
+			s.It("answers a role that may not run it with a tool error worded as the HTTP route words it", func(ctx *specs.Context) {
+				err := fmt.Errorf("worker: dev server: %w: role \"reviewer-security\" may not use tool \"dev_server\"", jobtoken.ErrForbidden)
+				cs := connect(ctx, mcpworker.Handler(&submitter{err: err}), "j-1", "Bearer tok")
+				text, isErr := devServerTool(ctx, cs, `{"action":"start"}`)
+				ctx.Expect(isErr).ToEqual(true)
+				ctx.Expect(text).ToEqual("refused (403): " + err.Error())
+			})
+
+			for _, args := range []string{`{}`, `{"action":"restart"}`, `{"action":"start","command":"sh -c evil"}`} {
+				s.It("refuses arguments "+args+" without handing them over", func(ctx *specs.Context) {
+					sub := &submitter{}
+					cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+					text, isErr := devServerTool(ctx, cs, args)
+					ctx.Expect(isErr).ToEqual(true)
+					ctx.Expect(text).ToEqual(`refused (422): arguments must be {"action": "start"} or {"action": "stop"}`)
+					ctx.Expect(sub.devs).To(specs.BeEmpty())
+				})
+			}
+		})
 	})
+}
+
+// devServerTool calls dev_server with args and returns its text and
+// whether it is a tool error.
+func devServerTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (string, bool) {
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolDevServer, Arguments: json.RawMessage(args)})
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(len(res.Content)).ToEqual(1)
+	text, ok := res.Content[0].(*mcp.TextContent)
+	ctx.Expect(ok).ToEqual(true)
+	return text.Text, res.IsError
 }

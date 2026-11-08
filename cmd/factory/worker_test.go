@@ -75,7 +75,7 @@ func start(ctx *specs.Context) factoryd {
 		f.tokens[id], err = tokens.Issue(jobtoken.Grant{Job: id, Role: "builder", Kind: domain.KindBuild, Round: 1})
 		ctx.Expect(err).To(specs.BeNil())
 	}
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, f.gate, gatelock.New(), stopped{}))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, f.gate, gatelock.New(), stopped{}, nil))
 	ctx.Cleanup(srv.Close)
 	f.url = srv.URL
 	return f

@@ -29,6 +29,10 @@ const ToolProgress = "progress"
 // ToolRunGate is the MCP tool a builder runs the job's checks with.
 const ToolRunGate = "run_gate"
 
+// ToolDevServer is the MCP tool a builder or a UX or UI reviewer starts and
+// stops the job's dev server with.
+const ToolDevServer = "dev_server"
+
 // resultSchema takes any object: the result is checked by the Submitter
 // against the token's kind, so a bad one gets the same error as by the CLI.
 var resultSchema = map[string]any{
@@ -59,8 +63,23 @@ var gateSchema = map[string]any{
 	"additionalProperties": false,
 }
 
+// devServerSchema takes only whether to start or stop: the command is the
+// repo's and the port the job's, so nothing an agent sends changes what runs.
+var devServerSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"action": map[string]any{
+			"type":        "string",
+			"enum":        []any{"start", "stop"},
+			"description": "start the dev server and get its port, or stop it",
+		},
+	},
+	"required":             []any{"action"},
+	"additionalProperties": false,
+}
+
 // mcpHandler serves, at MCPPath, an MCP server whose only tools are
-// submit_result, progress and run_gate. It is stateless: every request names the job by its path
+// submit_result, progress, run_gate and dev_server. It is stateless: every request names the job by its path
 // and brings its token, so no session outlives a request or carries a job
 // or a token from one request to the next.
 func mcpHandler(s Submitter) http.Handler {
@@ -97,6 +116,15 @@ func mcpServer(s Submitter, job domain.JobID) *mcp.Server {
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return gateTool(ctx, s, job, req), nil
 	})
+	srv.AddTool(&mcp.Tool{
+		Name: ToolDevServer,
+		Description: "Starts the app's dev server in your worktree, with the command the repo configures, on a free port of the job, and returns the port, as `factory worker dev-server` does; " +
+			"open http://localhost:<port> to see the app. A second start returns the server already running. " +
+			"Stop it with action stop when you are done; it is stopped anyway once you hand in your result.",
+		InputSchema: devServerSchema,
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return devServerTool(ctx, s, job, req), nil
+	})
 	return srv
 }
 
@@ -122,6 +150,30 @@ func progressTool(ctx context.Context, s Submitter, job domain.JobID, req *mcp.C
 	return &mcp.CallToolResult{
 		Content:           []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("progress recorded for job %s: %s", a.Job, strings.Join(a.Events, ", "))}},
 		StructuredContent: a,
+	}
+}
+
+// devServerTool starts or stops the dev server of the token's session on
+// job, as the call's action says.
+func devServerTool(ctx context.Context, s Submitter, job domain.JobID, req *mcp.CallToolRequest) *mcp.CallToolResult {
+	if len(req.Params.Arguments) > MaxResultBytes {
+		return toolError(http.StatusRequestEntityTooLarge, "dev_server arguments over 1 MiB")
+	}
+	var args struct {
+		Action string `json:"action"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(req.Params.Arguments))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&args); err != nil || (args.Action != "start" && args.Action != "stop") {
+		return toolError(http.StatusUnprocessableEntity, `arguments must be {"action": "start"} or {"action": "stop"}`)
+	}
+	d, err := callDevServer(ctx, s, bearer(header(req)), job, args.Action == "stop")
+	if err != nil {
+		return toolError(refusal(err))
+	}
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: d.Report}},
+		StructuredContent: d,
 	}
 }
 

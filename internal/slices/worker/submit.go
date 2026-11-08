@@ -5,6 +5,9 @@
 // Progress records what the agent says it is doing, for the MCP tool
 // progress, as an event of the job. RunGate runs the job's checks for its
 // builder, for the MCP tool run_gate and `factory worker run-gate`.
+// DevServer and StopDevServer start and stop the dev server of a builder's
+// or a UX or UI reviewer's session, for the MCP tool dev_server and
+// `factory worker dev-server`.
 package worker
 
 import (
@@ -36,6 +39,12 @@ type Submitter struct {
 	// itself shares.
 	Gate  gate
 	Locks locks
+	// Servers runs the dev servers of DevServer, in the job's worktree from
+	// Worktrees, on a port from Ports, with the command DevCommands tells.
+	Servers     devServers
+	Worktrees   worktrees
+	Ports       devPorts
+	DevCommands devCommands
 
 	// byJob runs one call on a job at a time, Submit, Progress or the
 	// start of RunGate, so a token, which is for one job, is revoked after
@@ -43,12 +52,14 @@ type Submitter struct {
 	// jobs go on meanwhile, even while a submission waits for its job's
 	// run_gate run to stop.
 	byJob jobLocks
-	// mu guards outcomes.
+	// mu guards outcomes and devs.
 	mu sync.Mutex
 	// outcomes keeps, by the hash of a valid token, what its submissions
 	// came to since Take last read them, so an attempt knows whether its
 	// session's turn handed in a result.
 	outcomes map[[sha256.Size]byte]Outcome
+	// devs keeps the dev server each session runs.
+	devs map[devKey]devServer
 }
 
 // Outcome is what a token's submissions came to: Saved once one result was
@@ -93,6 +104,8 @@ func (s *Submitter) record(token string, err error) {
 // run_gate run, if one is running, and is saved only once that run's
 // process group is gone, so the gate that follows never shares the
 // worktree with it; the cancelled run answers ErrPreempted, not a failure.
+// The role's dev server, if it runs one, is stopped too before the result
+// is saved, so none outlives the session that started it.
 // That wait holds only job's lock, so other jobs' calls never wait for it.
 func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error) {
 	defer s.byJob.lock(job)()
@@ -133,6 +146,9 @@ func (s *Submitter) submit(ctx context.Context, g jobtoken.Grant, job domain.Job
 		return nil, errNoLocks
 	}
 	if err := s.Locks.Preempt(ctx, job); err != nil {
+		return nil, fmt.Errorf("worker: submit result: %w", err)
+	}
+	if err := s.stopDev(ctx, devKey{job: job, role: g.Role}); err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)
 	}
 	ev := domain.ResultSubmitted{Job: job, Role: g.Role, Result: r, At: s.Clock.Now()}
