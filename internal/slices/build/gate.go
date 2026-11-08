@@ -34,10 +34,15 @@ type Gate struct {
 	// CountCommand lists the tests of each package, as go test -list . ./...
 	// does, or runs them, as go test -json -count=1 ./... does so that each
 	// subtest that passes counts, run like Command in the worktree and in a
-	// copy of the base commit from Snapshots. With none the rule doesn't run, and the run
-	// says so in its notes.
+	// copy of the base commit from Snapshots. It is the operator's: when
+	// set, it wins over RepoConfig. With neither the rule doesn't run, and
+	// the run says so in its notes.
 	CountCommand []string
-	Snapshots    snapshots
+	// RepoConfig has the count command the repo configures, read as the
+	// base commit recorded for the job has it, never from the worktree, so
+	// a job can't loosen its own gate.
+	RepoConfig repoConfig
+	Snapshots  snapshots
 }
 
 // Run runs the checks in the worktree of job id, which must be at the gate,
@@ -60,7 +65,7 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	if g.Bases == nil {
 		return nil, fmt.Errorf("gate: %w: bases", domain.ErrMissingField)
 	}
-	if len(g.CountCommand) > 0 && g.Snapshots == nil {
+	if (len(g.CountCommand) > 0 || g.RepoConfig != nil) && g.Snapshots == nil {
 		return nil, fmt.Errorf("gate: %w: snapshots for the test count", domain.ErrMissingField)
 	}
 	job, v, err := g.Jobs.Load(ctx, id)
@@ -82,18 +87,22 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	if err != nil {
 		return nil, err
 	}
+	count, err := g.countCommand(ctx, wt.Path, base)
+	if err != nil {
+		return nil, fmt.Errorf("gate: test count command of %q: %w", id, err)
+	}
 	run, err := g.Checks.Run(ctx, wt.Path, g.Command)
 	if err != nil {
 		return nil, fmt.Errorf("gate: checks of %q: %w", id, err)
 	}
 	run.Violations = append(run.Violations, violations...)
 	switch {
-	case len(g.CountCommand) == 0:
+	case len(count) == 0:
 		run.Notes = append(run.Notes, NoCountCommand)
 	case base == "":
 		run.Notes = append(run.Notes, NoCountBase)
 	default:
-		dropped, err := g.testCount(ctx, wt.Path, base)
+		dropped, err := g.testCount(ctx, count, wt.Path, base)
 		if err != nil {
 			return nil, fmt.Errorf("gate: test count of %q: %w", id, err)
 		}
@@ -108,6 +117,15 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 		return nil, fmt.Errorf("gate: %w", err)
 	}
 	return evs, nil
+}
+
+// countCommand is the operator's count command, or else the one the repo
+// configures at base, or none: with no base there is no config to read.
+func (g *Gate) countCommand(ctx context.Context, dir, base string) ([]string, error) {
+	if len(g.CountCommand) > 0 || g.RepoConfig == nil || base == "" {
+		return g.CountCommand, nil
+	}
+	return g.RepoConfig.CountCommand(ctx, dir, base)
 }
 
 // NoBase is the reason a job with no base commit recorded fails the gate.

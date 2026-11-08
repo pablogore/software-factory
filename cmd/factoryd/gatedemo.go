@@ -68,8 +68,9 @@ type gateStore interface {
 // gate on it and prints the checks run kept with the job, where the job went
 // and what the builder of a new round gets. A build role file given with
 // -role, such as one declaring allowed_paths, is the build stage's role.
-// With -count, the gate also fails a package with fewer tests than at the
-// base commit.
+// With -count, or with none and a count command in .factory/gates.yaml as the
+// base commit has it, the gate also fails a package with fewer tests than at
+// the base commit.
 //
 // With no -db the job is made in memory with dir as its worktree, recording
 // the commit base is at as it starts. With -db the job is kept in that SQLite
@@ -80,7 +81,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("gate-demo", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "the repo to run the checks in, as the job's worktree; with -db, the repo the job's worktree is made in")
 	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
-	count := fs.String("count", "", "the test count command, such as go test -json -count=1 ./... (or go test -list . ./..., which sees no subtests), split and run like -checks in the worktree and in a copy of the base commit; with none the rule doesn't run")
+	count := fs.String("count", "", "the test count command, such as go test -json -count=1 ./... (or go test -list . ./..., which sees no subtests), split and run like -checks in the worktree and in a copy of the base commit; with none the one .factory/gates.yaml sets at the base commit, and with neither the rule doesn't run")
 	base := fs.String("base", "HEAD", "the base whose commit, recorded when the job is made, the job's diff is taken against; HEAD judges only uncommitted changes")
 	roleFile := fs.String("role", "", "a build role file (roles/<name>.yaml) for the build stage, e.g. one with allowed_paths")
 	db := fs.String("db", "", "a SQLite file keeping the job between runs: the first makes its worktree in -dir off -base, the next gates it")
