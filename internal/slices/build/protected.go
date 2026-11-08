@@ -20,6 +20,9 @@ var ProtectedPaths = []string{
 	"AGENTS.md",
 	".golangci.yml",
 	"docs/factoryd/0*.md",
+	// The repo's gate config: the gate reads it at the base, but a merged
+	// change would loosen the gate of every job after it.
+	".factory/",
 }
 
 // ProtectedAdds are the protected paths a job may not add to either: make

@@ -216,6 +216,7 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(gateDemo(bg, args, &failed)).To(specs.BeNil())
 
 			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the package example.com/x has 1 tests, 2 at the base commit"))
+			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the diff modifies the protected path .factory/gates.yaml"))
 			ctx.Expect(failed.String()).To(specs.Not(specs.Contain("note:")))
 			ctx.Expect(failed.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
 		})
