@@ -2,7 +2,7 @@
   "concurrency": 3,
   "max_rounds": 3,
   "base_branch": "main",
-  "language": "en",
+  "language": "es",
   "checkpoint": "every-slice",
   "merge_method": "merge",
   "labels": {
