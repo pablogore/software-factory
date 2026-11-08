@@ -59,6 +59,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "config-validate" {
+		if err := configValidate(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "factoryd config-validate:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	fmt.Fprintln(os.Stderr, "factoryd: nothing to run yet; see docs/factoryd/README.md")
 	os.Exit(2)
 }
