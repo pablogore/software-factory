@@ -1,6 +1,7 @@
 // Package worker is the client of factoryd's worker API, for agents without
-// MCP: `factory worker submit-result` hands a role's result over with it and
-// `factory worker run-gate` runs the job's checks.
+// MCP: `factory worker submit-result` hands a role's result over with it,
+// `factory worker run-gate` runs the job's checks and `factory worker
+// dev-server` starts and stops the job's dev server.
 package worker
 
 import (
@@ -74,7 +75,7 @@ type ChecksRun struct {
 // *RefusedError.
 func (c Client) SubmitResult(ctx context.Context, job string, result []byte) (Accepted, error) {
 	var a Accepted
-	if err := c.post(ctx, "submit result", job, "result", bytes.NewReader(result), &a); err != nil {
+	if err := c.call(ctx, http.MethodPost, "submit result", job, "result", bytes.NewReader(result), &a); err != nil {
 		return Accepted{}, err
 	}
 	return a, nil
@@ -85,17 +86,47 @@ func (c Client) SubmitResult(ctx context.Context, job string, result []byte) (Ac
 // refusal is a *RefusedError.
 func (c Client) RunGate(ctx context.Context, job string) (GateRun, error) {
 	var g GateRun
-	if err := c.post(ctx, "run gate", job, "gate", http.NoBody, &g); err != nil {
+	if err := c.call(ctx, http.MethodPost, "run gate", job, "gate", http.NoBody, &g); err != nil {
 		return GateRun{}, err
 	}
 	return g, nil
 }
 
-// post posts body to job's route and decodes factoryd's answer into out;
-// op names the call in its errors.
-func (c Client) post(ctx context.Context, op, job, route string, body io.Reader, out any) error {
+// DevServer is factoryd's answer to a dev server call: the port the
+// session's dev server runs on, none once stopped, and Report, the answer
+// worded as the MCP tool dev_server words it.
+type DevServer struct {
+	Job    string `json:"job"`
+	Port   int    `json:"port,omitempty"`
+	Report string `json:"report"`
+}
+
+// DevServer starts the session's dev server on job, or returns the one
+// already running, with the repo's command on a port of the job. It sends
+// nothing but the token and the job. A refusal is a *RefusedError.
+func (c Client) DevServer(ctx context.Context, job string) (DevServer, error) {
+	var d DevServer
+	if err := c.call(ctx, http.MethodPost, "dev server", job, "dev-server", http.NoBody, &d); err != nil {
+		return DevServer{}, err
+	}
+	return d, nil
+}
+
+// StopDevServer stops the session's dev server on job. A refusal is a
+// *RefusedError.
+func (c Client) StopDevServer(ctx context.Context, job string) (DevServer, error) {
+	var d DevServer
+	if err := c.call(ctx, http.MethodDelete, "dev server", job, "dev-server", http.NoBody, &d); err != nil {
+		return DevServer{}, err
+	}
+	return d, nil
+}
+
+// call sends body to job's route with method and decodes factoryd's answer
+// into out; op names the call in its errors.
+func (c Client) call(ctx context.Context, method, op, job, route string, body io.Reader, out any) error {
 	u := strings.TrimSuffix(c.URL, "/") + "/worker/jobs/" + url.PathEscape(job) + "/" + route
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, body)
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}

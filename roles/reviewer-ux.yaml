@@ -5,3 +5,4 @@ prompt: roles/reviewer-ux.md
 agent: claude
 model: sonnet
 mode: blocking
+tools: [submit_result, progress, dev_server]

@@ -5,4 +5,4 @@ prompt: roles/builder.md
 agent: claude
 model: opus
 mode: blocking
-tools: [submit_result, progress, run_gate]
+tools: [submit_result, progress, run_gate, dev_server]

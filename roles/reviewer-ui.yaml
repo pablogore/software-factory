@@ -5,3 +5,4 @@ prompt: roles/reviewer-ui.md
 agent: claude
 model: haiku
 mode: blocking
+tools: [submit_result, progress, dev_server]
