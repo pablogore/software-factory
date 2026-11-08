@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,24 +35,46 @@ func (onePipeline) Pipeline(context.Context, string) (domain.Pipeline, error) {
 }
 
 // factoryd is a worker API over an in-memory store with jobs j-1 and j-2
-// in build, and a builder's token for each.
+// in build, and a builder's token for each, whose checks gate runs.
 type factoryd struct {
 	url    string
 	store  *memstore.Store
 	tokens map[domain.JobID]string
+	issuer *jobtoken.Tokens
+	gate   *gate
+}
+
+// gate answers every check with run and records the jobs it checked.
+type gate struct {
+	mu   sync.Mutex
+	run  domain.ChecksRun
+	jobs []domain.JobID
+}
+
+func (g *gate) Check(_ context.Context, id domain.JobID) (domain.ChecksRun, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.jobs = append(g.jobs, id)
+	return g.run, nil
+}
+
+func (g *gate) checked() []domain.JobID {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]domain.JobID{}, g.jobs...)
 }
 
 func start(ctx *specs.Context) factoryd {
 	store, err := memstore.New()
 	ctx.Expect(err).To(specs.BeNil())
 	tokens := jobtoken.New()
-	f := factoryd{store: store, tokens: map[domain.JobID]string{}}
+	f := factoryd{store: store, tokens: map[domain.JobID]string{}, issuer: tokens, gate: &gate{}}
 	for _, id := range []domain.JobID{"j-1", "j-2"} {
 		ctx.Expect(store.Create(context.Background(), domain.Job{ID: id, Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 		f.tokens[id], err = tokens.Issue(jobtoken.Grant{Job: id, Role: "builder", Kind: domain.KindBuild, Round: 1})
 		ctx.Expect(err).To(specs.BeNil())
 	}
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, stopped{}))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, f.gate, stopped{}))
 	ctx.Cleanup(srv.Close)
 	f.url = srv.URL
 	return f
