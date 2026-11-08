@@ -9,7 +9,7 @@ This is a trial. It covers one issue as one slice: no initiatives, no replan.
 
 ## What it adds to a project
 
-- `.ork/workflows/factory.ork.yaml`: the pipeline. Intake → spec → specgate →
+- `.ork/workflows/factory-issue.ork.yaml`: the pipeline. Intake → spec → specgate →
   builder → `factory/checks.sh` → reviewers (code always, security when intake
   says so, ux and ui on UI changes) → up to 3 fix rounds → approver. Approved
   work is pushed and opened as a pull request that closes the issue, and you
@@ -29,10 +29,10 @@ You need Node 24.20+, git, an authenticated `gh`, and your `claude` login.
 ```sh
 npm install --global @krapht/ork
 ork doctor
-ork validate .ork/workflows/factory.ork.yaml
-ork run factory --input issue=42
+ork validate .ork/workflows/factory-issue.ork.yaml
+ork run factory-issue --input issue=42
 # a repo whose checks live elsewhere:
-ork run factory --input issue=42 --input checks="python3 -m pytest factory/tests -q"
+ork run factory-issue --input issue=42 --input checks="python3 -m pytest factory/tests -q"
 ork ui          # the run in your browser: graph, logs, costs, questions
 ```
 

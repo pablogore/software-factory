@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/mimshins/ork/main/packages/schema/workflow.schema.json
 schemaVersion: 1
-name: factory
+name: factory-issue
 description: One GitHub issue, one slice, one pull request. Intake decides whether to build it; the spec-writer writes a slice spec that specgate checks; the builder implements it and factory/checks.sh must pass; the reviewers send findings back in a bounded loop; the approver approves or escalates. Approved work is pushed and opened as a pull request, and you confirm the merge; escalated work is opened as a draft and labeled for a human.
 inputs:
   issue:
