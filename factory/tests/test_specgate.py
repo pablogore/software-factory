@@ -68,6 +68,12 @@ class SpecGateTest(unittest.TestCase):
         text = VALID.split("\n## Fuera")[0] + "\n\n## Demo" + VALID.split("## Demo")[1].split("\n## Flag")[0] + "\n"
         self.check(text, True, "SPECGATE: PASS")
 
+    def test_demo_test_command_with_manual_step_passes(self):
+        demo = ("## Demo\n1. Corré `python3 -m pytest factory/tests`: pasan todos los tests.\n"
+                "2. Manual, para la persona: mirá que la lista se lea bien.\n")
+        text = VALID.split("## Demo")[0] + demo + "\n## Flag" + VALID.split("\n## Flag")[1]
+        self.check(text, True, "SPECGATE: PASS")
+
     def test_valor_and_demo_required_and_non_empty(self):
         self.check(VALID.replace("## Demo", "## Otra"), False, "missing section `## Demo`")
         self.check(VALID.replace("Quien compra ve sus pedidos en una sola pantalla.\n", ""), False, "`## Valor` is empty")

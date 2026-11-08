@@ -44,8 +44,8 @@ other jobs.
 1. `AGENTS.md` (or `CLAUDE.md`) in the worktree: the canonical repo
    instructions. Follow them.
 2. `<job folder>/spec.md`: what to build, one slice of an initiative. The
-   acceptance criteria are your test plan, the `## Demo` is how a human will
-   check it. `issue.md` and `intake.md` are background; the spec is what you build.
+   acceptance criteria are your test plan, the `## Demo` is the test command
+   the approver will run. `issue.md` and `intake.md` are background; the spec is what you build.
    Then `factory/initiatives/<initiative>/context.md` (your prompt names the
    initiative): what is decided, assumed and open. A **Supuesto** is not a
    contract; **Fuera de alcance** is not yours to build.
@@ -93,6 +93,13 @@ passes.
 
 Then verify every acceptance criterion and record the evidence in build.md: the
 command you ran and its result, or what the page showed.
+
+Deliver the spec's `## Demo` as an end-to-end test (`TestDemo*`, `test_demo_*`
+or the repo's equivalent) that the Demo's test command runs. The test creates
+every fixture it needs, including git repos with commits, in a temporary
+directory it owns and removes, never in the worktree. The approver runs that
+command and can't `git commit`, so nothing in it may need a manual setup step.
+Steps the spec marks "Manual, for the person" are not part of the test.
 
 - Never run a command that rewrites files across the repo, such as a lint
   `--fix` over everything.
