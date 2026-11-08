@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,9 @@ type demoPipelines struct{}
 // Pipeline is a build stage followed by a review, so a builder's result
 // moves the job on.
 func (demoPipelines) Pipeline(_ context.Context, name string) (domain.Pipeline, error) {
+	if name == demoAskPipeline {
+		return demoAsk(), nil
+	}
 	if name != "demo" {
 		return domain.Pipeline{}, fmt.Errorf("no pipeline %q", name)
 	}
@@ -60,7 +64,11 @@ const newRoundPath = "/demo/jobs/{job}/new-round"
 // recorded as its base, and its checks are -checks, as the gate runs them,
 // within -gate-timeout and keeping -gate-max-output bytes of output.
 // POST newRoundPath, with no token, sends a job back to build in a new round,
-// so a person can see its old token refused.
+// so a person can see its old token refused. Job demoAskJob waits in spec,
+// with a spec-writer's token that may ask a person a question and a
+// builder's that may not; POST answerPath, with no token and the answer as
+// its body, answers it as a person would and prints the spec-writer's new
+// token and what its agent is prompted with.
 func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("worker-demo", flag.ContinueOnError)
 	addr := fs.String("addr", "127.0.0.1:0", "address to listen on")
@@ -104,6 +112,10 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 	}
+	askWriter, askBuilder, err := createAskJob(ctx, store, tokens)
+	if err != nil {
+		return err
+	}
 	if *timeout <= 0 || *maxOutput <= 0 {
 		return fmt.Errorf("%w: -gate-timeout and -gate-max-output must be positive", domain.ErrInvalidValue)
 	}
@@ -122,6 +134,10 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "# MCP: %s, header \"Authorization: Bearer $FACTORY_JOB_TOKEN\", tools %s, %s and %s\n", mcpURL(url, id), mcpworker.ToolSubmitResult, mcpworker.ToolProgress, mcpworker.ToolRunGate)
 		_, _ = fmt.Fprintf(out, "# job %s, reviewer: may not run the checks\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, reviewers[id])
 	}
+	_, _ = fmt.Fprintf(out, "# job %s waits in spec; spec-writer: may ask a person with `factory worker ask-human` or MCP tool %s\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n",
+		demoAskJob, mcpworker.ToolAskHuman, demoAskJob, askWriter)
+	_, _ = fmt.Fprintf(out, "# job %s, builder: may not ask a person\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", demoAskJob, demoAskJob, askBuilder)
+	_, _ = fmt.Fprintf(out, "# answer its question as a person: curl -d 'the answer' %s%s\n", url, strings.Replace(answerPath, "{job}", string(demoAskJob), 1))
 	_, _ = fmt.Fprintln(out)
 
 	var mu sync.Mutex
@@ -140,12 +156,30 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 		mu.Unlock()
 		_, _ = fmt.Fprintf(w, "job %s is in a new build round\n", id)
 	})
+	mux.HandleFunc("POST "+answerPath, func(w http.ResponseWriter, r *http.Request) {
+		id := domain.JobID(r.PathValue("job"))
+		text, err := io.ReadAll(io.LimitReader(r.Body, domain.MaxProgressText))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		token, brief, err := answer(r.Context(), store, tokens, id, string(text))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		mu.Lock()
+		_, _ = fmt.Fprintf(out, "# job %s, answered; its stage runs again, and its spec-writer is prompted with:\n%s", id, brief)
+		_, _ = fmt.Fprintf(out, "export FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, token)
+		mu.Unlock()
+		_, _ = fmt.Fprintf(w, "job %s is answered\n", id)
+	})
 	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.ServeHTTP(w, r)
 		mu.Lock()
 		defer mu.Unlock()
 		_, _ = fmt.Fprintf(out, "%s %s\n", r.Method, r.URL.Path)
-		for _, id := range demoJobs {
+		for _, id := range append(slices.Clone(demoJobs), demoAskJob) {
 			job, _, _ := store.Load(ctx, id)
 			hist, _ := store.History(ctx, id)
 			names := make([]string, len(hist))
