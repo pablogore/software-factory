@@ -54,14 +54,8 @@ type Gate struct {
 // saved. A job with no base recorded fails the gate with that reason: its
 // diff can't be judged, and no ref stands in for the commit.
 func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error) {
-	if len(g.Command) == 0 {
-		return nil, fmt.Errorf("gate: %w: checks command", domain.ErrMissingField)
-	}
-	if g.Bases == nil {
-		return nil, fmt.Errorf("gate: %w: bases", domain.ErrMissingField)
-	}
-	if len(g.CountCommand) > 0 && g.Snapshots == nil {
-		return nil, fmt.Errorf("gate: %w: snapshots for the test count", domain.ErrMissingField)
+	if err := g.configured(); err != nil {
+		return nil, err
 	}
 	job, v, err := g.Jobs.Load(ctx, id)
 	if err != nil {
@@ -74,30 +68,9 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	if err != nil {
 		return nil, fmt.Errorf("gate: %w", err)
 	}
-	wt, err := g.Worktrees.Prepare(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("gate: worktree of %q: %w", id, err)
-	}
-	violations, base, err := g.diffRules(ctx, id, wt.Path, p)
+	run, err := g.check(ctx, id, p)
 	if err != nil {
 		return nil, err
-	}
-	run, err := g.Checks.Run(ctx, wt.Path, g.Command)
-	if err != nil {
-		return nil, fmt.Errorf("gate: checks of %q: %w", id, err)
-	}
-	run.Violations = append(run.Violations, violations...)
-	switch {
-	case len(g.CountCommand) == 0:
-		run.Notes = append(run.Notes, NoCountCommand)
-	case base == "":
-		run.Notes = append(run.Notes, NoCountBase)
-	default:
-		dropped, err := g.testCount(ctx, wt.Path, base)
-		if err != nil {
-			return nil, fmt.Errorf("gate: test count of %q: %w", id, err)
-		}
-		run.Violations = append(run.Violations, dropped...)
 	}
 	var ev domain.Event = domain.GatePassed{Job: id, Run: run, At: g.Clock.Now()}
 	if !run.Passed() {
@@ -108,6 +81,71 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 		return nil, fmt.Errorf("gate: %w", err)
 	}
 	return evs, nil
+}
+
+// Check runs, in the worktree of job id, the same checks and diff rules Run
+// judges the job by, in whatever stage it is, and returns the run without
+// deciding or saving anything: what a builder asks for before it hands in
+// its result. Only the gate's configuration says what runs; nothing a caller
+// passes does.
+func (g *Gate) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error) {
+	if err := g.configured(); err != nil {
+		return domain.ChecksRun{}, err
+	}
+	job, _, err := g.Jobs.Load(ctx, id)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: %w", err)
+	}
+	p, err := g.Pipelines.Pipeline(ctx, job.Pipeline)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: %w", err)
+	}
+	return g.check(ctx, id, p)
+}
+
+func (g *Gate) configured() error {
+	if len(g.Command) == 0 {
+		return fmt.Errorf("gate: %w: checks command", domain.ErrMissingField)
+	}
+	if g.Bases == nil {
+		return fmt.Errorf("gate: %w: bases", domain.ErrMissingField)
+	}
+	if len(g.CountCommand) > 0 && g.Snapshots == nil {
+		return fmt.Errorf("gate: %w: snapshots for the test count", domain.ErrMissingField)
+	}
+	return nil
+}
+
+// check runs the checks, the diff rules and the test count in the worktree
+// of job id, which follows p, and returns the run with their violations and
+// notes on it.
+func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (domain.ChecksRun, error) {
+	wt, err := g.Worktrees.Prepare(ctx, id)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: worktree of %q: %w", id, err)
+	}
+	violations, base, err := g.diffRules(ctx, id, wt.Path, p)
+	if err != nil {
+		return domain.ChecksRun{}, err
+	}
+	run, err := g.Checks.Run(ctx, wt.Path, g.Command)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: checks of %q: %w", id, err)
+	}
+	run.Violations = append(run.Violations, violations...)
+	switch {
+	case len(g.CountCommand) == 0:
+		run.Notes = append(run.Notes, NoCountCommand)
+	case base == "":
+		run.Notes = append(run.Notes, NoCountBase)
+	default:
+		dropped, err := g.testCount(ctx, wt.Path, base)
+		if err != nil {
+			return domain.ChecksRun{}, fmt.Errorf("gate: test count of %q: %w", id, err)
+		}
+		run.Violations = append(run.Violations, dropped...)
+	}
+	return run, nil
 }
 
 // NoBase is the reason a job with no base commit recorded fails the gate.
