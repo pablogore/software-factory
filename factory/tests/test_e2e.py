@@ -285,6 +285,41 @@ ninguno
 SLICES = "# Slices: card\n\n| ID | Tipo | Valor | Estado |\n|----|------|-------|--------|\n{rows}"
 
 
+class FetchBaseE2E(E2EBase):
+    def test_create_and_plan_check_fetch_the_base_or_stop(self):
+        # Someone pushes to the base from another clone; nobody fetches by hand.
+        other = self.tmp / "other"
+        self.sh(f"git clone -q {self.tmp / 'origin.git'} {other}", cwd=self.tmp)
+        (other / "demo.txt").write_text("pushed elsewhere\n")
+        self.sh("git add demo.txt && git commit -qm demo && git push -q origin HEAD", cwd=other)
+        self.assertNotEqual(self.sh("git show origin/main:demo.txt", ok=False).returncode, 0)
+
+        self.job("plan-check")
+        self.assertEqual(self.sh("git show origin/main:demo.txt").stdout, "pushed elsewhere\n")
+
+        (other / "demo.txt").write_text("pushed again\n")
+        self.sh("git commit -qam again && git push -q origin HEAD", cwd=other)
+        n = self.sh("gh issue create --label factory --title 'Read demo' --body x").stdout.strip().rsplit("/", 1)[1]
+        jid = self.job("create", n).stdout.strip()
+        self.assertEqual(self.stage(jid)["stage"], "intake")
+        self.assertEqual(self.sh("git show origin/main:demo.txt").stdout, "pushed again\n")
+
+        # A failed fetch says so and stops: no job, no plan on a stale copy.
+        self.sh(f"git remote set-url origin {self.tmp / 'gone.git'}")
+        try:
+            m = self.sh("gh issue create --label factory --title 'Stale' --body x").stdout.strip().rsplit("/", 1)[1]
+            res = self.job("create", m, ok=False)
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("couldn't fetch origin/main", res.stderr)
+            self.assertNotIn(int(m), [json.loads(f.read_text())["issue"]
+                                      for f in (self.repo / "factory/jobs").glob("*/job.json")])
+            res = self.job("plan-check", ok=False)
+            self.assertNotEqual(res.returncode, 0)
+            self.assertIn("stale copy", res.stderr)
+        finally:
+            self.sh(f"git remote set-url origin {self.tmp / 'origin.git'}")
+
+
 class InitiativeE2E(E2EBase):
     """An initiative of three slices: S1 → replan CONTINUE → S2 with SPLIT →
     replan with direction feedback → DONE. FACTORY_SHOW=1 prints job.json and

@@ -292,7 +292,10 @@ then moves the job to `merged`; stop any agents still running for it.
 2. Start every `resume` and `new` line, nothing else. Don't judge issues
    yourself: every new issue goes to intake, which decides whether it gets
    built. For a new issue, `factory/bin/job create <n>` prints the job id;
-   start it at **intake**.
+   start it at **intake**. `create` and `plan-check` fetch `origin/<base>`
+   first, so intake and the tech-lead read the base as it is on GitHub now. If
+   the fetch fails they print why and stop: tell the user and start nothing;
+   never run intake or the plan on a stale copy.
 3. Each time a job finishes, run `factory/bin/job queue` again and start its
    `resume` lines you aren't already running. Start its `new` lines only if the
    run isn't paused (see **Pause between issues**). A slice of the same

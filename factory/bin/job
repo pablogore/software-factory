@@ -8,12 +8,12 @@ orchestrator never improvises them.
 
 Usage:
   job queue                      what /factory run should do with each labeled issue
-  job create <issue>             new job for an open `factory` issue; prints the job id
+  job create <issue>             new job for an open `factory` issue; fetches origin/<base> first; prints the job id
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job> [--direction]  needs-human → spec (old jobs) | build (rework) | replan (direction); stdin and PR comments
   job reviewers <job>            the reviewers to spawn this round, as lens=model
-  job plan-check                 issues the tech-lead hasn't planned yet (factory/jobs/plan.md)
+  job plan-check                 fetch origin/<base>; issues the tech-lead hasn't planned yet (factory/jobs/plan.md)
   job reject <job>               needs-info or needs-human → rejected, with your reason (stdin) as rejection.md
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
@@ -1021,6 +1021,14 @@ def advance(job, stage):
 # ---- Commands --------------------------------------------------------------
 
 
+def fetch_base():
+    """Fetch origin/<base>, so intake and the tech-lead read the base as it is on GitHub now."""
+    res = run(["git", "fetch", "origin", BASE], check=False)
+    if res.returncode != 0:
+        die(f"couldn't fetch origin/{BASE}, so intake and the tech-lead would read a stale copy. "
+            f"Fix it and run again: {(res.stderr or res.stdout).strip()}")
+
+
 def slugify(title):
     words = re.findall(r"[a-z0-9]+", title.lower())[:4]
     return "-".join(words) or "issue"
@@ -1039,6 +1047,7 @@ def cmd_create(number):
         die(f"issue #{number} is {issue['state'].lower()}")
     if LABELS["queue"] not in {l["name"] for l in issue["labels"]}:
         die(f"issue #{number} isn't labeled {LABELS['queue']}")
+    fetch_base()
     JOBS.mkdir(parents=True, exist_ok=True)
     numbers = [int(p.name.split("-")[0]) for p in JOBS.iterdir() if p.name[:3].isdigit()]
     job_id = f"{max(numbers, default=0) + 1:03d}-{slugify(issue['title'])}"
@@ -1076,6 +1085,7 @@ def read_plan(tech_lead_only=False):
 
 
 def cmd_plan_check():
+    fetch_base()
     order, _ = read_plan(tech_lead_only=True)
     jobs = {j["issue"] for j in all_jobs()}
     issues = gh_json("issue", "list", "--label", LABELS["queue"], "--state", "open",
