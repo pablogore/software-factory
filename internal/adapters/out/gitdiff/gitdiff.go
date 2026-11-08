@@ -203,6 +203,27 @@ func (Differ) AtBase(ctx context.Context, dir, base, file string) (string, error
 	return git(ctx, dir, "cat-file", "blob", base+":"+file)
 }
 
+// AtBaseIfAny is AtBase for a file base may not have: false when it has
+// none, and an ErrInvalidValue error when the path is not a file there, such
+// as a folder.
+func (d Differ) AtBaseIfAny(ctx context.Context, dir, base, file string) (string, bool, error) {
+	if !objectName(base) {
+		return "", false, fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
+	}
+	entry, err := git(ctx, dir, "ls-tree", "-z", "--full-tree", base, "--", file)
+	if err != nil {
+		return "", false, err
+	}
+	if entry == "" {
+		return "", false, nil
+	}
+	if f := strings.Fields(entry); len(f) < 2 || f[1] != "blob" {
+		return "", false, fmt.Errorf("gitdiff: %s at %s is not a file: %w", file, base, domain.ErrInvalidValue)
+	}
+	content, err := d.AtBase(ctx, dir, base, file)
+	return content, err == nil, err
+}
+
 // InWorktree is the content of file, by its path from the repo root, in the
 // worktree at dir, committed or not. A symlink reads as its target, as git
 // keeps it, so AtBase and InWorktree compare alike and nothing outside the
