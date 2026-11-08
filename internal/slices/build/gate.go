@@ -38,6 +38,9 @@ type Gate struct {
 	// says so in its notes.
 	CountCommand []string
 	Snapshots    snapshots
+	// Locks is the job's lock Run runs the checks under, the one a
+	// builder's run_gate takes too, so the two never share a worktree.
+	Locks locks
 }
 
 // Run runs the checks in the worktree of job id, which must be at the gate,
@@ -52,11 +55,21 @@ type Gate struct {
 // stage, or back to build in a new round, or to triage in the last one. When
 // the checks cannot be run, or the job changed while they ran, nothing is
 // saved. A job with no base recorded fails the gate with that reason: its
-// diff can't be judged, and no ref stands in for the commit.
+// diff can't be judged, and no ref stands in for the commit. The checks run
+// under the job's lock in Locks: a builder's run_gate run holding it is
+// cancelled, and Run starts once its processes are gone.
 func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error) {
 	if err := g.configured(); err != nil {
 		return nil, err
 	}
+	if g.Locks == nil {
+		return nil, fmt.Errorf("gate: %w: locks", domain.ErrMissingField)
+	}
+	release, err := g.Locks.Acquire(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("gate: %w", err)
+	}
+	defer release()
 	job, v, err := g.Jobs.Load(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("gate: %w", err)
@@ -87,7 +100,7 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 // judges the job by, in whatever stage it is, and returns the run without
 // deciding or saving anything: what a builder asks for before it hands in
 // its result. Only the gate's configuration says what runs; nothing a caller
-// passes does.
+// passes does. It takes no lock: its caller, run_gate, holds the job's.
 func (g *Gate) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error) {
 	if err := g.configured(); err != nil {
 		return domain.ChecksRun{}, err

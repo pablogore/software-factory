@@ -56,3 +56,10 @@ type snapshots interface {
 	Checkout(ctx context.Context, dir, commit string) (string, error)
 	Remove(ctx context.Context, dir, path string) error
 }
+
+// locks is the per-job lock a job's checks run under, shared with a
+// builder's run_gate: the gate takes it with Acquire, which cancels a
+// run_gate run and waits until it stopped.
+type locks interface {
+	Acquire(ctx context.Context, job domain.JobID) (func(), error)
+}
