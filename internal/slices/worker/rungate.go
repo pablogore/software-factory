@@ -18,12 +18,15 @@ var errNoGate = errors.New("worker: run gate: no gate configured")
 // token and the job, so what runs is only what the Gate is configured with.
 // A token not for job, of a role that may not call run_gate, or from a
 // round or stage entry the job has left is a jobtoken error, and then no
-// check runs. The checks run outside the lock Submit and Progress take, so
-// a long run never holds up a result or a progress message.
+// check runs. A job runs one at a time: a call while its checks are running
+// is refused with domain.ErrBusy, neither waiting nor queued, and runs
+// none. The checks run outside the lock Submit and Progress take, so a long
+// run never holds up a result or a progress message.
 func (s *Submitter) RunGate(ctx context.Context, token string, job domain.JobID) (domain.ChecksRun, error) {
-	if err := s.authorizeGate(ctx, token, job); err != nil {
+	if err := s.startGate(ctx, token, job); err != nil {
 		return domain.ChecksRun{}, err
 	}
+	defer s.endGate(job)
 	if s.Gate == nil {
 		return domain.ChecksRun{}, errNoGate
 	}
@@ -34,9 +37,10 @@ func (s *Submitter) RunGate(ctx context.Context, token string, job domain.JobID)
 	return run, nil
 }
 
-// authorizeGate checks token may run job's checks now, under the lock
-// Submit revokes tokens under, so a token whose result was saved runs none.
-func (s *Submitter) authorizeGate(ctx context.Context, token string, job domain.JobID) error {
+// startGate checks token may run job's checks now and marks them running,
+// under the lock Submit revokes tokens under, so a token whose result was
+// saved runs none.
+func (s *Submitter) startGate(ctx context.Context, token string, job domain.JobID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g, err := s.Tokens.Authorize(token, jobtoken.OpRunGate, job)
@@ -54,5 +58,18 @@ func (s *Submitter) authorizeGate(ctx context.Context, token string, job domain.
 	if err := g.Current(j, hist); err != nil {
 		return fmt.Errorf("worker: run gate: %w", err)
 	}
+	if s.gating[job] {
+		return fmt.Errorf("worker: run gate: %w: the checks of job %q are running; call again once that run answers", domain.ErrBusy, job)
+	}
+	if s.gating == nil {
+		s.gating = map[domain.JobID]bool{}
+	}
+	s.gating[job] = true
 	return nil
+}
+
+func (s *Submitter) endGate(job domain.JobID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.gating, job)
 }

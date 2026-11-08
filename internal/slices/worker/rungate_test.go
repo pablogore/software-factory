@@ -3,6 +3,7 @@ package worker_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -12,16 +13,46 @@ import (
 )
 
 // gate answers every check with run, or with err, and records the jobs it
-// was asked to check.
+// was asked to check. With hold, a check of a job in it says it started on
+// started and answers only once hold is closed.
 type gate struct {
-	run  domain.ChecksRun
-	err  error
-	jobs []domain.JobID
+	mu      sync.Mutex
+	run     domain.ChecksRun
+	err     error
+	jobs    []domain.JobID
+	hold    map[domain.JobID]chan struct{}
+	started chan domain.JobID
 }
 
 func (g *gate) Check(_ context.Context, id domain.JobID) (domain.ChecksRun, error) {
+	g.mu.Lock()
 	g.jobs = append(g.jobs, id)
+	hold := g.hold[id]
+	g.mu.Unlock()
+	if hold != nil {
+		g.started <- id
+		<-hold
+	}
 	return g.run, g.err
+}
+
+func (g *gate) checked() []domain.JobID {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]domain.JobID{}, g.jobs...)
+}
+
+// holding makes g's checks of jobs wait until the returned func is called.
+func (g *gate) holding(jobs ...domain.JobID) func() {
+	g.hold, g.started = map[domain.JobID]chan struct{}{}, make(chan domain.JobID, len(jobs))
+	for _, id := range jobs {
+		g.hold[id] = make(chan struct{})
+	}
+	return func() {
+		for _, h := range g.hold {
+			close(h)
+		}
+	}
 }
 
 var gated = domain.ChecksRun{Command: "make check", ExitCode: 2, Output: "--- FAIL: TestSave", Violations: []string{"Makefile is protected"}}
@@ -51,7 +82,7 @@ func TestRunGate(t *testing.T) {
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(run).ToEqual(gated)
-			ctx.Expect(g.jobs).ToEqual([]domain.JobID{"j-1"})
+			ctx.Expect(g.checked()).ToEqual([]domain.JobID{"j-1"})
 			w.untouched(ctx, "j-1")
 			w.untouched(ctx, "j-2")
 		})
@@ -67,7 +98,7 @@ func TestRunGate(t *testing.T) {
 			ctx.Expect(first).To(specs.BeNil())
 			ctx.Expect(second).To(specs.BeNil())
 			ctx.Expect(submitted).To(specs.BeNil())
-			ctx.Expect(g.jobs).To(specs.HaveLen(2))
+			ctx.Expect(g.checked()).To(specs.HaveLen(2))
 		})
 
 		refused := []refusedGateRow{
@@ -86,8 +117,56 @@ func TestRunGate(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
 			ctx.Expect(err.Error()).To(specs.Contain(`may not use tool "run_gate"`))
 			ctx.Expect(run).ToEqual(domain.ChecksRun{})
-			ctx.Expect(g.jobs).To(specs.BeEmpty())
+			ctx.Expect(g.checked()).To(specs.BeEmpty())
 			w.untouched(ctx, "j-1")
+		})
+
+		s.When("the job's checks are already running", func(s *specs.Spec) {
+			s.It("refuses a second call at once, saying so, and runs no other check", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				release := g.holding("j-1")
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				first := make(chan error, 1)
+				go func() {
+					_, err := w.sub.RunGate(context.Background(), token, "j-1")
+					first <- err
+				}()
+				<-g.started
+
+				_, err := w.sub.RunGate(context.Background(), token, "j-1")
+				release()
+
+				ctx.Expect(err).To(specs.MatchError(domain.ErrBusy))
+				ctx.Expect(err.Error()).ToEqual(`worker: run gate: already running: the checks of job "j-1" are running; call again once that run answers`)
+				ctx.Expect(<-first).To(specs.BeNil())
+				ctx.Expect(g.checked()).ToEqual([]domain.JobID{"j-1"})
+			})
+
+			s.It("still runs another job's checks meanwhile", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				release := g.holding("j-1")
+				defer release()
+				t1 := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				t2 := w.issue(ctx, jobtoken.Grant{Job: "j-2", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				go func() { _, _ = w.sub.RunGate(context.Background(), t1, "j-1") }()
+				<-g.started
+
+				_, err := w.sub.RunGate(context.Background(), t2, "j-2")
+
+				ctx.Expect(err).To(specs.BeNil())
+			})
+
+			s.It("runs them again once the first run answered, even after it failed", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				g.err = errors.New("no make")
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				_, first := w.sub.RunGate(context.Background(), token, "j-1")
+				g.err = nil
+				_, second := w.sub.RunGate(context.Background(), token, "j-1")
+				ctx.Expect(first).To(specs.Not(specs.BeNil()))
+				ctx.Expect(second).To(specs.BeNil())
+				ctx.Expect(g.checked()).To(specs.HaveLen(2))
+			})
 		})
 
 		s.When("the token is not for this run", func(s *specs.Spec) {
@@ -96,14 +175,14 @@ func TestRunGate(t *testing.T) {
 				token := w.issue(ctx, jobtoken.Grant{Job: "j-2", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
 				_, err := w.sub.RunGate(context.Background(), token, "j-1")
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
-				ctx.Expect(g.jobs).To(specs.BeEmpty())
+				ctx.Expect(g.checked()).To(specs.BeEmpty())
 			})
 
 			s.It("refuses a call without a token, running no check", func(ctx *specs.Context) {
 				w, g := withGate(newWorld(ctx), gated)
 				_, err := w.sub.RunGate(context.Background(), "", "j-1")
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrNoToken))
-				ctx.Expect(g.jobs).To(specs.BeEmpty())
+				ctx.Expect(g.checked()).To(specs.BeEmpty())
 			})
 
 			s.It("refuses a token from an earlier round, running no check", func(ctx *specs.Context) {
@@ -112,7 +191,7 @@ func TestRunGate(t *testing.T) {
 				w.newRound(ctx, "j-1")
 				_, err := w.sub.RunGate(context.Background(), token, "j-1")
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrStale))
-				ctx.Expect(g.jobs).To(specs.BeEmpty())
+				ctx.Expect(g.checked()).To(specs.BeEmpty())
 			})
 
 			s.It("refuses a token whose result was saved, running no check", func(ctx *specs.Context) {
@@ -122,7 +201,7 @@ func TestRunGate(t *testing.T) {
 				ctx.Expect(err).To(specs.BeNil())
 				_, err = w.sub.RunGate(context.Background(), token, "j-1")
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrUnknownToken))
-				ctx.Expect(g.jobs).To(specs.BeEmpty())
+				ctx.Expect(g.checked()).To(specs.BeEmpty())
 			})
 		})
 

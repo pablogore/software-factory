@@ -42,6 +42,9 @@ type Submitter struct {
 	// came to since Take last read them, so an attempt knows whether its
 	// session's turn handed in a result.
 	outcomes map[[sha256.Size]byte]Outcome
+	// gating has the jobs whose checks a RunGate is running, so a job runs
+	// one at a time.
+	gating map[domain.JobID]bool
 }
 
 // Outcome is what a token's submissions came to: Saved once one result was
