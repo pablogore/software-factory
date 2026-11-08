@@ -37,8 +37,13 @@ type Submitter struct {
 	Gate  gate
 	Locks locks
 
-	// mu runs one submission at a time, so a token is revoked after its
-	// result is saved before another submission can check it.
+	// byJob runs one call on a job at a time, Submit, Progress or the
+	// start of RunGate, so a token, which is for one job, is revoked after
+	// its result is saved before another call can check it. Calls on other
+	// jobs go on meanwhile, even while a submission waits for its job's
+	// run_gate run to stop.
+	byJob jobLocks
+	// mu guards outcomes.
 	mu sync.Mutex
 	// outcomes keeps, by the hash of a valid token, what its submissions
 	// came to since Take last read them, so an attempt knows whether its
@@ -68,6 +73,8 @@ func (s *Submitter) Take(token string) Outcome {
 // when err is nil. Only tokens Authorize took are kept, so a caller with no
 // valid token adds nothing; a saved one is revoked, so nothing follows it.
 func (s *Submitter) record(token string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.outcomes == nil {
 		s.outcomes = map[[sha256.Size]byte]Outcome{}
 	}
@@ -86,9 +93,9 @@ func (s *Submitter) record(token string, err error) {
 // run_gate run, if one is running, and is saved only once that run's
 // process group is gone, so the gate that follows never shares the
 // worktree with it; the cancelled run answers ErrPreempted, not a failure.
+// That wait holds only job's lock, so other jobs' calls never wait for it.
 func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.byJob.lock(job)()
 	g, err := s.Tokens.Authorize(token, jobtoken.OpSubmitResult, job)
 	if err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)

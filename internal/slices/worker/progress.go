@@ -10,15 +10,14 @@ import (
 
 // Progress records text on job as a progress message from token's role, an
 // AgentProgressed, and returns the events the job saved. It runs under the
-// same lock as Submit, so a message never makes a result's save conflict,
+// job's lock Submit takes, so a message never makes a result's save conflict,
 // and it keeps the token: an agent reports progress as often as it needs
 // before its result. A token not for job, or from a round or stage entry the
 // job has left, is a jobtoken error; an empty or blank text wraps
 // domain.ErrMissingField and one over domain.MaxProgressText characters
 // domain.ErrInvalidValue. In every case nothing is saved.
 func (s *Submitter) Progress(ctx context.Context, token string, job domain.JobID, text string) ([]domain.Event, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.byJob.lock(job)()
 	g, err := s.Tokens.Authorize(token, jobtoken.OpProgress, job)
 	if err != nil {
 		return nil, fmt.Errorf("worker: progress: %w", err)
