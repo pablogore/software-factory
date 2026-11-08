@@ -6,13 +6,19 @@
 //
 // Stopping sends SIGTERM to the group and waits up to the grace period for
 // the whole group to exit; whatever is left then gets SIGKILL.
+//
+// Servers from Registered also keep a file per running server in a
+// directory, so the next factoryd kills the ones a crash left behind.
 package devserver
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -43,9 +49,14 @@ type server struct {
 	done chan struct{}
 }
 
+// inherited is all a dev server gets of factoryd's environment.
+var inherited = []string{"PATH", "HOME", "LANG", "TMPDIR"}
+
 // Servers runs dev servers. It is safe for concurrent use.
 type Servers struct {
 	grace time.Duration
+	// dir, when set, has a record of every running server.
+	dir string
 
 	mu      sync.Mutex
 	running map[key]*server
@@ -59,7 +70,8 @@ func New(grace time.Duration) *Servers {
 }
 
 // Start implements ports.DevServers.
-func (s *Servers) Start(_ context.Context, wt ports.Worktree, stage string, port int, command []string) error {
+func (s *Servers) Start(ctx context.Context, wt ports.Worktree, stage string, port int, dc ports.DevCommand) error {
+	command := dc.Args
 	switch {
 	case wt.Job == "":
 		return fmt.Errorf("job id: %w", domain.ErrMissingField)
@@ -82,7 +94,7 @@ func (s *Servers) Start(_ context.Context, wt ports.Worktree, stage string, port
 	// until the caller's context ends.
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = wt.Path
-	cmd.Env = append(cmd.Environ(), "PORT="+strconv.Itoa(port))
+	cmd.Env = env(dc.Env, port)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting dev server of job %s stage %s: %w", wt.Job, stage, err)
@@ -94,7 +106,29 @@ func (s *Servers) Start(_ context.Context, wt ports.Worktree, stage string, port
 		close(srv.done)
 	}()
 	s.running[k] = srv
+	if err := s.record(ctx, srv.pgid); err != nil {
+		// A server the next factoryd could not find must not run.
+		delete(s.running, k)
+		return errors.Join(fmt.Errorf("recording dev server of job %s stage %s: %w", wt.Job, stage, err), s.stop(ctx, srv))
+	}
 	return nil
+}
+
+// env is a dev server's whole environment: inherited from factoryd's, then
+// the repo's own variables and PORT, which none of them overrides.
+func env(own map[string]string, port int) []string {
+	var e []string
+	for _, k := range inherited {
+		if v, ok := os.LookupEnv(k); ok {
+			e = append(e, k+"="+v)
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(own)) {
+		if k != "PORT" {
+			e = append(e, k+"="+own[k])
+		}
+	}
+	return append(e, "PORT="+strconv.Itoa(port))
 }
 
 // StopStage implements ports.DevServers.
@@ -110,7 +144,7 @@ func (s *Servers) StopStage(ctx context.Context, job domain.JobID, stage string)
 	if err := s.stop(ctx, srv); err != nil {
 		return fmt.Errorf("stopping dev server of job %s stage %s: %w", job, stage, err)
 	}
-	return nil
+	return s.forget(srv.pgid)
 }
 
 // StopJob implements ports.DevServers.

@@ -32,7 +32,7 @@ const stubborn = "trap '' TERM\n" + tree
 
 var treePids = []string{"leader.pid", "child.pid", "grandchild.pid"}
 
-func sh(script string) []string { return []string{"sh", "-c", script} }
+func sh(script string) ports.DevCommand { return ports.DevCommand{Args: []string{"sh", "-c", script}} }
 
 // newServers returns Servers whose leftovers are killed when the test ends.
 func newServers(ctx *specs.Context, grace time.Duration, jobs ...domain.JobID) *devserver.Servers {
@@ -201,6 +201,33 @@ func TestDevServers(t *testing.T) {
 			ctx.Expect(noneAlive(running)).To(specs.BeTrue())
 		})
 
+		s.It("gives the dev server only PATH, HOME, LANG, TMPDIR, the repo's variables and PORT of factoryd's environment", func(ctx *specs.Context) {
+			ctx.Testing().Setenv("FACTORY_TEST_SECRET", "s3cret")
+			ctx.Testing().Setenv("GITHUB_TOKEN", "ghp_secret")
+			srv := newServers(ctx, devserver.DefaultGrace, job)
+			wt := worktree(ctx, job)
+			dc := sh("env > env.txt; echo >> env.txt; exec sleep 300")
+			dc.Env = map[string]string{"NODE_ENV": "development", "PORT": "1"}
+
+			ctx.Expect(srv.Start(bg, wt, "build", 5100, dc)).To(specs.BeNil())
+
+			ctx.Expect(eventually(func() bool { _, ok := readFile(wt.Path, "env.txt"); return ok })).To(specs.BeTrue())
+			got, _ := readFile(wt.Path, "env.txt")
+			var names []string
+			for _, line := range strings.Split(got, "\n") {
+				if name, _, ok := strings.Cut(line, "="); ok {
+					names = append(names, name)
+				}
+			}
+			ctx.Expect(got).To(specs.Not(specs.Contain("s3cret")))
+			ctx.Expect(got).To(specs.Not(specs.Contain("ghp_secret")))
+			ctx.Expect(got).To(specs.Contain("NODE_ENV=development"))
+			ctx.Expect(got).To(specs.Contain("PORT=5100"))
+			for _, name := range names {
+				ctx.Expect([]string{"PATH", "HOME", "LANG", "TMPDIR", "NODE_ENV", "PORT", "PWD", "SHLVL", "_", "OLDPWD"}).To(specs.Contain(name))
+			}
+		})
+
 		s.It("refuses a second dev server for a stage until the first is stopped", func(ctx *specs.Context) {
 			srv := newServers(ctx, devserver.DefaultGrace, job)
 			wt := worktree(ctx, job)
@@ -222,7 +249,7 @@ func TestDevServers(t *testing.T) {
 			srv := newServers(ctx, devserver.DefaultGrace, job)
 			wt := worktree(ctx, job)
 
-			ctx.Expect(srv.Start(bg, wt, "build", 5100, nil)).To(specs.MatchError(domain.ErrMissingField))
+			ctx.Expect(srv.Start(bg, wt, "build", 5100, ports.DevCommand{})).To(specs.MatchError(domain.ErrMissingField))
 			ctx.Expect(srv.Start(bg, ports.Worktree{Job: job}, "build", 5100, sh("true"))).To(specs.MatchError(domain.ErrMissingField))
 			ctx.Expect(srv.Start(bg, wt, "", 5100, sh("true"))).To(specs.MatchError(domain.ErrMissingField))
 			ctx.Expect(srv.Start(bg, wt, "build", 0, sh("true"))).To(specs.MatchError(domain.ErrInvalidValue))
