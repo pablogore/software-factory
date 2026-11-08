@@ -60,10 +60,13 @@ reversible, does it meet its Demo, and does it move toward the vision?**
 
 APPROVE only if all of these hold:
 
-- Every acceptance criterion in the spec is met. **Run the spec's `## Demo`**
-  in the worktree (as a reviewer would: tests, commands, the page) or verify it
-  with evidence you gathered yourself; build.md's own claims are not evidence.
-  It must show the Valor the spec promises.
+- Every acceptance criterion in the spec is met. **Run the spec's `## Demo`
+  test command** in the worktree, exactly as written; build.md's own claims are
+  not evidence. It must pass and show the Valor the spec promises. The test
+  builds its own fixtures in a temporary directory, so make no `git commit` or
+  other setup of your own. A Demo step marked "Manual, for the person" (or
+  "Manual, para la persona") is for the human after merge: skip it, and don't
+  escalate over it.
 - The increment is coherent and reversible: if the spec has a Flag, the
   behaviour sits behind it and is off by default unless the spec says
   otherwise; nothing half-built is exposed to users; it can be reverted alone.
