@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
-	"github.com/pablogore/software-factory/internal/adapters/out/devserver"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/bus"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/platform/portrange"
@@ -69,7 +69,10 @@ const newRoundPath = "/demo/jobs/{job}/new-round"
 // within -gate-timeout and keeping -gate-max-output bytes of output. The
 // builder's dev_server runs the command -dir's .factory/devserver.yaml sets
 // at HEAD on a port of the job's range, from -port-base in ranges of
-// -port-step ports; every server left is stopped when the demo ends.
+// -port-step ports. A server is stopped once its session ends: the role
+// hands in its result or asks, its attempt fails or the job leaves the
+// stage. Every server left is stopped when the demo ends, and the ones a
+// crashed demo left, recorded in -dev-state, when the next one starts.
 // POST newRoundPath, with no token, sends a job back to build in a new round,
 // so a person can see its old token refused.
 func workerDemo(ctx context.Context, args []string, out io.Writer) error {
@@ -81,6 +84,11 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	maxOutput := fs.Int("gate-max-output", wiring.DefaultRunGateMaxOutput, "the most bytes of the checks' output a run-gate keeps and returns")
 	portBase := fs.Int("port-base", portrange.DefaultBase, "the first port of the jobs' dev server ranges")
 	portStep := fs.Int("port-step", portrange.DefaultStep, "how many ports each job's range has")
+	defaultState, err := wiring.DefaultDevServerState()
+	if err != nil {
+		return err
+	}
+	state := fs.String("dev-state", defaultState, "where running dev servers are recorded, so the next run kills what a crash left")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -130,7 +138,10 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	}
 	locks := gatelock.New()
 	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, locks, strings.Fields(*command), nil, *timeout, *maxOutput)
-	servers := devserver.New(devserver.DefaultGrace)
+	servers, err := wiring.StartDevServers(ctx, *state)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		for _, id := range demoJobs {
 			_ = servers.StopJob(context.Background(), id)
@@ -157,6 +168,13 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	var mu sync.Mutex
 	mux := http.NewServeMux()
 	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, gate, locks, wiring.SystemClock{}, dev))
+	events := bus.New(store, wiring.SystemClock{})
+	if err := dev.Subscribe(events); err != nil {
+		return err
+	}
+	if err := events.Start(ctx); err != nil {
+		return err
+	}
 	mux.HandleFunc("POST "+newRoundPath, func(w http.ResponseWriter, r *http.Request) {
 		id := domain.JobID(r.PathValue("job"))
 		token, err := newRound(r.Context(), store, tokens, id)
@@ -172,8 +190,12 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	})
 	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.ServeHTTP(w, r)
+		dispatched := events.Dispatch(ctx)
 		mu.Lock()
 		defer mu.Unlock()
+		if dispatched != nil {
+			_, _ = fmt.Fprintf(out, "dispatching events: %v\n", dispatched)
+		}
 		_, _ = fmt.Fprintf(out, "%s %s\n", r.Method, r.URL.Path)
 		for _, id := range demoJobs {
 			job, _, _ := store.Load(ctx, id)

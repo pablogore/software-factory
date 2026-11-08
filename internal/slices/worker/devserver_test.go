@@ -20,7 +20,7 @@ type servers struct {
 	started []string
 }
 
-func (f *servers) Start(_ context.Context, wt ports.Worktree, stage string, port int, _ []string) error {
+func (f *servers) Start(_ context.Context, wt ports.Worktree, stage string, port int, _ ports.DevCommand) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	k := string(wt.Job) + " " + stage
@@ -65,8 +65,8 @@ func (firstFree) Free(_ domain.JobID, taken []int) (int, error) {
 
 type command []string
 
-func (c command) DevCommand(context.Context, domain.JobID, ports.Worktree) ([]string, error) {
-	return c, nil
+func (c command) DevCommand(context.Context, domain.JobID, ports.Worktree) (ports.DevCommand, error) {
+	return ports.DevCommand{Args: c}, nil
 }
 
 // serving is the tools of a role that may run the job's dev server.
@@ -173,6 +173,45 @@ func TestDevServer(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 			ctx.Expect(err.Error()).To(specs.Contain("the repo configures no dev server command"))
 			ctx.Expect(f.started).To(specs.BeEmpty())
+		})
+
+		s.When("the job's events come", func(s *specs.Spec) {
+			ux := jobtoken.Grant{Job: "j-1", Role: "reviewer-ux", Kind: domain.KindReview, Tools: serving, Round: 1}
+
+			s.It("stops the server of the role whose attempt failed, and only that one", func(ctx *specs.Context) {
+				w, f := withDev(newWorld(ctx), command{"npm", "run", "dev"})
+				_, _ = w.sub.DevServer(context.Background(), w.issue(ctx, builder), "j-1")
+				_, _ = w.sub.DevServer(context.Background(), w.issue(ctx, ux), "j-1")
+
+				err := w.sub.StopLeft(context.Background(), domain.AttemptFailed{Job: "j-1", Role: "builder", Reason: "no result", At: at})
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(f.live()).ToEqual(map[string]int{"j-1 build/reviewer-ux": 5101})
+			})
+
+			s.It("stops every server of the job once it left the stage they were started in", func(ctx *specs.Context) {
+				w, f := withDev(newWorld(ctx), command{"npm", "run", "dev"})
+				_, _ = w.sub.DevServer(context.Background(), w.issue(ctx, builder), "j-1")
+				_, _ = w.sub.DevServer(context.Background(), w.issue(ctx, ux), "j-1")
+				ready := domain.ResultSubmitted{Job: "j-1", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at}
+				w.apply(ctx, "j-1", ready)
+
+				err := w.sub.StopLeft(context.Background(), domain.StageEntered{Job: "j-1", Stage: domain.StageGate, At: at})
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(f.live()).To(specs.BeEmpty())
+			})
+
+			s.It("leaves the servers of the stage the job is still in, however often an event comes", func(ctx *specs.Context) {
+				w, f := withDev(newWorld(ctx), command{"npm", "run", "dev"})
+				_, _ = w.sub.DevServer(context.Background(), w.issue(ctx, builder), "j-1")
+				other := domain.AttemptFailed{Job: "j-1", Role: "reviewer-ux", Reason: "no result", At: at}
+
+				ctx.Expect(w.sub.StopLeft(context.Background(), other)).To(specs.BeNil())
+				ctx.Expect(w.sub.StopLeft(context.Background(), other)).To(specs.BeNil())
+
+				ctx.Expect(f.live()).ToEqual(map[string]int{"j-1 build/builder": 5100})
+			})
 		})
 
 		refused := []refusedDevRow{

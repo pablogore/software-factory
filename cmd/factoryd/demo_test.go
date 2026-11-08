@@ -51,8 +51,9 @@ func TestWorkerDemoAddr(t *testing.T) {
 			run, stop := context.WithCancel(context.Background())
 			pr, pw := io.Pipe()
 			done := make(chan error, 1)
+			state := ctx.Testing().TempDir()
 			go func() {
-				done <- workerDemo(run, []string{"--addr", "127.0.0.1:0"}, pw)
+				done <- workerDemo(run, []string{"--addr", "127.0.0.1:0", "--dev-state", state}, pw)
 				_ = pw.Close()
 			}()
 

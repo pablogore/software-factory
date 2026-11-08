@@ -7,6 +7,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+	"github.com/pablogore/software-factory/internal/ports"
 )
 
 // errNoDevServers means the Submitter was built without what runs dev
@@ -37,8 +38,8 @@ type devServer struct {
 // domain.ErrMissingField, and nothing starts. A second call while the
 // session's server runs starts no other and returns the same port; a server
 // left from an earlier round or stage entry is stopped first. The server
-// runs until the role hands in its result, StopDevServer is called or the
-// job's servers are stopped.
+// runs until the role hands in its result, StopDevServer is called or
+// StopLeft sees the session end.
 func (s *Submitter) DevServer(ctx context.Context, token string, job domain.JobID) (int, error) {
 	defer s.byJob.lock(job)()
 	g, j, err := s.authorizeDev(ctx, token, job)
@@ -62,7 +63,7 @@ func (s *Submitter) DevServer(ctx context.Context, token string, job domain.JobI
 	if err != nil {
 		return 0, fmt.Errorf("worker: dev server: %w", err)
 	}
-	if len(command) == 0 {
+	if len(command.Args) == 0 {
 		return 0, fmt.Errorf("worker: dev server: %w: the repo configures no dev server command", domain.ErrMissingField)
 	}
 	port, err := s.Ports.Free(job, s.devPortsOf(job))
@@ -92,6 +93,52 @@ func (s *Submitter) StopDevServer(ctx context.Context, token string, job domain.
 		return err
 	}
 	return s.stopDev(ctx, devKey{job: job, role: g.Role})
+}
+
+// DevServerEvents are the events StopLeft is handed: every event of a job,
+// since any may move it out of a stage, and AttemptFailed.
+var DevServerEvents = []string{
+	"ResultSubmitted", "HumanApproved", "SpecgatePassed", "SpecgateFailed", "SpecRejected", "GatePassed", "GateFailed",
+	"StageEntered", "ReviewPassed", "ChangesRequested", "RoundStarted", "NeedsHuman", "TriageRequested", "TriageRetried",
+	"MergeFailed", "BudgetExhausted", "AttemptFailed", "NeedsInfo", "JobRejected", "MergeRequested", "MergeCompleted",
+	"ReworkRequested", "InfoAnswered", "MergeOverridden", "LimitOverridden", "CapRaised", "JobStopped", "SliceDropped",
+}
+
+// StopLeft is the bus handler that stops the dev servers whose session is
+// over: the role's after its AttemptFailed, and every server of the job
+// started in a round or stage entry the job has left, as when it moves on,
+// is closed, stopped or dropped. A job no longer found has all its servers
+// stopped. Handing it the same event again stops nothing more.
+func (s *Submitter) StopLeft(ctx context.Context, ev domain.Event) error {
+	e, ok := ev.(interface{ JobID() domain.JobID })
+	if !ok {
+		return nil
+	}
+	job := e.JobID()
+	defer s.byJob.lock(job)()
+	var errs []error
+	if f, ok := ev.(domain.AttemptFailed); ok {
+		errs = append(errs, s.stopDev(ctx, devKey{job: job, role: f.Role}))
+	}
+	j, _, err := s.Jobs.Load(ctx, job)
+	if errors.Is(err, ports.ErrJobNotFound) {
+		j = domain.Job{ID: job}
+	} else if err != nil {
+		return fmt.Errorf("worker: dev server: %w", err)
+	}
+	var hist []ports.Record
+	if err == nil {
+		if hist, err = s.Jobs.History(ctx, job); err != nil {
+			return fmt.Errorf("worker: dev server: %w", err)
+		}
+	}
+	entry := jobtoken.Entry(hist)
+	for _, k := range s.devKeysOf(job) {
+		if d, ok := s.devServer(k); ok && (d.round != j.Round || d.entry != entry) {
+			errs = append(errs, s.stopDev(ctx, k))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // authorizeDev checks token may run job's dev server now and returns its
@@ -138,6 +185,19 @@ func (s *Submitter) devServer(k devKey) (devServer, bool) {
 	defer s.mu.Unlock()
 	d, ok := s.devs[k]
 	return d, ok
+}
+
+// devKeysOf is the sessions of job running a dev server.
+func (s *Submitter) devKeysOf(job domain.JobID) []devKey {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var keys []devKey
+	for k := range s.devs {
+		if k.job == job {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // devPortsOf is the ports job's sessions' servers hold.

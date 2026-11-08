@@ -51,7 +51,7 @@ type locks interface {
 // devServers runs the dev server of a role's session in its job's worktree,
 // keyed by job and stage as ports.DevServers is.
 type devServers interface {
-	Start(ctx context.Context, wt ports.Worktree, stage string, port int, command []string) error
+	Start(ctx context.Context, wt ports.Worktree, stage string, port int, cmd ports.DevCommand) error
 	StopStage(ctx context.Context, job domain.JobID, stage string) error
 }
 
@@ -69,5 +69,5 @@ type devPorts interface {
 // devCommands tells the dev server command the repo configures for a job,
 // or none.
 type devCommands interface {
-	DevCommand(ctx context.Context, job domain.JobID, wt ports.Worktree) ([]string, error)
+	DevCommand(ctx context.Context, job domain.JobID, wt ports.Worktree) (ports.DevCommand, error)
 }

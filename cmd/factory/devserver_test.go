@@ -27,7 +27,8 @@ import (
 )
 
 // helperEnv makes TestDevServerHelper, run as a repo's dev server command,
-// serve the app on $PORT until it is killed.
+// serve the app on $PORT until it is killed. The repo's dev server config
+// sets it, since nothing else of the test's environment reaches the server.
 const helperEnv = "FACTORY_TEST_DEVSERVER"
 
 func TestDevServerHelper(t *testing.T) {
@@ -39,7 +40,8 @@ func TestDevServerHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "the job's app")
+		// A secret of factoryd's environment would show here.
+		_, _ = io.WriteString(w, "the job's app"+os.Getenv("GITHUB_TOKEN"))
 	}))
 }
 
@@ -63,10 +65,10 @@ type served struct {
 
 func serve(ctx *specs.Context) served {
 	t := ctx.Testing()
-	t.Setenv(helperEnv, "1")
+	t.Setenv("GITHUB_TOKEN", "ghp_factoryd_secret")
 	dir := t.TempDir()
 	ctx.Expect(os.MkdirAll(filepath.Join(dir, ".factory"), 0o755)).To(specs.BeNil())
-	ctx.Expect(os.WriteFile(filepath.Join(dir, wiring.DevServerFile), []byte("command: "+os.Args[0]+" -test.run=^TestDevServerHelper$\n"), 0o600)).To(specs.BeNil())
+	ctx.Expect(os.WriteFile(filepath.Join(dir, wiring.DevServerFile), []byte("command: "+os.Args[0]+" -test.run=^TestDevServerHelper$\nenv:\n  "+helperEnv+": \"1\"\n"), 0o600)).To(specs.BeNil())
 	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "dev server"}} {
 		ctx.Expect(exec.Command("git", append([]string{"-C", dir}, args...)...).Run()).To(specs.BeNil())
 	}
@@ -141,7 +143,7 @@ func down(port int) bool {
 
 func TestWorkerDevServer(t *testing.T) {
 	specs.Describe(t, "factory worker dev-server", func(s *specs.Spec) {
-		s.It("starts the builder's dev server on a port of the job's range, where the app answers", func(ctx *specs.Context) {
+		s.It("starts the builder's dev server on a port of the job's range, where the app answers without factoryd's secrets", func(ctx *specs.Context) {
 			f := serve(ctx)
 
 			r := cli(f.env(f.builder), "", "dev-server")

@@ -54,6 +54,7 @@ func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChe
 	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Gate: gate, Locks: locks, Clock: clock}
 	if dev != nil {
 		sub.Servers, sub.Worktrees, sub.Ports, sub.DevCommands = dev.Servers, dev.Worktrees, dev.Ports, baseDevCommand{dev.Bases}
+		dev.sub = sub
 	}
 	return mcpworker.Handler(sub), &worker.Attempts{Results: sub, Jobs: jobs, Pipelines: p, Clock: clock}
 }
