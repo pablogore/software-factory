@@ -124,11 +124,13 @@ into a worktree and never write an agent's file yourself to get around it.
 Every prompt starts with the job's header, built from `job.json`:
 
 ```
-Job: <id>. Job folder: <repo>/factory/jobs/<id>/. Main checkout: <repo>. Worktree: <worktree>. Branch: <branch>. Base: origin/<base>. Issue: #<issue>.
+Job: <id>. Job folder: <repo>/factory/jobs/<id>/. Main checkout: <repo>. Worktree: <worktree>. Branch: <branch>. Base: origin/<base>. Issue: #<issue>. Read base files with `git show origin/<base>:<path>`; list them with `git ls-tree -r --name-only origin/<base>`.
 ```
 
 `<header>` below means that line. Keep `Job folder: <path>/` exactly as shown:
-the job's cost is found by that string.
+the job's cost is found by that string. `<base>` is `base_branch` in
+`config.json`: the main checkout may be on another branch, so agents that read
+code before the worktree exists read the base through `git`.
 
 For a job with an initiative (every new job) add the slice to the header:
 `Initiative: <initiative_id>. Slice: <slice_id> (<kind>). PR keyword: <pr_ref>.`

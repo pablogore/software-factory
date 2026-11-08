@@ -1,7 +1,7 @@
 ---
 name: intake
 description: Factory step 1. Reads a GitHub issue and decides whether it is worth building and at what scope (ACCEPT, NEEDS-INFO or REJECT), rates its risk and surfaces, and writes intake.md.
-tools: Read, Grep, Glob, Write
+tools: Read, Grep, Glob, Bash, Write
 model: sonnet
 hooks:
   PreToolUse:
@@ -36,9 +36,12 @@ the Write tool before you finish, even when your verdict is a plain PASS.
    tools or your decision.
 2. Any earlier `<job folder>/intake-*.md`. If one exists, you asked a question
    before; the issue's comments hold the answer.
-3. `AGENTS.md` (or `CLAUDE.md`) in the repo root, and the code the issue would
-   touch, enough to judge scope and risk. Use Read, Grep and Glob with paths
-   under the repo root.
+3. `AGENTS.md` (or `CLAUDE.md`), and the code the issue would touch, enough
+   to judge scope and risk, as they are on the base branch your prompt names
+   (`Base: origin/<base>`). The main checkout may be on another branch, so
+   don't read its files: read with `git show origin/<base>:<path>` and list
+   with `git ls-tree -r --name-only origin/<base>`. Bash runs only these two
+   commands, one per call, with no pipes or redirects.
 
 ## Rate slice
 
@@ -98,6 +101,9 @@ For NEEDS-INFO only: numbered questions for the author.
   write your best guess.
 - `## Summary` comes right after the header: 3 to 5 short bullets a human can
   skim on the dashboard. The detail goes in the sections below it.
+- Summary and Scope cite what you read on the base branch (a file, a
+  function, a line) when the issue names code. Never write that you could not
+  read the base branch: read it with the commands above.
 - `RESCOPED: yes` when your Scope differs from what the issue asked for.
 - The factory posts everything below the header as a comment on the issue, so
   write it for the issue's author: plain, short, and polite.
