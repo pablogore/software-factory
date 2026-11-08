@@ -30,17 +30,23 @@ type WorkerStore interface {
 	ports.EventLog
 }
 
+// GateChecks runs a job's checks without deciding anything on it, as
+// build.Gate's Check does.
+type GateChecks interface {
+	Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error)
+}
+
 // WorkerAPI is the worker HTTP API over jobs, deciding results with the
-// tokens issued from tokens.
-func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, clock ports.Clock) http.Handler {
-	h, _ := Worker(tokens, jobs, p, clock)
+// tokens issued from tokens and running a builder's checks with gate.
+func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, clock ports.Clock) http.Handler {
+	h, _ := Worker(tokens, jobs, p, gate, clock)
 	return h
 }
 
 // Worker is WorkerAPI and the Attempts that run agents' turns over the same
 // submissions, so an attempt sees the results its agent handed in through
 // the API.
-func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, clock ports.Clock) (http.Handler, *worker.Attempts) {
-	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Clock: clock}
+func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, clock ports.Clock) (http.Handler, *worker.Attempts) {
+	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Gate: gate, Clock: clock}
 	return mcpworker.Handler(sub), &worker.Attempts{Results: sub, Jobs: jobs, Pipelines: p, Clock: clock}
 }
