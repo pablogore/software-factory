@@ -8,13 +8,15 @@ orchestrator never improvises them.
 
 Usage:
   job queue                      what /factory run should do with each labeled issue
-  job create <issue>             new job for an open `factory` issue; fetches origin/<base> first; prints the job id
+  job create <issue>             new job for an open `factory` issue; fetches origin/<base> first; prints the job id;
+                                 an issue naming paths not in origin/<base> goes straight to needs-info
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job> [--direction]  needs-human → spec (old jobs) | build (rework) | replan (direction); stdin and PR comments
   job reviewers <job>            the reviewers to spawn this round, as lens=model
   job plan-check                 fetch origin/<base>; issues the tech-lead hasn't planned yet (factory/jobs/plan.md)
   job reject <job>               needs-info or needs-human → rejected, with your reason (stdin) as rejection.md
+  job findings <job>             a spike in build: save the builder's reply (stdin, needs `## Findings`) as findings.md and build.md
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
   job cleanup                    remove worktrees and branches that finished jobs left behind (queue does it too)
@@ -1087,6 +1089,62 @@ def fetch_base():
               f"{(res.stderr or res.stdout).strip()}", file=sys.stderr)
 
 
+def issue_texts(issue):
+    """The body and the comments the intake reads (the author's and the operator's, not the factory's)."""
+    trusted = {issue["author"]["login"], operator()}
+    return [issue["body"] or ""] + [c["body"] for c in issue["comments"]
+                                    if c["author"]["login"] in trusted and not c["body"].startswith(MARKER)]
+
+
+def missing_paths(issue):
+    """Backticked tokens of the issue that look like repo paths but aren't in origin/<base>.
+    A token looks like a path when it has a `/` or an extension some file in the base has;
+    refs, URLs, commands and placeholders don't count. None when origin/<base> can't be read."""
+    tree = run(["git", "ls-tree", "-r", "--name-only", f"origin/{BASE}"], check=False)
+    if tree.returncode != 0:
+        print(f"warning: couldn't list origin/{BASE}; the issue's paths aren't checked: "
+              f"{(tree.stderr or tree.stdout).strip()}", file=sys.stderr)
+        return None
+    files = set(tree.stdout.splitlines())
+    dirs = {str(p) for f in files for p in Path(f).parents if str(p) != "."}
+    exts = {Path(f).suffix for f in files if Path(f).suffix}
+    remotes = run(["git", "remote"], check=False).stdout.split()
+    refs = set()
+    for r in run(["git", "for-each-ref", "--format=%(refname)"], check=False).stdout.split():
+        refs.add(r)
+        short = re.sub(r"^refs/(heads|tags|remotes)/", "", r)
+        refs.add(short)
+        if r.startswith("refs/remotes/"):
+            refs.add(short.partition("/")[2])
+    missing = []
+    for text in issue_texts(issue):
+        text = re.sub(r"```.*?```", "", text, flags=re.S)
+        for token in re.findall(r"`([^`\n]+)`", text):
+            path = re.sub(r":\d+(-\d+)?$", "", token.strip()).removeprefix("./")
+            if (not path or re.search(r"[\s:<>*?{}\[\]$|;=]", path) or path[0] in "-/~"
+                    or path in refs or any(path.startswith(f"{r}/") for r in remotes)
+                    or not ("/" in path or Path(path).suffix in exts)):
+                continue
+            if path.rstrip("/") not in files | dirs and path not in missing:
+                missing.append(path)
+    return missing
+
+
+def write_base_question(job, missing):
+    """intake.md for an issue that names paths origin/<base> doesn't have: ask for the right base."""
+    names = ", ".join(f"`{p}`" for p in missing)
+    (job_dir(job["id"]) / "intake.md").write_text(
+        "DECISION: NEEDS-INFO\n\n"
+        "## Summary\n"
+        f"- The issue names paths that aren't in `origin/{BASE}`: {names}.\n"
+        "- Intake didn't run: the job would be built on the wrong base.\n\n"
+        "## Why\n"
+        f"`job create` checked the issue's backticked paths against `origin/{BASE}` and these are missing: {names}.\n\n"
+        "## Questions\n"
+        f"1. {names} {'is' if len(missing) == 1 else 'are'} not in `origin/{BASE}`. "
+        "Which base branch should this issue be built on?\n")
+
+
 def slugify(title):
     words = re.findall(r"[a-z0-9]+", title.lower())[:4]
     return "-".join(words) or "issue"
@@ -1122,6 +1180,12 @@ def cmd_create(number):
     }
     write_issue_md(job)
     save(job)
+    missing = missing_paths(issue)
+    if missing:
+        write_base_question(job, missing)
+        save(advance(sync(job), "needs-info"))
+        print(f"{job_id}: needs-info, not intake: the issue names paths not in origin/{BASE}: "
+              f"{', '.join(missing)}", file=sys.stderr)
     print(job_id)
 
 
@@ -1522,6 +1586,21 @@ def cmd_reject(job, text):
     print(f"{job['id']}: rejected")
 
 
+FROM_REPLY = "> Saved by `factory/bin/job findings` from the builder's final reply."
+
+
+def cmd_findings(job, text):
+    if job["kind"] != "spike" or job["stage"] != "build":
+        die(f"{job['id']}: findings is for a spike in build; this is a {job['kind']} in {job['stage']}")
+    if not re.search(r"^## Findings\s*$", text, re.M):
+        die("the builder's reply has no `## Findings` section; nothing saved")
+    d = job_dir(job["id"])
+    (d / "findings.md").write_text(f"{FROM_REPLY}\n\n{text.strip()}\n")
+    # STATUS stays the first line: `advance … replan` reads it
+    (d / "build.md").write_text(f"STATUS: READY\n\n{FROM_REPLY}\n\n## Summary\n- Spike: the findings are in findings.md.\n")
+    print(f"{job['id']}: findings.md and build.md saved")
+
+
 def cmd_agents(job, spec):
     if job["stage"] not in {"intake", "rate"} or (job["intake"] or {}).get("decision") != "ACCEPT":
         die(f"{job['id']}: route only an intake job that intake ACCEPTed, or a slice in rate")
@@ -1624,6 +1703,8 @@ def main(argv):
             cmd_reviewers(resolve(args[0]))
         elif cmd == "reject" and len(args) == 1:
             cmd_reject(resolve(args[0]), sys.stdin.read())
+        elif cmd == "findings" and len(args) == 1:
+            cmd_findings(resolve(args[0]), "" if sys.stdin.isatty() else sys.stdin.read())
         elif cmd == "agents" and len(args) == 2:
             cmd_agents(sync(resolve(args[0])), args[1])
         elif cmd == "sync" and len(args) == 1:

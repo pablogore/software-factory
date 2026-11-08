@@ -31,7 +31,7 @@ slice job          → the `next` slice becomes a job (worktree factory/<job-id>
 spec-writer (opus) → MODE=slice: spec.md (≤ 250 words, 1–4 short criteria). READY | SPLIT (script adds the "b" slices) | NEEDS-INFO
 specgate (script)  → spec.md must pass before anything is built; 2 retries, then needs-human
 intake (sonnet)    → rates THIS slice from its spec.md (risk, surfaces); route (script) picks reviewers + models
-builder (opus)     → commits; the first push opens a draft PR "Refs #<n>"; a spike writes findings.md instead
+builder (opus)     → commits; the first push opens a draft PR "Refs #<n>"; a spike replies with its findings; `job findings` saves them
 gate (script)      → checks.sh; FAIL → builder gets the log tail in the same round, no reviewers spawned
                      (`gate_retries` per round, default 2, then needs-human)
 reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → reviewers
@@ -210,13 +210,22 @@ refuses because the spec isn't amended yet, resume the spec-writer once.
 
 **build.** Spawn or resume `builder-<id>` with
 `<header> Build round <N>. Port: <port>.` plus what this round is for: the
-gate's `round-<N-1>/checks.md`, the reviews in `round-<N-1>/`, or, after
-feedback, `The user gave feedback: read feedback-<k>.md, address it, push, and update build.md for round <N>.` (an old job without `initiative_id` also reads the spec's "Changes from feedback <k>"). When it returns, read `build.md`'s first line:
+gate's `round-<N>/gate-retry-<k>.log`, the reviews in `round-<N-1>/`, or, after
+feedback, `The user gave feedback: read feedback-<k>.md, address it, push, and update build.md for round <N>.` (an old job without `initiative_id` also reads the spec's "Changes from feedback <k>"). On a spike (`kind` spike) add
+`This is a spike: don't write files; reply with your findings, with a ## Findings section.`
+When it returns:
 
-- `STATUS: READY` on a spike (`kind` spike): `factory/bin/job advance <id> replan`
-  (it needs `findings.md`, marks the slice `done`, discards the worktree), then go to **replan**.
-  A slice with `## Propuesta de cambio al spec` in `build.md` still goes to the
-  gate: the reviewers and the replan read it.
+- A spike: pass its whole final reply, unchanged, to the script:
+  `factory/bin/job findings <id> <<'FINDINGS'` … `FINDINGS`. It saves
+  `findings.md` and `build.md` (`STATUS: READY`); it refuses a reply without
+  `## Findings` and saves nothing, so resume the builder once with the refusal
+  (refused again: `factory/bin/job advance <id> needs-human`).
+  Then `factory/bin/job advance <id> replan` (it marks the slice `done`,
+  discards the worktree) and go to **replan**.
+
+Otherwise read `build.md`'s first line (a slice with `## Propuesta de cambio
+al spec` in `build.md` still goes to the gate: the reviewers and the replan read it):
+
 - `STATUS: READY`: `factory/bin/job advance <id> gate`, then go to **gate**. If
   `advance` refuses (nothing pushed, no PR, a dirty tree), resume the builder
   once with the refusal. If it refuses again, stop this job and tell the user.
@@ -298,7 +307,9 @@ then moves the job to `merged`; stop any agents still running for it.
 2. Start every `resume` and `new` line, nothing else. Don't judge issues
    yourself: every new issue goes to intake, which decides whether it gets
    built. For a new issue, `factory/bin/job create <n>` prints the job id;
-   start it at **intake**. `create` and `plan-check` fetch `origin/<base>`
+   start it at **intake**, unless `create` says the job went to `needs-info`:
+   the issue names paths that aren't in `origin/<base>`, so it already asked the
+   author for the right base and waits. `create` and `plan-check` fetch `origin/<base>`
    first, so intake and the tech-lead read the base as it is on GitHub now. If
    the fetch fails they print a warning and go on: tell the user that intake
    and the tech-lead may read a stale copy, and carry on.
