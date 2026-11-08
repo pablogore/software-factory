@@ -1,0 +1,7 @@
+name: product-owner
+kind: task
+description: Turns a business idea into an epic and user stories, and decides what enters the sprint
+prompt: roles/product-owner.md
+agent: claude
+model: sonnet
+mode: blocking

@@ -1,7 +1,9 @@
 package wiring
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,9 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/configyaml"
 	"github.com/pablogore/software-factory/internal/domain"
 )
+
+// ErrUnknownRole means no role file has the name asked for.
+var ErrUnknownRole = errors.New("role not configured")
 
 // RoleSession is what a role's session starts with, read from the
 // configuration when the session is launched.
@@ -26,7 +31,15 @@ type RoleSession struct {
 // files are read on every call, so a changed agent or model reaches the next
 // session without rebuilding factoryd.
 func LoadRoleSession(dir, name string) (RoleSession, error) {
+	// Checked before it becomes a path, so a name like ../x can't reach a
+	// file outside roles/.
+	if err := domain.ValidateRoleName(name); err != nil {
+		return RoleSession{}, err
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "roles", name+".yaml"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return RoleSession{}, fmt.Errorf("role %s: %w: no roles/%s.yaml in %s", name, ErrUnknownRole, name, dir)
+	}
 	if err != nil {
 		return RoleSession{}, fmt.Errorf("role %s: %w", name, err)
 	}

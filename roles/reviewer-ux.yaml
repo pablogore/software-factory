@@ -1,0 +1,7 @@
+name: reviewer-ux
+kind: review
+description: Reviews a branch for user experience (flows, states, copy and accessibility)
+prompt: roles/reviewer-ux.md
+agent: claude
+model: sonnet
+mode: blocking

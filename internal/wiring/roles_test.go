@@ -36,6 +36,31 @@ func write(ctx *specs.Context, dir, name, data string) {
 	ctx.Expect(os.WriteFile(path, []byte(data), 0o600)).To(specs.BeNil())
 }
 
+type repoRole struct {
+	name  string
+	kind  domain.Kind
+	model string
+}
+
+// repoRoles are the ten roles of main's .claude/agents, each with the model
+// it runs on there; the reviewers with the one main's routing gives them.
+var repoRoles = []repoRole{
+	{"intake", domain.KindIntake, "sonnet"},
+	{"spec-writer", domain.KindSpec, "opus"},
+	{"builder", domain.KindBuild, "opus"},
+	{"reviewer-code", domain.KindReview, "sonnet"},
+	{"reviewer-security", domain.KindReview, "opus"},
+	{"reviewer-ux", domain.KindReview, "sonnet"},
+	{"reviewer-ui", domain.KindReview, "haiku"},
+	{"approver", domain.KindApprove, "opus"},
+	{"tech-lead", domain.KindTriage, "sonnet"},
+	{"product-owner", domain.KindTask, "sonnet"},
+}
+
+// protocolWords belong to how factoryd runs a role, not to what the role
+// does, so no prompt may carry them.
+var protocolWords = []string{"build.md", "submit_result", "factory/", ".worktrees", "job folder", "round-", "git push", "gh pr", "STATUS:", "SendMessage", "VERDICT:", "DECISION:", "config.json"}
+
 func TestLoadRoleSession(t *testing.T) {
 	specs.Describe(t, "LoadRoleSession", func(s *specs.Spec) {
 		s.It("starts the repo's builder with its agent, its model and roles/builder.md", func(ctx *specs.Context) {
@@ -52,14 +77,43 @@ func TestLoadRoleSession(t *testing.T) {
 			ctx.Expect(rs.Prompt).ToEqual(string(prompt))
 		})
 
-		s.It("keeps roles/builder.md short and free of protocol, paths and state", func(ctx *specs.Context) {
-			rs, err := wiring.LoadRoleSession(repoRoot, "builder")
+		specs.Table(s, repoRoles, func(r repoRole) string {
+			return "starts the repo's " + r.name + " with its agent, its model and a short prompt free of protocol, paths and state"
+		}, func(ctx *specs.Context, r repoRole) {
+			prompt, err := os.ReadFile(filepath.Join(repoRoot, "roles", r.name+".md"))
 			ctx.Expect(err).To(specs.BeNil())
 
+			rs, err := wiring.LoadRoleSession(repoRoot, r.name)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(rs.Role.Kind).ToEqual(r.kind)
+			ctx.Expect(rs.Role.Agent).ToEqual("claude")
+			ctx.Expect(rs.Role.Model).ToEqual(r.model)
+			ctx.Expect(rs.Agent).ToEqual(acp.Config{Command: "claude-code-acp", Env: []string{"ANTHROPIC_MODEL=" + r.model}})
+			ctx.Expect(rs.Prompt).ToEqual(string(prompt))
 			ctx.Expect(strings.Count(rs.Prompt, "\n")).To(specs.BeLessThanOrEqual(60))
-			for _, word := range []string{"build.md", "submit_result", "factory/", ".worktrees", "job folder", "round-", "git push", "gh pr", "STATUS:", "SendMessage"} {
+			for _, word := range protocolWords {
 				ctx.Expect(rs.Prompt).To(specs.Not(specs.Contain(word)))
 			}
+		})
+
+		s.It("fails naming a role that has no file", func(ctx *specs.Context) {
+			dir := configRoot(ctx, "claude", "opus")
+
+			_, err := wiring.LoadRoleSession(dir, "no-existe")
+
+			ctx.Expect(err).To(specs.MatchError(wiring.ErrUnknownRole))
+			ctx.Expect(err.Error()).To(specs.Contain("role no-existe"))
+		})
+
+		s.It("fails on a role name that would reach outside roles/", func(ctx *specs.Context) {
+			dir := configRoot(ctx, "claude", "opus")
+			write(ctx, dir, "builder.yaml", "name: builder\nkind: build\nprompt: roles/builder.md\nmode: blocking\nagent: claude\nmodel: opus\n")
+
+			_, err := wiring.LoadRoleSession(dir, "../builder")
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).To(specs.Contain(`"../builder"`))
 		})
 
 		s.It("gives the next session the agent and model the YAML says now", func(ctx *specs.Context) {
