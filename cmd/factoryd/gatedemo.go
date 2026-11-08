@@ -76,7 +76,10 @@ type gateStore interface {
 // the commit base is at as it starts. With -db the job is kept in that SQLite
 // file: the first run makes its worktree in the repo at dir off base, as
 // factoryd does, and stops so a person can work in it, move base and run it
-// again to gate it.
+// again to gate it. Gating a job's worktree again with no -db and -base its
+// base branch as it is now is the gate a merge needs: the diff and the repo's
+// gate config are those of the base the job merges into, not the one it left
+// from.
 func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("gate-demo", flag.ContinueOnError)
 	dir := fs.String("dir", ".", "the repo to run the checks in, as the job's worktree; with -db, the repo the job's worktree is made in")
