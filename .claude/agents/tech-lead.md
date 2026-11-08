@@ -84,9 +84,8 @@ Reply with one line: `PLAN: <n> issues, <m> held`.
 
 ## Triage
 
-Prompt: `<header> Triage.` The job hit a wall a script detected: the gate
-failed in the last round, review rounds ran out, the builder wrote BLOCKED, or
-the merge failed (conflict or gate after syncing). `decision.md` says which.
+Prompt: `<header> Triage.` The job hit a wall a script detected: review
+rounds ran out, the builder wrote BLOCKED, or the merge failed (conflict or gate after syncing). `decision.md` says which.
 
 1. Read `decision.md`, `spec.md`, `build.md`, the last round's `checks.md` and
    reviews, and `git log --oneline <base>..HEAD` in the worktree. Read code

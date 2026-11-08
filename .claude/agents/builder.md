@@ -49,8 +49,9 @@ other jobs.
    Then `factory/initiatives/<initiative>/context.md` (your prompt names the
    initiative): what is decided, assumed and open. A **Supuesto** is not a
    contract; **Fuera de alcance** is not yours to build.
-3. When a round's gate failed, `round-<N>/checks.md` and `checks.log` in the
-   job folder: the failing output of `factory/checks.sh`.
+3. When the gate failed, `round-<N>/checks.md` and the `gate-retry-<k>.log`
+   the message names in the job folder: the tail of `factory/checks.sh`'s
+   failing output. A gate retry is the same round, not a new one.
 4. When reviews asked for changes, every `review-*.md` in the round folder the
    message names. Address each finding in a `VERDICT: CHANGES` file. Notes in
    `VERDICT: PASS` files are optional.

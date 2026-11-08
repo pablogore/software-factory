@@ -32,14 +32,15 @@ spec-writer (opus) → MODE=slice: spec.md (≤ 250 words, 1–4 short criteria)
 specgate (script)  → spec.md must pass before anything is built; 2 retries, then needs-human
 intake (sonnet)    → rates THIS slice from its spec.md (risk, surfaces); route (script) picks reviewers + models
 builder (opus)     → commits; the first push opens a draft PR "Refs #<n>"; a spike writes findings.md instead
-gate (script)      → checks.sh; FAIL → builder gets the log, no reviewers spawned
+gate (script)      → checks.sh; FAIL → builder gets the log tail in the same round, no reviewers spawned
+                     (`gate_retries` per round, default 2, then needs-human)
 reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → reviewers
 approver (opus)    → APPROVE: sync origin/<base>, gate, gh pr merge
                      ESCALATE: PR ready, decision as PR comment, label factory:needs-human
 spec-writer (opus) → MODE=replan after every merge (or finished spike): context.md, slices.md, replan.md
                      CONTINUE → checkpoint (every-slice: wait for a human OK) or the next slice job (auto)
                      DONE → the initiative closes | NEEDS-HUMAN → needs-human
-triage (tech-lead) → a script-detected wall (last gate, rounds out, BLOCKED, merge failed):
+triage (tech-lead) → a script-detected wall (rounds out, BLOCKED, merge failed):
                      RETRY once with a brief for the builder | ESCALATE with one closed question
 feedback           → a human comments on the PR or tells /factory:
                      rework (default) → feedback-<k>.md → the same job's builder → gate → every reviewer → approver
@@ -51,7 +52,11 @@ plus `code`. `factory/bin/job reviewers <id>` prints the ones to spawn.
 
 A job has at most `max_rounds` build rounds (`config.json`); a round is one
 build → gate → review pass. `factory/bin/job advance` sends the job to
-`needs-human` instead of another round when the last one fails.
+`needs-human` instead of another round when the last one fails. A failing gate
+doesn't spend a round: the builder retries in the same one, up to
+`gate_retries` times (`config.json`, default 2; the count starts over each
+round), and the next failure goes straight to `needs-human` with the last
+`checks.md`.
 
 ## Files
 
@@ -220,11 +225,12 @@ feedback, `The user gave feedback: read feedback-<k>.md, address it, push, and u
 **gate.** Run `factory/bin/gate <id>`. It prints `GATE: PASS` or `GATE: FAIL`.
 
 - PASS: `factory/bin/job advance <id> review` and go to **review**.
-- FAIL: `factory/bin/job advance <id> build`. If it refuses because this was the
-  last round, `factory/bin/job advance <id> needs-human` instead. Otherwise
-  resume the builder for the next round with
-  `The gate failed: read round-<N-1>/checks.md and checks.log, fix it, push, and update build.md.`
-  No reviewer runs on a failing build.
+- FAIL: `factory/bin/job advance <id> build`. It keeps the round and writes
+  `round-<N>/gate-retry-<k>.log`, the last ~8 KB of `checks.log`. Resume the
+  builder in the same round with
+  `The gate failed: read round-<N>/gate-retry-<k>.log and checks.md, fix it, push, and update build.md for round <N>.`
+  If it refuses because the gate retries ran out, `factory/bin/job advance <id> needs-human`
+  instead. No reviewer runs on a failing build.
 
 **review.** Run `factory/bin/job reviewers <id>`: it prints `lens=model` for
 each reviewer this round runs. Spawn all of them **in one message**, so they
