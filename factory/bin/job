@@ -1087,9 +1087,10 @@ def ignored_in_base(paths, files):
             dest = Path(tmp) / f
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(run(["git", "show", f"origin/{BASE}:{f}"]).stdout)
-        res = run(["git", "-c", "core.excludesFile=/dev/null", "check-ignore", "--no-index", "--", *paths],
-                  cwd=tmp, check=False)
-    return set(res.stdout.splitlines())
+        # -z keeps non-ASCII paths as they are; without it git quotes them
+        res = subprocess.run(["git", "-c", "core.excludesFile=/dev/null", "check-ignore", "--no-index", "-z", "--stdin"],
+                             cwd=tmp, input="\0".join(paths), capture_output=True, text=True)
+    return set(res.stdout.split("\0")) - {""}
 
 
 def missing_paths(issue):
