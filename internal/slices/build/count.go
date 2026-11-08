@@ -125,8 +125,8 @@ func (g *Gate) testCount(ctx context.Context, dir, base string) ([]string, error
 }
 
 // count is the tests of each package the count command finds in dir, or
-// the reason it failed there, at where: a non-zero exit or output it can't
-// read. The error is for a command that could not be run at all.
+// the reason it failed there, at where: a non-zero exit, an output the
+// runner cut or one it can't read. The error is for a command that could not be run at all.
 func (g *Gate) count(ctx context.Context, dir, where string) (map[string]int, string, error) {
 	run, err := g.Checks.Run(ctx, dir, g.CountCommand)
 	if err != nil {
@@ -134,6 +134,11 @@ func (g *Gate) count(ctx context.Context, dir, where string) (map[string]int, st
 	}
 	if run.ExitCode != 0 {
 		return nil, fmt.Sprintf("the test count command `%s` failed at %s with exit %d: %s", run.Command, where, run.ExitCode, strings.TrimSpace(run.Output)), nil
+	}
+	// A runner with limits notes an output it cut, which can't be counted
+	// whole.
+	if len(run.Notes) > 0 {
+		return nil, fmt.Sprintf("the test count command `%s` can't be counted at %s: %s", run.Command, where, strings.Join(run.Notes, "; ")), nil
 	}
 	counts, err := CountTests(run.Output)
 	if err != nil {
