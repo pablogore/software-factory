@@ -67,7 +67,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 		if err := store.Create(ctx, job); err != nil {
 			return err
 		}
-		if issued[id], err = tokens.Issue(jobtoken.For(job, nil, "builder", domain.KindBuild)); err != nil {
+		if issued[id], err = tokens.Issue(jobtoken.For(job, nil, domain.Role{Name: "builder", Kind: domain.KindBuild})); err != nil {
 			return err
 		}
 	}
@@ -153,7 +153,7 @@ func newRound(ctx context.Context, store *memstore.Store, tokens *jobtoken.Token
 	if err != nil {
 		return "", err
 	}
-	return tokens.Issue(jobtoken.For(job, hist, "builder", domain.KindBuild))
+	return tokens.Issue(jobtoken.For(job, hist, domain.Role{Name: "builder", Kind: domain.KindBuild}))
 }
 
 // errNotLoopback refuses an address other machines could reach: the demo's

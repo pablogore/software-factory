@@ -26,7 +26,7 @@ type badRoleRow struct {
 
 func TestLoadRole(t *testing.T) {
 	specs.Describe(t, "LoadRole", func(s *specs.Spec) {
-		s.It("loads security-deep with its when and mode", func(ctx *specs.Context) {
+		s.It("loads security-deep with its when, mode and tools", func(ctx *specs.Context) {
 			data, err := os.ReadFile("testdata/roles/security-deep.yaml")
 			ctx.Expect(err).To(specs.BeNil())
 
@@ -46,7 +46,8 @@ func TestLoadRole(t *testing.T) {
 					{DepsChanged: true},
 					{DiffLines: ">= 200"},
 				}},
-				Mode: domain.ModeShadow,
+				Mode:  domain.ModeShadow,
+				Tools: []string{"context_pack", "record_finding", "submit_result"},
 			})
 		})
 
@@ -204,6 +205,13 @@ func TestLoadRole(t *testing.T) {
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(r.AllowedPaths).ToEqual([]string{"internal/slices/build/", "docs/*.md"})
+		})
+
+		s.It("loads a role without tools as one with no tool list", func(ctx *specs.Context) {
+			r, err := configyaml.LoadRole([]byte("name: builder\nkind: build\nmode: blocking\n"))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Tools).To(specs.BeEmpty())
 		})
 
 		s.It("refuses allowed_paths on a review role", func(ctx *specs.Context) {

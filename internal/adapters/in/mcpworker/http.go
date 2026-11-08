@@ -19,7 +19,8 @@ import (
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
-// MaxResultBytes is the largest result body the route reads.
+// MaxResultBytes is the largest result body the route reads, and the
+// largest arguments the MCP tools take.
 const MaxResultBytes = 1 << 20
 
 // ResultPath is the route a job's result is posted to; {job} is its ID.

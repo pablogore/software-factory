@@ -13,6 +13,11 @@ import (
 
 var builder = jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Round: 1}
 
+var builderRole = domain.Role{Name: "builder", Kind: domain.KindBuild}
+
+// submitsOnly is a grant whose role lists submit_result as its only tool.
+var submitsOnly = jobtoken.Grant{Job: "j-1", Role: "only-submits", Kind: domain.KindBuild, Tools: []string{"submit_result"}, Round: 1}
+
 // history is a job's history of events evs.
 func history(evs ...domain.Event) []ports.Record {
 	hist := make([]ports.Record, len(evs))
@@ -50,6 +55,36 @@ func TestTokens(t *testing.T) {
 			g, err := tokens.Authorize(issue(ctx, tokens, builder), jobtoken.OpProgress, "j-1")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(g).ToEqual(builder)
+		})
+
+		s.When("the role lists its tools", func(s *specs.Spec) {
+			s.It("authorize the operation of a listed tool", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				g, err := tokens.Authorize(issue(ctx, tokens, submitsOnly), jobtoken.OpSubmitResult, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(g).ToEqual(submitsOnly)
+			})
+
+			s.It("refuse the operation of a tool the role does not list, naming the tool and the role", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, submitsOnly), jobtoken.OpProgress, "j-1")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+				ctx.Expect(err.Error()).ToEqual(`job token not allowed: role "only-submits" may not use tool "progress"`)
+			})
+
+			s.It("still refuse another job before looking at the tools", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, submitsOnly), jobtoken.OpProgress, "j-2")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+				ctx.Expect(err.Error()).To(specs.Contain(`job "j-2"`))
+			})
+
+			s.It("are granted the role's tools, a copy the role's later changes do not reach", func(ctx *specs.Context) {
+				role := domain.Role{Name: "only-submits", Kind: domain.KindBuild, Tools: []string{"submit_result"}}
+				g := jobtoken.For(domain.Job{ID: "j-1", Stage: "build", Round: 1}, nil, role)
+				role.Tools[0] = "progress"
+				ctx.Expect(g).ToEqual(jobtoken.Grant{Job: "j-1", Role: "only-submits", Kind: domain.KindBuild, Tools: []string{"submit_result"}, Round: 1})
+			})
 		})
 
 		s.It("are different on every issue, even for the same grant", func(ctx *specs.Context) {
@@ -119,19 +154,19 @@ func TestTokens(t *testing.T) {
 			start := history(entered("build"))
 
 			s.It("grants the job's round and its stage entry as it is now", func(ctx *specs.Context) {
-				g := jobtoken.For(job, start, "builder", domain.KindBuild)
+				g := jobtoken.For(job, start, builderRole)
 				ctx.Expect(g).ToEqual(jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Round: 1, Entry: 1})
 				ctx.Expect(g.Current(job, start)).To(specs.BeNil())
 			})
 
 			s.It("takes events that leave the job in its stage", func(ctx *specs.Context) {
-				g := jobtoken.For(job, start, "reviewer-code", domain.KindReview)
+				g := jobtoken.For(job, start, domain.Role{Name: "reviewer-code", Kind: domain.KindReview})
 				later := history(entered("build"), domain.ReviewPassed{Job: "j-1", Role: "reviewer-security"})
 				ctx.Expect(g.Current(job, later)).To(specs.BeNil())
 			})
 
 			s.It("refuses once the job is in a later round", func(ctx *specs.Context) {
-				g := jobtoken.For(job, start, "builder", domain.KindBuild)
+				g := jobtoken.For(job, start, builderRole)
 				later := domain.Job{ID: "j-1", Stage: "build", Round: 2}
 				err := g.Current(later, start)
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrStale))
@@ -139,13 +174,13 @@ func TestTokens(t *testing.T) {
 			})
 
 			s.It("refuses once the job left the stage and came back to it, in the same round", func(ctx *specs.Context) {
-				g := jobtoken.For(job, start, "builder", domain.KindBuild)
+				g := jobtoken.For(job, start, builderRole)
 				back := history(entered("build"), domain.NeedsInfo{Job: "j-1", From: "build"}, entered("build"))
 				ctx.Expect(g.Current(job, back)).To(specs.MatchError(jobtoken.ErrStale))
 			})
 
 			s.It("refuses once the job entered its own stage again", func(ctx *specs.Context) {
-				g := jobtoken.For(job, start, "builder", domain.KindBuild)
+				g := jobtoken.For(job, start, builderRole)
 				ctx.Expect(g.Current(job, history(entered("build"), entered("build")))).To(specs.MatchError(jobtoken.ErrStale))
 			})
 		})
