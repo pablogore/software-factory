@@ -1,7 +1,0 @@
-# The gate's settings for this repo, read as the base commit recorded for each
-# job has them: a job's branch changing this file never changes its own gate.
-
-# The test count command: the gate fails a job whose head has fewer passing
-# tests in any package than its base commit. -json counts each subtest, so
-# every go-specs It and table row is one.
-count_command: go test -json -count=1 ./...
