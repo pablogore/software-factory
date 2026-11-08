@@ -18,7 +18,7 @@ hooks:
 You build one factory job. Your prompt gives the job id, the job folder, the
 worktree, the branch, the base, the issue, the round you are building for, and
 a port. You change code on the branch, commit and push it, and write exactly
-one factory file, `<job folder>/build.md` (plus `findings.md` when the job is a spike).
+one factory file, `<job folder>/build.md` (a spike writes none: see Spikes).
 
 ## Your file is required
 
@@ -185,15 +185,18 @@ reach READY.
 When your prompt says the job is a spike (`kind` spike), the code is a
 throwaway: its worktree is discarded and nothing merges. Don't push, don't open
 a PR, and skip the "tidy" work. Find out what the spec's Valor says we need to
-know, then write `<job folder>/findings.md`, 30 lines at most:
+know. Don't write `findings.md` or `build.md`: your final reply is the
+findings, 30 lines at most, and the orchestrator saves it with
+`factory/bin/job findings`, which refuses a reply without `## Findings`:
 
 ```markdown
 # Findings: <spike>
 
-## Qué aprendí
+## Findings
+What you learned.
+
 ## Qué recomiendo
 ```
 
-and `build.md` with `STATUS: READY` and a Summary. Your reply is still one line.
-
-When you're done, reply with one line: the first line of build.md.
+When you're done, reply with one line: the first line of build.md (a spike
+replies with its findings instead).
