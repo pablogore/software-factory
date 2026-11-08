@@ -500,6 +500,42 @@ class InitiativeE2E(E2EBase):
         self.assertEqual(self.stage(jid)["stage"], "done")
         self.assertIn("next slice job", out)
 
+    def test_demo_spike_findings_from_the_builders_reply(self):
+        # A spike's builder can't write files: the skill pipes its reply to `job findings`.
+        n = self.sh("gh issue create --label factory --title 'Probe a provider' --body x").stdout.strip().rsplit("/", 1)[1]
+        jid = self.job("create", n).stdout.strip()
+        idir = self.repo / "factory/initiatives" / jid
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
+        self.job("advance", jid, "initiative")
+        (idir / "vision.md").write_text("STATUS: READY\n\n# V\n")
+        (idir / "slices.md").write_text(self.rows("idea", "idea", "next"))
+        self.job("set-checkpoint", jid, "auto")
+        self.job("advance", jid, "spec")
+        self.spec(jid, "S3", title="saber el proveedor")
+        self.job("advance", jid, "rate")
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
+        self.sh(f"factory/bin/route {jid}")
+        self.job("advance", jid, "build")
+        d = self.repo / f"factory/jobs/{jid}"
+
+        # rejected: a reply without `## Findings` saves nothing
+        res = self.job("findings", jid, ok=False, input="I looked around.\n\n## Notes\nNothing.\n")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("no `## Findings` section", res.stderr)
+        self.assertFalse((d / "findings.md").exists())
+        self.assertFalse((d / "build.md").exists())
+
+        # accepted: findings.md and build.md, both marked as coming from the reply
+        reply = "# Findings: proveedor\n\n## Findings\nProvider X has a sandbox.\n\n## Qué recomiendo\nUse X.\n"
+        self.assertIn("saved", self.job("findings", jid, input=reply).stdout)
+        findings, build = (d / "findings.md").read_text(), (d / "build.md").read_text()
+        self.assertTrue(findings.startswith("> Saved by `factory/bin/job findings` from the builder's final reply."))
+        self.assertIn("Provider X has a sandbox.", findings)
+        self.assertEqual(build.split("\n")[0], "STATUS: READY")
+        self.assertEqual(build.split("\n")[2], "> Saved by `factory/bin/job findings` from the builder's final reply.")
+        self.job("advance", jid, "replan")
+        self.assertEqual(self.read_slices(jid)[2]["state"], "done")
+
     @staticmethod
     def read_slices(init):
         import importlib.machinery, importlib.util

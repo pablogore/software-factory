@@ -15,6 +15,7 @@ Usage:
   job reviewers <job>            the reviewers to spawn this round, as lens=model
   job plan-check                 fetch origin/<base>; issues the tech-lead hasn't planned yet (factory/jobs/plan.md)
   job reject <job>               needs-info or needs-human → rejected, with your reason (stdin) as rejection.md
+  job findings <job>             a spike in build: save the builder's reply (stdin, needs `## Findings`) as findings.md and build.md
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
   job cleanup                    remove worktrees and branches that finished jobs left behind (queue does it too)
@@ -1499,6 +1500,21 @@ def cmd_reject(job, text):
     print(f"{job['id']}: rejected")
 
 
+FROM_REPLY = "> Saved by `factory/bin/job findings` from the builder's final reply."
+
+
+def cmd_findings(job, text):
+    if job["kind"] != "spike" or job["stage"] != "build":
+        die(f"{job['id']}: findings is for a spike in build; this is a {job['kind']} in {job['stage']}")
+    if not re.search(r"^## Findings\s*$", text, re.M):
+        die("the builder's reply has no `## Findings` section; nothing saved")
+    d = job_dir(job["id"])
+    (d / "findings.md").write_text(f"{FROM_REPLY}\n\n{text.strip()}\n")
+    # STATUS stays the first line: `advance … replan` reads it
+    (d / "build.md").write_text(f"STATUS: READY\n\n{FROM_REPLY}\n\n## Summary\n- Spike: the findings are in findings.md.\n")
+    print(f"{job['id']}: findings.md and build.md saved")
+
+
 def cmd_agents(job, spec):
     if job["stage"] not in {"intake", "rate"} or (job["intake"] or {}).get("decision") != "ACCEPT":
         die(f"{job['id']}: route only an intake job that intake ACCEPTed, or a slice in rate")
@@ -1601,6 +1617,8 @@ def main(argv):
             cmd_reviewers(resolve(args[0]))
         elif cmd == "reject" and len(args) == 1:
             cmd_reject(resolve(args[0]), sys.stdin.read())
+        elif cmd == "findings" and len(args) == 1:
+            cmd_findings(resolve(args[0]), "" if sys.stdin.isatty() else sys.stdin.read())
         elif cmd == "agents" and len(args) == 2:
             cmd_agents(sync(resolve(args[0])), args[1])
         elif cmd == "sync" and len(args) == 1:
