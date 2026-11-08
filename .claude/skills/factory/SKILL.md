@@ -156,7 +156,9 @@ returns, read its decision:
   and creates `factory/initiatives/<id>/issue.md`). Go to **initiative**. A job
   created before initiatives existed has no `initiative_id`: for it
   `factory/bin/route <id>` and `factory/bin/job advance <id> spec`, then the old
-  steps (**spec (old job)** below).
+  steps (**spec (old job)** below). If the issue names a `path` that
+  `origin/<base_branch>` doesn't have, either advance lands in `needs-info`
+  instead and asks the issue which base is right: the job parks like below.
 - `NEEDS-INFO`: `factory/bin/job advance <id> needs-info`. The job parks until
   the author replies.
 - `REJECT`: `factory/bin/job advance <id> rejected`.

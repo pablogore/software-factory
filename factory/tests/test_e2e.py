@@ -467,5 +467,42 @@ class InitiativeE2E(E2EBase):
         return mod.parse_slices((InitiativeE2E.repo / f"factory/initiatives/{init}/slices.md").read_text())
 
 
+class MissingPathsE2E(E2EBase):
+    """An accepted issue that names files the base doesn't have parks in needs-info."""
+
+    def accept(self, body, legacy=False):
+        n = self.sh(f"gh issue create --label factory --title 'Edit' --body '{body}'").stdout.strip().rsplit("/", 1)[1]
+        jid = self.job("create", n).stdout.strip()
+        if legacy:
+            self.legacy(jid)
+        self.jobfile(jid, "intake.md", "DECISION: ACCEPT\nRISK: low\nSURFACES: none\nRESCOPED: no\n\n## Scope\nx\n")
+        if legacy:
+            self.sh(f"factory/bin/route {jid}")
+        self.job("advance", jid, "spec" if legacy else "initiative")
+        return n, jid
+
+    def branch_exists(self, jid):
+        return self.sh(f"git rev-parse --verify -q refs/heads/factory/{jid}", ok=False).returncode == 0
+
+    def test_missing_path_asks_for_the_base(self):
+        for legacy in (False, True):
+            n, jid = self.accept("Change `docs/no-existe.md` and `README.md`.", legacy)
+            self.assertEqual(self.stage(jid)["stage"], "needs-info")
+            self.assertFalse(self.branch_exists(jid))
+            issue = self.gh()["issues"][n]
+            self.assertIn("factory:needs-info", issue["labels"])
+            last = issue["comments"][-1]["body"]
+            self.assertIn("`docs/no-existe.md`", last)
+            self.assertNotIn("`README.md`", last)
+            self.assertIn("Which base branch", last)
+
+    def test_existing_paths_go_on(self):
+        n, jid = self.accept("Change `README.md` and `./README.md`.")
+        self.assertEqual(self.stage(jid)["stage"], "initiative")
+        n, jid = self.accept("Change `README.md`.", legacy=True)
+        self.assertEqual(self.stage(jid)["stage"], "spec")
+        self.assertTrue(self.branch_exists(jid))
+
+
 if __name__ == "__main__":
     unittest.main()

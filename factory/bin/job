@@ -652,6 +652,18 @@ def next_round(job, only=None):
     job["round_reviewers"] = only
 
 
+def missing_paths(job):
+    """Paths the issue body names that origin/<base> doesn't have."""
+    # shortcut: only `backticked` paths in the body count, and a path the issue asks to create counts as missing
+    body = section(job_dir(job["id"]) / "issue.md", "Body") or ""
+    paths = sorted({p.removeprefix("./").strip("/") for p in re.findall(r"`([\w./-]+)`", body)
+                    if "/" in p or re.search(r"\.[A-Za-z]\w*$", p)} - {""})
+    if not paths:
+        return []
+    run(["git", "fetch", "origin", BASE])
+    return [p for p in paths if run(["git", "cat-file", "-e", f"origin/{BASE}:{p}"], check=False).returncode]
+
+
 def start_slice(job, row):
     """Give `job` the initiative's `next` slice: mark it in-progress and create the worktree."""
     require(row["state"] == "next", f"slice {row['id']} isn't `next`")
@@ -731,8 +743,16 @@ def advance(job, stage):
     d = job_dir(job["id"])
     decision = header(d / "intake.md").get("DECISION") if (d / "intake.md").exists() else None
     intake_body = lambda: "\n".join((d / "intake.md").read_text().split("\n\n", 1)[1:]).strip()
+    missing = missing_paths(job) if old == "intake" and stage in {"initiative", "spec"} and decision == "ACCEPT" else []
 
-    if old == "intake" and stage == "initiative":
+    if missing:  # accepted, but the issue points at files the base doesn't have: ask before building
+        comment("issue", job["issue"], f"### Factory: which base?\n\nThe issue names paths that `origin/{BASE}` "
+                "doesn't have:\n\n" + "\n".join(f"- `{p}`" for p in missing) + "\n\n"
+                "Which base branch should this job start from? Reply here once the paths or the base are right.")
+        label("issue", job["issue"], add=LABELS["needs_info"])
+        stage = "needs-info"
+
+    elif old == "intake" and stage == "initiative":
         require(decision == "ACCEPT", f"intake.md says DECISION: {decision}, not ACCEPT")
         require(job["initiative_id"], "old jobs go intake → spec")
         i = job["intake"]
