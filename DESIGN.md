@@ -165,7 +165,9 @@ break this.
   label is the trust boundary.
 - Issue text reaches agents as quoted data in `issue.md`, with comments only
   from the issue's author and the factory's operator. It is never part of a
-  prompt. Intake, which reads it first, has no shell.
+  prompt. Intake, which reads it first, has a shell limited to read-only
+  `git show` and `git ls-tree` on the base branch, enforced by
+  `factory/bin/guard`.
 - Agents push only `factory/*` branches. Only `factory/bin/job merge` merges,
   through `gh pr merge`. The factory never deploys.
 - One PR per issue; at most `max_rounds` build rounds per job before a human

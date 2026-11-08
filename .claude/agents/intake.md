@@ -40,8 +40,8 @@ the Write tool before you finish, even when your verdict is a plain PASS.
    to judge scope and risk, as they are on the base branch your prompt names
    (`Base: origin/<base>`). The main checkout may be on another branch, so
    don't read its files: read with `git show origin/<base>:<path>` and list
-   with `git ls-tree -r --name-only origin/<base>`. Use Bash only for these
-   two read-only commands.
+   with `git ls-tree -r --name-only origin/<base>`. Bash runs only these two
+   commands, one per call, with no pipes or redirects.
 
 ## Rate slice
 

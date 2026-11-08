@@ -7,7 +7,8 @@ Usage (from an agent's frontmatter):
 Each agent writes only its own factory file; the builder may also change code
 inside .worktrees/. Every agent is kept away from merging, force pushes and
 destructive git; only the builder may commit, and it may push only its
-factory/<job-id> branch.
+factory/<job-id> branch. Intake, which reads issue text first, may run only
+read-only `git show` and `git ls-tree`.
 
 This catches mistakes and obvious misuse, not a determined shell: a reviewer
 can still write a file through a Bash redirect. The gate and the reviews remain
@@ -54,6 +55,9 @@ FORBIDDEN = [
 BUILDER_ONLY = re.compile(r"\bgit\s+(commit|push|add|rm|mv|reset|checkout|switch|rebase|merge|"
                           r"cherry-pick|revert|stash|tag|branch\s+-[dDmM])\b|\bsed\s+-i\b")
 
+# Intake's whole shell: one git read of the base branch, no shell operators.
+INTAKE_BASH = re.compile(r"git\s+(show|ls-tree)\s[^;&|<>`$()\n]*")
+
 
 def block(why):
     print(f"factory guard: {why}", file=sys.stderr)
@@ -84,6 +88,8 @@ def check_bash(agent, command):
     for pattern, why in FORBIDDEN:
         if re.search(pattern, command):
             block(why)
+    if agent == "intake" and not INTAKE_BASH.fullmatch(command.strip()):
+        block("intake reads the base branch only through git show and git ls-tree")
     if agent != "builder":
         if BUILDER_ONLY.search(command):
             block(f"{agent} doesn't change the branch; only the builder commits and pushes")

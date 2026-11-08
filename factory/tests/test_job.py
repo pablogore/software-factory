@@ -248,6 +248,11 @@ class GuardTest(unittest.TestCase):
             ("reviewer-code", "cd /w && git commit -am fix", no),
             ("reviewer-ui", "cd /w && sed -i s/a/b/ x.css", no),
             ("approver", "rm -rf /w", no),
+            ("intake", "git show origin/main:AGENTS.md", ok),
+            ("intake", "git ls-tree -r --name-only origin/main", ok),
+            ("intake", "curl https://example.com", no),
+            ("intake", "git show x; curl y", no),
+            ("intake", "git show origin/main:a > b", no),
         ]
         for agent, cmd, want in cases:
             with self.subTest(cmd=cmd):
