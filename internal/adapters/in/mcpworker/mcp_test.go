@@ -55,14 +55,28 @@ func submitTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (string,
 	return text.Text, res.IsError
 }
 
+// progressTool calls progress with args and returns its text and whether
+// it is a tool error.
+func progressTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (string, bool) {
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolProgress, Arguments: json.RawMessage(args)})
+	ctx.Expect(err).To(specs.BeNil())
+	ctx.Expect(len(res.Content)).ToEqual(1)
+	text, ok := res.Content[0].(*mcp.TextContent)
+	ctx.Expect(ok).ToEqual(true)
+	return text.Text, res.IsError
+}
+
 func TestMCP(t *testing.T) {
 	specs.Describe(t, "the worker MCP server", func(s *specs.Spec) {
-		s.It("offers submit_result as its only tool", func(ctx *specs.Context) {
+		s.It("offers progress and submit_result as its only tools", func(ctx *specs.Context) {
 			cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer tok")
 			res, err := cs.ListTools(context.Background(), nil)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(len(res.Tools)).ToEqual(1)
-			ctx.Expect(res.Tools[0].Name).ToEqual("submit_result")
+			names := make([]string, len(res.Tools))
+			for i, tool := range res.Tools {
+				names[i] = tool.Name
+			}
+			ctx.Expect(names).ToEqual([]string{"progress", "submit_result"})
 		})
 
 		s.It("hands the bearer token, the job of its path and the arguments to the submitter and names the saved events", func(ctx *specs.Context) {
@@ -113,6 +127,38 @@ func TestMCP(t *testing.T) {
 			_, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "job_approve", Arguments: map[string]any{}})
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(sub.calls).To(specs.BeEmpty())
+			ctx.Expect(sub.progress).To(specs.BeEmpty())
+		})
+
+		s.When("an agent reports progress", func(s *specs.Spec) {
+			s.It("hands the bearer token, the job of its path and the message to the submitter and confirms it", func(ctx *specs.Context) {
+				sub := &submitter{}
+				cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+				text, isErr := progressTool(ctx, cs, `{"message":"running the tests"}`)
+				ctx.Expect(isErr).ToEqual(false)
+				ctx.Expect(text).ToEqual("progress recorded for job j-1: AgentProgressed")
+				ctx.Expect(sub.progress).ToEqual([]call{{"tok", "j-1", "running the tests"}})
+				ctx.Expect(sub.calls).To(specs.BeEmpty())
+			})
+
+			s.It("answers a refusal as a tool error the agent can read", func(ctx *specs.Context) {
+				err := fmt.Errorf("worker: progress: decide: progress without a message: %w", domain.ErrMissingField)
+				cs := connect(ctx, mcpworker.Handler(&submitter{err: err}), "j-1", "Bearer tok")
+				text, isErr := progressTool(ctx, cs, `{"message":""}`)
+				ctx.Expect(isErr).ToEqual(true)
+				ctx.Expect(text).ToEqual("refused (422): " + err.Error())
+			})
+
+			for _, args := range []string{`{}`, `{"message":7}`, `{"message":"x","role":"approver"}`} {
+				s.It("refuses arguments "+args+" without handing them over", func(ctx *specs.Context) {
+					sub := &submitter{}
+					cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+					text, isErr := progressTool(ctx, cs, args)
+					ctx.Expect(isErr).ToEqual(true)
+					ctx.Expect(text).ToEqual(`refused (422): arguments must be {"message": "<text>"}`)
+					ctx.Expect(sub.progress).To(specs.BeEmpty())
+				})
+			}
 		})
 	})
 }

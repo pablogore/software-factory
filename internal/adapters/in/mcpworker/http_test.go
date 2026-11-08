@@ -20,10 +20,11 @@ import (
 )
 
 // submitter records its calls and answers with err, or with one
-// StageEntered.
+// StageEntered for a result and one AgentProgressed for progress.
 type submitter struct {
-	err   error
-	calls []call
+	err      error
+	calls    []call
+	progress []call
 }
 
 type call struct {
@@ -38,6 +39,14 @@ func (s *submitter) Submit(_ context.Context, token string, job domain.JobID, da
 		return nil, s.err
 	}
 	return []domain.Event{domain.StageEntered{Job: job, Stage: domain.StageGate, At: time.Time{}}}, nil
+}
+
+func (s *submitter) Progress(_ context.Context, token string, job domain.JobID, text string) ([]domain.Event, error) {
+	s.progress = append(s.progress, call{token, job, text})
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []domain.Event{domain.AgentProgressed{Job: job, Role: "builder", Kind: domain.ProgressMessage, Text: text}}, nil
 }
 
 func do(h http.Handler, method, path, auth, body string) *httptest.ResponseRecorder {

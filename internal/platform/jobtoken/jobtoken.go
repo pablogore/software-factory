@@ -1,9 +1,9 @@
 // Package jobtoken issues the token a session's agent calls factoryd with:
 // one per session, bound to one job, role and kind (01-diseno.md), and to
 // the round and stage entry the job was in when it was issued. It denies by
-// default: a job token authorizes only submitting its own job's result, so
-// it never works for another job or for an operator's operation, even one
-// added later, nor once the job moved on.
+// default: a job token authorizes only submitting its own job's result and
+// reporting progress on it, so it never works for another job or for an
+// operator's operation, even one added later, nor once the job moved on.
 package jobtoken
 
 import (
@@ -36,8 +36,11 @@ var (
 // Op names what a caller asks to do with a token.
 type Op string
 
-// OpSubmitResult is the only operation a job token allows.
-const OpSubmitResult Op = "worker.submit_result"
+// The operations a job token allows; every other one is refused.
+const (
+	OpSubmitResult Op = "worker.submit_result"
+	OpProgress     Op = "worker.progress"
+)
 
 // Grant is what a token was issued for: the job and role of one session, the
 // kind whose result that role submits, and the job's round and stage entry
@@ -140,7 +143,7 @@ func (t *Tokens) Revoke(token string) {
 }
 
 // Authorize returns token's grant when it allows op on job: only
-// OpSubmitResult on the job it was issued for. The error never says which
+// OpSubmitResult or OpProgress on the job it was issued for. The error never says which
 // job the token belongs to.
 func (t *Tokens) Authorize(token string, op Op, job domain.JobID) (Grant, error) {
 	if token == "" {
@@ -152,7 +155,7 @@ func (t *Tokens) Authorize(token string, op Op, job domain.JobID) (Grant, error)
 	if !ok {
 		return Grant{}, ErrUnknownToken
 	}
-	if op != OpSubmitResult {
+	if op != OpSubmitResult && op != OpProgress {
 		return Grant{}, fmt.Errorf("%w: operation %q", ErrForbidden, op)
 	}
 	if job != g.Job {

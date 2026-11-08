@@ -20,6 +20,11 @@ const (
 	ProgressEnded ProgressKind = "ended"
 )
 
+// MaxProgressText is the most characters a progress message an agent
+// reports with the progress tool may have: enough for a few lines of what it
+// is doing, short enough for a chat message.
+const MaxProgressText = 2000
+
 // Stop reasons of a turn that factoryd ended itself rather than the agent.
 const (
 	// StopCancelled is a turn of a session that was cancelled. It is ACP's

@@ -45,6 +45,13 @@ func TestTokens(t *testing.T) {
 			ctx.Expect(g).ToEqual(builder)
 		})
 
+		s.It("authorize reporting progress on their own job, with its role", func(ctx *specs.Context) {
+			tokens := jobtoken.New()
+			g, err := tokens.Authorize(issue(ctx, tokens, builder), jobtoken.OpProgress, "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(g).ToEqual(builder)
+		})
+
 		s.It("are different on every issue, even for the same grant", func(ctx *specs.Context) {
 			tokens := jobtoken.New()
 			ctx.Expect(issue(ctx, tokens, builder)).To(specs.Not(specs.Equal(issue(ctx, tokens, builder))))
@@ -57,7 +64,13 @@ func TestTokens(t *testing.T) {
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
 			})
 
-			s.It("refuses any operation other than submitting the result, on its own job too", func(ctx *specs.Context) {
+			s.It("refuses progress on another job", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, builder), jobtoken.OpProgress, "j-2")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			})
+
+			s.It("refuses any operation other than submitting the result or reporting progress, on its own job too", func(ctx *specs.Context) {
 				tokens := jobtoken.New()
 				token := issue(ctx, tokens, builder)
 				for _, op := range []jobtoken.Op{"job.approve", "job.merge", "config.apply", ""} {

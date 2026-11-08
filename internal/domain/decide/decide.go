@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pablogore/software-factory/internal/domain"
 )
@@ -157,6 +158,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return actionFailed(job, e)
 	case domain.AttemptFailed:
 		return attemptFailed(e)
+	case domain.AgentProgressed:
+		return agentProgressed(e)
 	case domain.MergeCompleted:
 		if job.Stage == domain.StageMerge {
 			evs := []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageDone, At: e.At}}
@@ -720,6 +723,25 @@ func attemptFailed(e domain.AttemptFailed) ([]domain.Event, error) {
 	}
 	if domain.Blank(e.Reason) {
 		return nil, fmt.Errorf("decide: failed attempt without a reason: %w", domain.ErrMissingField)
+	}
+	return []domain.Event{e}, nil
+}
+
+// agentProgressed records a message an agent reported while it works, in
+// any stage, without moving the job. Only messages are recorded: the rest of
+// what a session reports is not kept in the job's history.
+func agentProgressed(e domain.AgentProgressed) ([]domain.Event, error) {
+	if err := domain.ValidateRoleName(e.Role); err != nil {
+		return nil, fmt.Errorf("decide: progress: %w", err)
+	}
+	if e.Kind != domain.ProgressMessage {
+		return nil, fmt.Errorf("decide: progress: %w: kind %q", domain.ErrInvalidValue, e.Kind)
+	}
+	if domain.Blank(e.Text) {
+		return nil, fmt.Errorf("decide: progress without a message: %w", domain.ErrMissingField)
+	}
+	if n := utf8.RuneCountInString(e.Text); n > domain.MaxProgressText {
+		return nil, fmt.Errorf("decide: progress: %w: message of %d characters, over %d", domain.ErrInvalidValue, n, domain.MaxProgressText)
 	}
 	return []domain.Event{e}, nil
 }
