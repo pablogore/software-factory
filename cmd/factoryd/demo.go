@@ -56,7 +56,8 @@ const newRoundPath = "/demo/jobs/{job}/new-round"
 // every request, each job's stage, round and saved events, so a person can
 // try `factory worker submit-result`, `factory worker run-gate` and an MCP
 // client's tools against it. Every job's worktree is -dir, whose HEAD is
-// recorded as its base, and its checks are -checks, as the gate runs them.
+// recorded as its base, and its checks are -checks, as the gate runs them,
+// within -gate-timeout and keeping -gate-max-output bytes of output.
 // POST newRoundPath, with no token, sends a job back to build in a new round,
 // so a person can see its old token refused.
 func workerDemo(ctx context.Context, args []string, out io.Writer) error {
@@ -64,6 +65,8 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	addr := fs.String("addr", "127.0.0.1:0", "address to listen on")
 	dir := fs.String("dir", ".", "the git repo every job's checks run in, as its worktree; its HEAD is the base the diff is judged against")
 	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
+	timeout := fs.Duration("gate-timeout", wiring.DefaultRunGateTimeout, "how long a run-gate may take before its checks are killed with their process group")
+	maxOutput := fs.Int("gate-max-output", wiring.DefaultRunGateMaxOutput, "the most bytes of the checks' output a run-gate keeps and returns")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -100,14 +103,17 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 	}
-	gate := wiring.Gate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, strings.Fields(*command), nil)
+	if *timeout <= 0 || *maxOutput <= 0 {
+		return fmt.Errorf("%w: -gate-timeout and -gate-max-output must be positive", domain.ErrInvalidValue)
+	}
+	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, strings.Fields(*command), nil, *timeout, *maxOutput)
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *addr)
 	if err != nil {
 		return err
 	}
 	url := "http://" + ln.Addr().String()
 	_, _ = fmt.Fprintf(out, "worker demo on %s; jobs %s wait in build for a builder's result\n", url, joinIDs(demoJobs))
-	_, _ = fmt.Fprintf(out, "run-gate runs `%s` in %s, judging the diff against %s\n", strings.Join(gate.Command, " "), abs, head)
+	_, _ = fmt.Fprintf(out, "run-gate runs `%s` in %s, judging the diff against %s, for at most %s, keeping at most %d bytes of output\n", strings.Join(gate.Command, " "), abs, head, *timeout, *maxOutput)
 	_, _ = fmt.Fprintf(out, "\nexport FACTORY_URL=%s\n", url)
 	for _, id := range demoJobs {
 		_, _ = fmt.Fprintf(out, "# job %s, builder\nexport FACTORY_JOB_ID=%s FACTORY_JOB_TOKEN=%s\n", id, id, issued[id])
