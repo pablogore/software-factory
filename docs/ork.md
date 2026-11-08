@@ -22,7 +22,14 @@ This is a trial. It covers one issue as one slice: no initiatives, no replan.
 The project needs the factory installed as [INSTALL.md](../INSTALL.md) says,
 with a real `factory/checks.sh` that passes on `main`.
 
-## Run it
+## Run it from Claude Code
+
+In a Claude Code session in the project, `/factory-ork run 42`. The session is
+the orchestrator: it starts the run in the background, follows it, asks you in
+the chat whenever Ork needs a decision, and reports the result. `ork ui` is for
+watching. `/factory-ork status` and `/factory-ork stop` do what they say.
+
+## Run it by hand
 
 You need Node 24.20+, git, an authenticated `gh`, and your `claude` login.
 
@@ -32,7 +39,7 @@ ork doctor
 ork validate .ork/workflows/factory-issue.ork.yaml
 ork run factory-issue --input issue=42
 # a repo whose checks live elsewhere:
-ork run factory-issue --input issue=42 --input checks="python3 -m pytest factory/tests -q"
+ork run factory-issue --input issue=42 --input checks="python3 -m unittest discover factory/tests"
 ork ui          # the run in your browser: graph, logs, costs, questions
 ```
 
