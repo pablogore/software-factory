@@ -98,6 +98,10 @@ Spawn every agent with the Agent tool, in the background, with
 approver: their frontmatter sets it. Each agent replies with one line;
 you are notified when it finishes, and you advance that job then. While agents
 run, don't poll and don't wait: end your turn with a one-line status.
+Whenever a job looks idle (no agent running for it, nothing advancing), run
+`factory/bin/job status` before you wait: it prints one line under each job
+waiting on a human, with the question it asked or why it escalated. Tell the
+user about those lines instead of waiting on them.
 
 End every agent prompt with: `If writing your file is refused, stop and say
 "WRITE REFUSED: <the error>". Never report a file you didn't write.` An agent's
@@ -291,7 +295,7 @@ then moves the job to `merged`; stop any agents still running for it.
    `resume` lines you aren't already running. Start its `new` lines only if the
    run isn't paused (see **Pause between issues**). A slice of the same
    initiative follows its `checkpoint` and never pauses.
-4. When nothing is queued or running, print `factory/bin/job summary <ids>`
+4. When nothing is queued or running, print `factory/bin/job status <ids>`
    for the jobs this run touched, then list what waits on a human: PRs to
    review (merge one to approve it, or give feedback with `/factory`) and
    questions waiting on authors.
@@ -377,9 +381,10 @@ new feature, ask.
 - **A question** (status, cost, why a job escalated, what a reviewer said):
   answer from `factory/bin/job summary`, `job.json` and the job's files. Here
   you may read a file in full when the answer is in it.
-- **What needs them**: run `factory/bin/job queue`. For each `wait` line, say
-  what the job is waiting for: the question in `decision.md` for `needs-human`,
-  the question in `intake.md` for `needs-info`.
+- **What needs them**: run `factory/bin/job status`. For each job with a
+  pending line, say what it is waiting for: the line is the question it asked
+  (`needs-info`) or why it escalated (`needs-human`). A `checkpoint` job waits
+  for their OK on the replan.
 - **Feedback on a `needs-human` job**: pass their words verbatim on stdin
   (any new comments on the PR are added to the same file):
 

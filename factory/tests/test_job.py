@@ -174,6 +174,49 @@ class JobTest(JobBase):
             builtins.print = orig
         self.assertTrue(out[0].startswith("resume\t7\t007-test\treplan\t"), out)
 
+    # ---- status -------------------------------------------------------------
+
+    def status(self, *args):
+        out = []
+        import builtins
+        orig = builtins.print
+        builtins.print = lambda *a, **k: out.append(" ".join(map(str, a)))
+        try:
+            self.job.cmd_summary(list(args), show_pending=True)
+        finally:
+            builtins.print = orig
+        return out
+
+    def test_status_shows_the_question_of_a_needs_info_job(self):
+        self.make("needs-info", round_=0, pr=None, info_from="spec")
+        self.write("spec.md", "STATUS: NEEDS-INFO\n\n# S1\n\n## Preguntas\n1. Dark or light by default?\n\n## Valor\nx\n")
+        out = self.status()
+        self.assertTrue(out[1].startswith("007-test"), out)
+        self.assertEqual(out[2], "  -> question: Dark or light by default?")
+
+    def test_status_shows_the_intake_question_without_info_from(self):
+        self.make("needs-info", round_=0, pr=None)
+        self.write("intake.md", "DECISION: NEEDS-INFO\n\n## Questions\n1. Which page?\n2. Which color?\n")
+        self.assertEqual(self.status()[2], "  -> question: Which page? Which color?")
+
+    def test_status_cuts_a_long_escalation_to_one_line(self):
+        self.make("needs-human", round_=3)
+        self.write("decision.md", "ESCALATE\n\n## Why\n" + "word " * 60 + "\nsecond line\n")
+        line = self.status()[2]
+        self.assertTrue(line.startswith("  -> escalated: word word"), line)
+        self.assertTrue(line.endswith("..."), line)
+        self.assertLessEqual(len(line), 120)
+
+    def test_status_prefers_the_ask_for_the_human(self):
+        self.escalated()
+        self.assertEqual(self.status()[2], "  -> escalated: Is the new copy OK?")
+
+    def test_status_shows_no_line_for_a_job_with_nothing_pending(self):
+        self.make("build")
+        out = self.status()
+        self.assertEqual(len(out), 3, out)  # header, the job, total
+        self.assertTrue(out[2].startswith("total "), out)
+
 
 class InitiativeTest(JobBase):
     SLICES = ("# Slices: x\n\n| ID | Tipo | Valor | Estado |\n|----|------|-------|--------|\n"
