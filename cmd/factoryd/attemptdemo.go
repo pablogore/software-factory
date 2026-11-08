@@ -15,6 +15,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/wiring"
 	"github.com/pablogore/software-factory/pkg/worker"
@@ -44,7 +45,7 @@ func attemptDemo(ctx context.Context, out io.Writer) error {
 		return err
 	}
 	tokens := jobtoken.New()
-	api, attempts := wiring.Worker(tokens, store, demoPipelines{}, wiring.SystemClock{})
+	api, attempts := wiring.Worker(tokens, store, demoPipelines{}, nil, gatelock.New(), wiring.SystemClock{})
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return err

@@ -43,6 +43,9 @@ type Gate struct {
 	// a job can't loosen its own gate.
 	RepoConfig repoConfig
 	Snapshots  snapshots
+	// Locks is the job's lock Run runs the checks under, the one a
+	// builder's run_gate takes too, so the two never share a worktree.
+	Locks locks
 }
 
 // Run runs the checks in the worktree of job id, which must be at the gate,
@@ -57,17 +60,21 @@ type Gate struct {
 // stage, or back to build in a new round, or to triage in the last one. When
 // the checks cannot be run, or the job changed while they ran, nothing is
 // saved. A job with no base recorded fails the gate with that reason: its
-// diff can't be judged, and no ref stands in for the commit.
+// diff can't be judged, and no ref stands in for the commit. The checks run
+// under the job's lock in Locks: a builder's run_gate run holding it is
+// cancelled, and Run starts once its processes are gone.
 func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error) {
-	if len(g.Command) == 0 {
-		return nil, fmt.Errorf("gate: %w: checks command", domain.ErrMissingField)
+	if err := g.configured(); err != nil {
+		return nil, err
 	}
-	if g.Bases == nil {
-		return nil, fmt.Errorf("gate: %w: bases", domain.ErrMissingField)
+	if g.Locks == nil {
+		return nil, fmt.Errorf("gate: %w: locks", domain.ErrMissingField)
 	}
-	if (len(g.CountCommand) > 0 || g.RepoConfig != nil) && g.Snapshots == nil {
-		return nil, fmt.Errorf("gate: %w: snapshots for the test count", domain.ErrMissingField)
+	release, err := g.Locks.Acquire(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("gate: %w", err)
 	}
+	defer release()
 	job, v, err := g.Jobs.Load(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("gate: %w", err)
@@ -79,34 +86,9 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	if err != nil {
 		return nil, fmt.Errorf("gate: %w", err)
 	}
-	wt, err := g.Worktrees.Prepare(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("gate: worktree of %q: %w", id, err)
-	}
-	violations, base, err := g.diffRules(ctx, id, wt.Path, p)
+	run, err := g.check(ctx, id, p)
 	if err != nil {
 		return nil, err
-	}
-	count, err := g.countCommand(ctx, wt.Path, base)
-	if err != nil {
-		return nil, fmt.Errorf("gate: test count command of %q: %w", id, err)
-	}
-	run, err := g.Checks.Run(ctx, wt.Path, g.Command)
-	if err != nil {
-		return nil, fmt.Errorf("gate: checks of %q: %w", id, err)
-	}
-	run.Violations = append(run.Violations, violations...)
-	switch {
-	case len(count) == 0:
-		run.Notes = append(run.Notes, NoCountCommand)
-	case base == "":
-		run.Notes = append(run.Notes, NoCountBase)
-	default:
-		dropped, err := g.testCount(ctx, count, wt.Path, base)
-		if err != nil {
-			return nil, fmt.Errorf("gate: test count of %q: %w", id, err)
-		}
-		run.Violations = append(run.Violations, dropped...)
 	}
 	var ev domain.Event = domain.GatePassed{Job: id, Run: run, At: g.Clock.Now()}
 	if !run.Passed() {
@@ -117,6 +99,75 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 		return nil, fmt.Errorf("gate: %w", err)
 	}
 	return evs, nil
+}
+
+// Check runs, in the worktree of job id, the same checks and diff rules Run
+// judges the job by, in whatever stage it is, and returns the run without
+// deciding or saving anything: what a builder asks for before it hands in
+// its result. Only the gate's configuration says what runs; nothing a caller
+// passes does. It takes no lock: its caller, run_gate, holds the job's.
+func (g *Gate) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error) {
+	if err := g.configured(); err != nil {
+		return domain.ChecksRun{}, err
+	}
+	job, _, err := g.Jobs.Load(ctx, id)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: %w", err)
+	}
+	p, err := g.Pipelines.Pipeline(ctx, job.Pipeline)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: %w", err)
+	}
+	return g.check(ctx, id, p)
+}
+
+func (g *Gate) configured() error {
+	if len(g.Command) == 0 {
+		return fmt.Errorf("gate: %w: checks command", domain.ErrMissingField)
+	}
+	if g.Bases == nil {
+		return fmt.Errorf("gate: %w: bases", domain.ErrMissingField)
+	}
+	if (len(g.CountCommand) > 0 || g.RepoConfig != nil) && g.Snapshots == nil {
+		return fmt.Errorf("gate: %w: snapshots for the test count", domain.ErrMissingField)
+	}
+	return nil
+}
+
+// check runs the checks, the diff rules and the test count in the worktree
+// of job id, which follows p, and returns the run with their violations and
+// notes on it.
+func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (domain.ChecksRun, error) {
+	wt, err := g.Worktrees.Prepare(ctx, id)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: worktree of %q: %w", id, err)
+	}
+	violations, base, err := g.diffRules(ctx, id, wt.Path, p)
+	if err != nil {
+		return domain.ChecksRun{}, err
+	}
+	count, err := g.countCommand(ctx, wt.Path, base)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: test count command of %q: %w", id, err)
+	}
+	run, err := g.Checks.Run(ctx, wt.Path, g.Command)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("gate: checks of %q: %w", id, err)
+	}
+	run.Violations = append(run.Violations, violations...)
+	switch {
+	case len(count) == 0:
+		run.Notes = append(run.Notes, NoCountCommand)
+	case base == "":
+		run.Notes = append(run.Notes, NoCountBase)
+	default:
+		dropped, err := g.testCount(ctx, count, wt.Path, base)
+		if err != nil {
+			return domain.ChecksRun{}, fmt.Errorf("gate: test count of %q: %w", id, err)
+		}
+		run.Violations = append(run.Violations, dropped...)
+	}
+	return run, nil
 }
 
 // countCommand is the operator's count command, or else the one the repo

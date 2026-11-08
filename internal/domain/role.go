@@ -23,7 +23,8 @@ type Role struct {
 	// under it, any other is a path.Match pattern. None means no limit.
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
 	// Tools are the only worker tools the role's sessions may call; none
-	// means the ones every role has, submit_result and progress.
+	// means submit_result and progress. run_gate must be listed, and only a
+	// build role's sessions may call it.
 	Tools []string `json:"tools,omitempty"`
 }
 

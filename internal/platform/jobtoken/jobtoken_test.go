@@ -87,6 +87,44 @@ func TestTokens(t *testing.T) {
 			})
 		})
 
+		s.When("asked to run the job's checks", func(s *specs.Spec) {
+			gating := jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: []string{"submit_result", "progress", "run_gate"}, Round: 1}
+
+			s.It("authorize a build role that lists run_gate", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				g, err := tokens.Authorize(issue(ctx, tokens, gating), jobtoken.OpRunGate, "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(g).ToEqual(gating)
+			})
+
+			s.It("refuse a role without a tools list, as run_gate is not one of the tools every role has", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, builder), jobtoken.OpRunGate, "j-1")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+				ctx.Expect(err.Error()).ToEqual(`job token not allowed: role "builder" may not use tool "run_gate"`)
+			})
+
+			s.It("refuse a role whose tools do not list run_gate", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, submitsOnly), jobtoken.OpRunGate, "j-1")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			})
+
+			s.It("refuse a role of another kind, even one that lists run_gate", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				reviewer := jobtoken.Grant{Job: "j-1", Role: "reviewer-code", Kind: domain.KindReview, Tools: []string{"run_gate"}, Round: 1}
+				_, err := tokens.Authorize(issue(ctx, tokens, reviewer), jobtoken.OpRunGate, "j-1")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+				ctx.Expect(err.Error()).ToEqual(`job token not allowed: role "reviewer-code" may not use tool "run_gate"`)
+			})
+
+			s.It("refuse another job's checks", func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				_, err := tokens.Authorize(issue(ctx, tokens, gating), jobtoken.OpRunGate, "j-2")
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrForbidden))
+			})
+		})
+
 		s.It("are different on every issue, even for the same grant", func(ctx *specs.Context) {
 			tokens := jobtoken.New()
 			ctx.Expect(issue(ctx, tokens, builder)).To(specs.Not(specs.Equal(issue(ctx, tokens, builder))))

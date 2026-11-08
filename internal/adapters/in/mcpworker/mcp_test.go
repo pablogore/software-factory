@@ -68,7 +68,7 @@ func progressTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (strin
 
 func TestMCP(t *testing.T) {
 	specs.Describe(t, "the worker MCP server", func(s *specs.Spec) {
-		s.It("offers progress and submit_result as its only tools", func(ctx *specs.Context) {
+		s.It("offers progress, run_gate and submit_result as its only tools", func(ctx *specs.Context) {
 			cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer tok")
 			res, err := cs.ListTools(context.Background(), nil)
 			ctx.Expect(err).To(specs.BeNil())
@@ -76,7 +76,7 @@ func TestMCP(t *testing.T) {
 			for i, tool := range res.Tools {
 				names[i] = tool.Name
 			}
-			ctx.Expect(names).ToEqual([]string{"progress", "submit_result"})
+			ctx.Expect(names).ToEqual([]string{"progress", "run_gate", "submit_result"})
 		})
 
 		s.It("hands the bearer token, the job of its path and the arguments to the submitter and names the saved events", func(ctx *specs.Context) {
@@ -128,6 +128,42 @@ func TestMCP(t *testing.T) {
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(sub.calls).To(specs.BeEmpty())
 			ctx.Expect(sub.progress).To(specs.BeEmpty())
+		})
+
+		s.When("a builder runs the job's checks", func(s *specs.Spec) {
+			s.It("hands the bearer token and the job of its path to the submitter and answers the report", func(ctx *specs.Context) {
+				sub := &submitter{run: gateRun}
+				cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+				res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolRunGate, Arguments: map[string]any{}})
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(res.IsError).ToEqual(false)
+				ctx.Expect(res.Content[0].(*mcp.TextContent).Text).ToEqual(gateReport)
+				var g mcpworker.GateRun
+				data, err := json.Marshal(res.StructuredContent)
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(json.Unmarshal(data, &g)).To(specs.BeNil())
+				ctx.Expect(g).ToEqual(mcpworker.GateRun{Job: "j-1", Passed: false, Run: gateRun, Report: gateReport})
+				ctx.Expect(sub.gates).ToEqual([]call{{token: "tok", job: "j-1"}})
+			})
+
+			s.It("never reads the arguments, so nothing an agent sends reaches the checks", func(ctx *specs.Context) {
+				sub := &submitter{run: gateRun}
+				cs := connect(ctx, mcpworker.Handler(sub), "j-1", "Bearer tok")
+				args := map[string]any{"command": []string{"sh", "-c", "exit 0"}, "job": "j-2"}
+				res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolRunGate, Arguments: args})
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(res.Content[0].(*mcp.TextContent).Text).ToEqual(gateReport)
+				ctx.Expect(sub.gates).ToEqual([]call{{token: "tok", job: "j-1"}})
+			})
+
+			s.It("answers a role that may not run the checks with a tool error worded as the HTTP route words it", func(ctx *specs.Context) {
+				err := fmt.Errorf("worker: run gate: %w: role %q may not use tool %q", jobtoken.ErrForbidden, "reviewer-code", "run_gate")
+				cs := connect(ctx, mcpworker.Handler(&submitter{err: err}), "j-1", "Bearer tok")
+				res, callErr := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: mcpworker.ToolRunGate, Arguments: map[string]any{}})
+				ctx.Expect(callErr).To(specs.BeNil())
+				ctx.Expect(res.IsError).ToEqual(true)
+				ctx.Expect(res.Content[0].(*mcp.TextContent).Text).ToEqual("refused (403): " + err.Error())
+			})
 		})
 
 		s.When("an agent reports progress", func(s *specs.Spec) {

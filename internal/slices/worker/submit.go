@@ -3,7 +3,8 @@
 // and turns it into the job's ResultSubmitted, the same for the MCP tool
 // submit_result and for `factory worker submit-result` (01-diseno.md).
 // Progress records what the agent says it is doing, for the MCP tool
-// progress, as an event of the job.
+// progress, as an event of the job. RunGate runs the job's checks for its
+// builder, for the MCP tool run_gate and `factory worker run-gate`.
 package worker
 
 import (
@@ -31,6 +32,10 @@ type Submitter struct {
 	Jobs      jobs
 	Pipelines pipelines
 	Clock     ports.Clock
+	// Gate runs a job's checks for RunGate, under Locks, which the gate
+	// itself shares.
+	Gate  gate
+	Locks locks
 
 	// mu runs one submission at a time, so a token is revoked after its
 	// result is saved before another submission can check it.
@@ -77,7 +82,10 @@ func (s *Submitter) record(token string, err error) {
 // decode or validate wraps domain.ErrMissingField or domain.ErrInvalidValue,
 // naming what is wrong; one the job's stage does not take is Decide's error.
 // In every case nothing is saved, and once the token is authorized its
-// Outcome keeps the error for Take.
+// Outcome keeps the error for Take. A valid result first cancels the job's
+// run_gate run, if one is running, and is saved only once that run's
+// process group is gone, so the gate that follows never shares the
+// worktree with it; the cancelled run answers ErrPreempted, not a failure.
 func (s *Submitter) Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,6 +120,12 @@ func (s *Submitter) submit(ctx context.Context, g jobtoken.Grant, job domain.Job
 	}
 	p, err := s.Pipelines.Pipeline(ctx, j.Pipeline)
 	if err != nil {
+		return nil, fmt.Errorf("worker: submit result: %w", err)
+	}
+	if s.Locks == nil {
+		return nil, errNoLocks
+	}
+	if err := s.Locks.Preempt(ctx, job); err != nil {
 		return nil, fmt.Errorf("worker: submit result: %w", err)
 	}
 	ev := domain.ResultSubmitted{Job: job, Role: g.Role, Result: r, At: s.Clock.Now()}

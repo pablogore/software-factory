@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -24,6 +25,9 @@ const ToolSubmitResult = "submit_result"
 // ToolProgress is the MCP tool an agent of any role reports what it is doing
 // with, while it works.
 const ToolProgress = "progress"
+
+// ToolRunGate is the MCP tool a builder runs the job's checks with.
+const ToolRunGate = "run_gate"
 
 // resultSchema takes any object: the result is checked by the Submitter
 // against the token's kind, so a bad one gets the same error as by the CLI.
@@ -47,8 +51,16 @@ var progressSchema = map[string]any{
 	"additionalProperties": false,
 }
 
+// gateSchema takes no arguments: the checks are the job's, and whatever an
+// agent sends is never read.
+var gateSchema = map[string]any{
+	"type":                 "object",
+	"properties":           map[string]any{},
+	"additionalProperties": false,
+}
+
 // mcpHandler serves, at MCPPath, an MCP server whose only tools are
-// submit_result and progress. It is stateless: every request names the job by its path
+// submit_result, progress and run_gate. It is stateless: every request names the job by its path
 // and brings its token, so no session outlives a request or carries a job
 // or a token from one request to the next.
 func mcpHandler(s Submitter) http.Handler {
@@ -76,6 +88,15 @@ func mcpServer(s Submitter, job domain.JobID) *mcp.Server {
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return progressTool(ctx, s, job, req), nil
 	})
+	srv.AddTool(&mcp.Tool{
+		Name: ToolRunGate,
+		Description: "Runs the job's deterministic checks in your worktree, as the gate will after you hand in your result, as `factory worker run-gate` does, " +
+			"and returns whether they pass, their output and the rules the diff breaks. It takes no arguments: the checks are the job's and you can't change them. " +
+			"It saves nothing on the job; call it as often as helps before submit_result.",
+		InputSchema: gateSchema,
+	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return gateTool(ctx, s, job, req), nil
+	})
 	return srv
 }
 
@@ -102,6 +123,45 @@ func progressTool(ctx context.Context, s Submitter, job domain.JobID, req *mcp.C
 		Content:           []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("progress recorded for job %s: %s", a.Job, strings.Join(a.Events, ", "))}},
 		StructuredContent: a,
 	}
+}
+
+// gateTool runs job's checks. The call's arguments are never read, so
+// nothing an agent sends changes what runs.
+func gateTool(ctx context.Context, s Submitter, job domain.JobID, req *mcp.CallToolRequest) *mcp.CallToolResult {
+	run, err := s.RunGate(ctx, bearer(header(req)), job)
+	if err != nil {
+		return toolError(refusal(err))
+	}
+	g := gateRun(job, run)
+	return &mcp.CallToolResult{
+		Content:           []mcp.Content{&mcp.TextContent{Text: g.Report}},
+		StructuredContent: g,
+	}
+}
+
+func gateRun(job domain.JobID, run domain.ChecksRun) GateRun {
+	return GateRun{Job: job, Passed: run.Passed(), Run: run, Report: report(job, run)}
+}
+
+// report is how a run of job's checks reads to an agent.
+func report(job domain.JobID, run domain.ChecksRun) string {
+	verdict := "pass"
+	if !run.Passed() {
+		verdict = "fail"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "checks %s for job %s: `%s` exited %d in %s\n--- output ---\n%s", verdict, job, run.Command, run.ExitCode, run.Duration.Round(time.Millisecond), run.Output)
+	if run.Output != "" && !strings.HasSuffix(run.Output, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("--- end of output ---\n")
+	for _, v := range run.Violations {
+		fmt.Fprintf(&b, "rule broken: %s\n", v)
+	}
+	for _, n := range run.Notes {
+		fmt.Fprintf(&b, "note: %s\n", n)
+	}
+	return b.String()
 }
 
 // header is the HTTP header req came with, or nil.

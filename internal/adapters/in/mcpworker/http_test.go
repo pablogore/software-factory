@@ -15,16 +15,20 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/domain/decide"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
 // submitter records its calls and answers with err, or with one
-// StageEntered for a result and one AgentProgressed for progress.
+// StageEntered for a result, one AgentProgressed for progress and run for
+// the checks.
 type submitter struct {
 	err      error
 	calls    []call
 	progress []call
+	gates    []call
+	run      domain.ChecksRun
 }
 
 type call struct {
@@ -48,6 +52,20 @@ func (s *submitter) Progress(_ context.Context, token string, job domain.JobID, 
 	}
 	return []domain.Event{domain.AgentProgressed{Job: job, Role: "builder", Kind: domain.ProgressMessage, Text: text}}, nil
 }
+
+func (s *submitter) RunGate(_ context.Context, token string, job domain.JobID) (domain.ChecksRun, error) {
+	s.gates = append(s.gates, call{token: token, job: job})
+	if s.err != nil {
+		return domain.ChecksRun{}, s.err
+	}
+	return s.run, nil
+}
+
+// gateRun is a failing run of the checks, with a rule the diff broke.
+var gateRun = domain.ChecksRun{Command: "make check", ExitCode: 2, Duration: 1500 * time.Millisecond, Output: "--- FAIL: TestSave", Violations: []string{"Makefile is protected"}, Notes: []string{"no test count"}}
+
+// gateReport is gateRun on j-1 as the agent reads it.
+const gateReport = "checks fail for job j-1: `make check` exited 2 in 1.5s\n--- output ---\n--- FAIL: TestSave\n--- end of output ---\nrule broken: Makefile is protected\nnote: no test count\n"
 
 func do(h http.Handler, method, path, auth, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequestWithContext(context.Background(), method, path, strings.NewReader(body))
@@ -100,6 +118,8 @@ func TestHandler(t *testing.T) {
 			{"a job that does not exist", fmt.Errorf("w: %w", ports.ErrJobNotFound), http.StatusNotFound},
 			{"a result the stage does not take", fmt.Errorf("w: %w", decide.ErrIllegalTransition), http.StatusConflict},
 			{"a job saved meanwhile", fmt.Errorf("w: %w", ports.ErrVersionConflict), http.StatusConflict},
+			{"checks already running for the job", fmt.Errorf("w: run gate: %w: the checks of job %q are running", domain.ErrBusy, "j-1"), http.StatusConflict},
+			{"checks cancelled by the job's result", fmt.Errorf("w: run gate: %w", gatelock.ErrPreempted), http.StatusConflict},
 		}
 		specs.Table(s, rows, func(r statusRow) string { return fmt.Sprintf("answers %d with the error to %s", r.code, r.name) },
 			func(ctx *specs.Context, r statusRow) {
@@ -121,6 +141,38 @@ func TestHandler(t *testing.T) {
 			ctx.Expect(sub.calls).To(specs.BeEmpty())
 		})
 
+		s.When("a builder runs the job's checks", func(s *specs.Spec) {
+			s.It("hands the bearer token and the job to the submitter and answers the run, whether it passes and its report", func(ctx *specs.Context) {
+				sub := &submitter{run: gateRun}
+				rec := do(mcpworker.Handler(sub), http.MethodPost, "/worker/jobs/j-1/gate", "Bearer tok", "")
+				ctx.Expect(rec.Code).ToEqual(http.StatusOK)
+				ctx.Expect(sub.gates).ToEqual([]call{{token: "tok", job: "j-1"}})
+				var g mcpworker.GateRun
+				ctx.Expect(json.Unmarshal(rec.Body.Bytes(), &g)).To(specs.BeNil())
+				ctx.Expect(g).ToEqual(mcpworker.GateRun{Job: "j-1", Passed: false, Run: gateRun, Report: gateReport})
+			})
+
+			s.It("never reads the body, so nothing in it reaches the checks", func(ctx *specs.Context) {
+				sub := &submitter{run: gateRun}
+				rec := do(mcpworker.Handler(sub), http.MethodPost, "/worker/jobs/j-1/gate", "Bearer tok", `{"command":["sh","-c","exit 0"],"skip":["test count"]}`)
+				ctx.Expect(rec.Code).ToEqual(http.StatusOK)
+				ctx.Expect(sub.gates).ToEqual([]call{{token: "tok", job: "j-1"}})
+			})
+
+			s.It("answers a role that may not run the checks with 403 and the error", func(ctx *specs.Context) {
+				err := fmt.Errorf("worker: run gate: %w: role %q may not use tool %q", jobtoken.ErrForbidden, "reviewer-code", "run_gate")
+				rec := do(mcpworker.Handler(&submitter{err: err}), http.MethodPost, "/worker/jobs/j-1/gate", "Bearer tok", "")
+				ctx.Expect(rec.Code).ToEqual(http.StatusForbidden)
+				ctx.Expect(refusal(ctx, rec)).ToEqual(err.Error())
+			})
+
+			s.It("hides a run that could not be made behind a 500", func(ctx *specs.Context) {
+				rec := do(mcpworker.Handler(&submitter{err: fmt.Errorf("gate: checks of %q: exec: make: not found", "j-1")}), http.MethodPost, "/worker/jobs/j-1/gate", "Bearer tok", "")
+				ctx.Expect(rec.Code).ToEqual(http.StatusInternalServerError)
+				ctx.Expect(refusal(ctx, rec)).ToEqual("internal error")
+			})
+		})
+
 		s.It("refuses every other operation with a job token, without submitting anything", func(ctx *specs.Context) {
 			sub := &submitter{}
 			h := mcpworker.Handler(sub)
@@ -130,12 +182,14 @@ func TestHandler(t *testing.T) {
 				{http.MethodPost, "/ops/job.approve"},
 				{http.MethodGet, "/jobs"},
 				{http.MethodPost, "/worker/jobs/j-1/result/extra"},
+				{http.MethodGet, "/worker/jobs/j-1/gate"},
 			} {
 				rec := do(h, r.method, r.path, "Bearer tok", `{}`)
 				ctx.Expect(rec.Code).ToEqual(http.StatusForbidden)
 				ctx.Expect(refusal(ctx, rec)).To(specs.Contain("only takes a job's result"))
 			}
 			ctx.Expect(sub.calls).To(specs.BeEmpty())
+			ctx.Expect(sub.gates).To(specs.BeEmpty())
 		})
 	})
 }

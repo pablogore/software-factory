@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/wiring"
 )
@@ -31,7 +33,7 @@ func (onePipeline) Pipeline(_ context.Context, name string) (domain.Pipeline, er
 		return domain.Pipeline{}, fmt.Errorf("no pipeline %q", name)
 	}
 	return domain.Pipeline{Name: "default", Stages: []domain.Stage{
-		{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder", "only-submits"}},
+		{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder", "only-submits", "no-tools"}},
 		{Name: "review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "build"},
 	}}, nil
 }
@@ -47,11 +49,32 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // workerWorld is factoryd's worker API over an in-memory store with job j-1
-// in build, served on a local test server.
+// in build, whose checks gate runs, served on a local test server.
 type workerWorld struct {
 	store  *memstore.Store
 	tokens *jobtoken.Tokens
+	gate   *gate
 	url    string
+}
+
+// gate answers every check with a passing run and records the jobs it
+// checked.
+type gate struct {
+	mu   sync.Mutex
+	jobs []domain.JobID
+}
+
+func (g *gate) Check(_ context.Context, id domain.JobID) (domain.ChecksRun, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.jobs = append(g.jobs, id)
+	return domain.ChecksRun{Command: "make check", Output: "ok\n"}, nil
+}
+
+func (g *gate) checked() []domain.JobID {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]domain.JobID{}, g.jobs...)
 }
 
 func newWorkerWorld(ctx *specs.Context) workerWorld {
@@ -59,9 +82,10 @@ func newWorkerWorld(ctx *specs.Context) workerWorld {
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 	tokens := jobtoken.New()
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, fixedClock{}))
+	g := &gate{}
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, g, gatelock.New(), fixedClock{}))
 	ctx.Cleanup(srv.Close)
-	return workerWorld{store: store, tokens: tokens, url: srv.URL}
+	return workerWorld{store: store, tokens: tokens, gate: g, url: srv.URL}
 }
 
 // session issues a token for a session of role, loaded from dir, on j-1 and
@@ -115,6 +139,14 @@ func onlySubmits(ctx *specs.Context) string {
 	return dir
 }
 
+// noTools is a configuration root with a build role that lists no tools.
+func noTools(ctx *specs.Context) string {
+	dir := configRoot(ctx, "claude", "opus")
+	write(ctx, dir, "roles/no-tools.md", "Build the spec.\n")
+	write(ctx, dir, "roles/no-tools.yaml", "name: no-tools\nkind: build\nprompt: roles/no-tools.md\nmode: blocking\nagent: claude\nmodel: opus\n")
+	return dir
+}
+
 func TestWorkerTools(t *testing.T) {
 	specs.Describe(t, "the worker tools a role may call", func(s *specs.Spec) {
 		s.When("a role's tools do not list the tool it calls", func(s *specs.Spec) {
@@ -157,7 +189,19 @@ func TestWorkerTools(t *testing.T) {
 			})
 		})
 
-		s.It("lets a role without a tools list report progress and submit its result, as the repo's builder does", func(ctx *specs.Context) {
+		s.It("lets a role without a tools list report progress and submit its result", func(ctx *specs.Context) {
+			w := newWorkerWorld(ctx)
+			cs := w.session(ctx, noTools(ctx), "no-tools")
+
+			_, progressErr := call(ctx, cs, mcpworker.ToolProgress, `{"message":"running the tests"}`)
+			_, submitErr := call(ctx, cs, mcpworker.ToolSubmitResult, `{"status":"READY"}`)
+
+			ctx.Expect(progressErr).ToEqual(false)
+			ctx.Expect(submitErr).ToEqual(false)
+			ctx.Expect(w.feed(ctx)).ToEqual([]string{"AgentProgressed", "StageEntered"})
+		})
+
+		s.It("lets the repo's builder report progress and submit its result", func(ctx *specs.Context) {
 			w := newWorkerWorld(ctx)
 			cs := w.session(ctx, repoRoot, "builder")
 
@@ -167,6 +211,52 @@ func TestWorkerTools(t *testing.T) {
 			ctx.Expect(progressErr).ToEqual(false)
 			ctx.Expect(submitErr).ToEqual(false)
 			ctx.Expect(w.feed(ctx)).ToEqual([]string{"AgentProgressed", "StageEntered"})
+		})
+
+		s.When("a session runs the job's checks", func(s *specs.Spec) {
+			s.It("runs them for the repo's builder and answers their report", func(ctx *specs.Context) {
+				w := newWorkerWorld(ctx)
+				cs := w.session(ctx, repoRoot, "builder")
+
+				text, isErr := call(ctx, cs, mcpworker.ToolRunGate, `{}`)
+
+				ctx.Expect(isErr).ToEqual(false)
+				ctx.Expect(text).To(specs.StartWith("checks pass for job j-1: `make check` exited 0"))
+				ctx.Expect(w.gate.checked()).ToEqual([]domain.JobID{"j-1"})
+				ctx.Expect(w.feed(ctx)).To(specs.BeEmpty())
+			})
+
+			for _, r := range []struct{ name, role string }{
+				{"the repo's reviewer-code, which lists no tools", "reviewer-code"},
+				{"the repo's approver, which lists no tools", "approver"},
+			} {
+				s.It("refuses "+r.name+", running no check", func(ctx *specs.Context) {
+					w := newWorkerWorld(ctx)
+					cs := w.session(ctx, repoRoot, r.role)
+
+					text, isErr := call(ctx, cs, mcpworker.ToolRunGate, `{}`)
+
+					ctx.Expect(isErr).ToEqual(true)
+					ctx.Expect(text).ToEqual(`refused (403): worker: run gate: job token not allowed: role "` + r.role + `" may not use tool "run_gate"`)
+					ctx.Expect(w.gate.checked()).To(specs.BeEmpty())
+				})
+			}
+
+			s.It("refuses a build role without a tools list, running no check", func(ctx *specs.Context) {
+				w := newWorkerWorld(ctx)
+				cs := w.session(ctx, noTools(ctx), "no-tools")
+				_, isErr := call(ctx, cs, mcpworker.ToolRunGate, `{}`)
+				ctx.Expect(isErr).ToEqual(true)
+				ctx.Expect(w.gate.checked()).To(specs.BeEmpty())
+			})
+
+			s.It("refuses a role whose tools do not list run_gate, running no check", func(ctx *specs.Context) {
+				w := newWorkerWorld(ctx)
+				cs := w.session(ctx, onlySubmits(ctx), "only-submits")
+				_, isErr := call(ctx, cs, mcpworker.ToolRunGate, `{}`)
+				ctx.Expect(isErr).ToEqual(true)
+				ctx.Expect(w.gate.checked()).To(specs.BeEmpty())
+			})
 		})
 
 		s.It("refuses progress arguments over 1 MiB and records nothing", func(ctx *specs.Context) {

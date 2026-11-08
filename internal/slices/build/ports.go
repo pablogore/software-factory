@@ -63,3 +63,10 @@ type snapshots interface {
 type repoConfig interface {
 	CountCommand(ctx context.Context, dir, base string) ([]string, error)
 }
+
+// locks is the per-job lock a job's checks run under, shared with a
+// builder's run_gate: the gate takes it with Acquire, which cancels a
+// run_gate run and waits until it stopped.
+type locks interface {
+	Acquire(ctx context.Context, job domain.JobID) (func(), error)
+}

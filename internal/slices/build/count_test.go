@@ -276,6 +276,21 @@ func TestTestCount(t *testing.T) {
 			ctx.Expect(store.stage(ctx)).ToEqual("build")
 		})
 
+		s.It("fails with the runner's note when it cut the count's output, which can't be counted whole", func(ctx *specs.Context) {
+			cut := listed("TestA\nok  \texample.com/a\t0.1s\n")
+			cut.Notes = []string{"output truncated: kept the first 30 bytes, dropped the other 900"}
+			c := &counter{checks: passing, counts: map[string]domain.ChecksRun{
+				"/wt/j-1": cut,
+				snap:      listed(baseList),
+			}}
+			g, store := newCountGate(ctx, c, &snapshots{})
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(store.last(ctx).Violations).ToEqual([]string{"the test count command `go test -list . ./...` can't be counted at the job's head: output truncated: kept the first 30 bytes, dropped the other 900"})
+		})
+
 		s.It("fails with the reason when the count's output can't be read", func(ctx *specs.Context) {
 			c := &counter{checks: passing, counts: map[string]domain.ChecksRun{
 				"/wt/j-1": listed("TestA\n"),

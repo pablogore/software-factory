@@ -11,6 +11,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/slices/build"
 )
@@ -118,7 +119,7 @@ func newGateDiff(ctx *specs.Context, stage string, round int, c *checks, d *diff
 	job := domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: stage, Round: round}
 	ctx.Expect(store.Create(context.Background(), job)).To(specs.BeNil())
 	ctx.Expect(store.RecordBase(context.Background(), job.ID, recorded)).To(specs.BeNil())
-	return &build.Gate{Jobs: store, Pipelines: pipelines{}, Worktrees: worktrees{}, Checks: c, Bases: store, Diffs: d, Clock: stopped{}, Command: build.DefaultCommand}, store
+	return &build.Gate{Jobs: store, Pipelines: pipelines{}, Worktrees: worktrees{}, Checks: c, Bases: store, Diffs: d, Clock: stopped{}, Command: build.DefaultCommand, Locks: gatelock.New()}, store
 }
 
 func names(evs []domain.Event) []string {
