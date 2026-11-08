@@ -56,6 +56,15 @@ func TestValidateRoles(t *testing.T) {
 			ctx.Expect(err.Error()).ToEqual(loadErr.Error())
 		})
 
+		s.It("fails on a root with no role files, naming the root", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+
+			_, err := wiring.ValidateRoles(dir)
+
+			ctx.Expect(err).To(specs.MatchError(wiring.ErrNoRoles))
+			ctx.Expect(err.Error()).To(specs.Contain("no roles/*.yaml in " + dir))
+		})
+
 		s.It("fails on a role file named for another role", func(ctx *specs.Context) {
 			dir := configRoot(ctx, "claude", "opus")
 			write(ctx, dir, "roles/approver.yaml", "name: builder\nkind: build\nprompt: roles/builder.md\nmode: blocking\nagent: claude\nmodel: opus\n")

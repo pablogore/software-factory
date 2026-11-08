@@ -1,6 +1,7 @@
 package wiring
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/pablogore/software-factory/internal/domain"
 )
+
+// ErrNoRoles means a configuration root has no role files at all.
+var ErrNoRoles = errors.New("no roles configured")
 
 // ValidateRoles loads every role in dir's roles/ as a session would, so a
 // role that fails to load fails here with the same error. What loads but is
@@ -17,6 +21,10 @@ func ValidateRoles(dir string) ([]string, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "roles", "*.yaml"))
 	if err != nil {
 		return nil, err
+	}
+	// A mistyped root has no roles to fail on, so it would pass as valid.
+	if len(files) == 0 {
+		return nil, fmt.Errorf("%w: no roles/*.yaml in %s", ErrNoRoles, dir)
 	}
 	sort.Strings(files)
 	var roles []domain.Role

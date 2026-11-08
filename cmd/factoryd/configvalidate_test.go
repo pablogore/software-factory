@@ -10,6 +10,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/configyaml"
+	"github.com/pablogore/software-factory/internal/wiring"
 )
 
 // configValidateRoot is a configuration root with a builder on opus and a
@@ -51,6 +52,17 @@ func TestConfigValidate(t *testing.T) {
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(out.String()).To(specs.Not(specs.Contain("warning")))
+		})
+
+		s.It("fails on a root with no roles instead of calling it valid", func(ctx *specs.Context) {
+			dir := filepath.Join(ctx.Testing().TempDir(), "no-existe")
+			var out bytes.Buffer
+
+			err := configValidate([]string{"--config", dir}, &out)
+
+			ctx.Expect(err).To(specs.MatchError(wiring.ErrNoRoles))
+			ctx.Expect(err.Error()).To(specs.Contain(dir))
+			ctx.Expect(out.String()).To(specs.BeEmpty())
 		})
 
 		s.It("fails with role-demo's error when a role names an agent that is not configured", func(ctx *specs.Context) {
