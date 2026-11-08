@@ -366,6 +366,26 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 		})
 
+		s.It("reads a file the base commit may not have, and says when it has none", func(ctx *specs.Context) {
+			dir, fork := newRepoWith(ctx, map[string]string{".factory/gates.yaml": "count_command: go test ./...\n"})
+			write(ctx, dir, ".factory/gates.yaml", "count_command: true\n")
+			write(ctx, dir, "new.txt", "new\n")
+			must(ctx, dir, "add", ".")
+			must(ctx, dir, "commit", "-q", "-m", "job")
+
+			gates, ok, err := gitdiff.Differ{}.AtBaseIfAny(bg, filepath.Join(dir, ".factory"), fork, ".factory/gates.yaml")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(ok).To(specs.BeTrue())
+			ctx.Expect(gates).ToEqual("count_command: go test ./...\n")
+			_, ok, err = gitdiff.Differ{}.AtBaseIfAny(bg, dir, fork, "new.txt")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(ok).To(specs.BeFalse())
+			_, _, err = gitdiff.Differ{}.AtBaseIfAny(bg, dir, fork, ".factory")
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			_, _, err = gitdiff.Differ{}.AtBaseIfAny(bg, dir, "HEAD", "README.md")
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+		})
+
 		s.It("refuses a ref as the base to read a file at", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 

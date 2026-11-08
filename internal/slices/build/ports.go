@@ -57,6 +57,13 @@ type snapshots interface {
 	Remove(ctx context.Context, dir, path string) error
 }
 
+// repoConfig is the test count command the repo configures at base, the
+// full object name of a commit, read from the repo dir is in; none when it
+// configures none.
+type repoConfig interface {
+	CountCommand(ctx context.Context, dir, base string) ([]string, error)
+}
+
 // locks is the per-job lock a job's checks run under, shared with a
 // builder's run_gate: the gate takes it with Acquire, which cancels a
 // run_gate run and waits until it stopped.

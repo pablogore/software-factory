@@ -191,6 +191,86 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(passed.String()).To(specs.Contain("the gate passed"))
 		})
 
+		s.It("with -db and no -count, fails a commit that deletes a test case with the count command the base configures, even when it changes that command", func(ctx *specs.Context) {
+			bg := context.Background()
+			repo := ctx.Testing().TempDir()
+			tests := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n\nfunc TestB(t *testing.T) {}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/x\n\ngo 1.27\n"), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "x_test.go"), []byte(tests), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.MkdirAll(filepath.Join(repo, ".factory"), 0o750)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(repo, ".factory", "gates.yaml"), []byte("count_command: go test -json -count=1 ./...\n"), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "init", "-q", "-b", "main")
+			git(ctx, repo, "add", ".")
+			git(ctx, repo, "commit", "-q", "-m", "base")
+			db := filepath.Join(ctx.Testing().TempDir(), "factory.db")
+			args := []string{"-dir", repo, "-base", "main", "-db", db, "-checks", "true"}
+			ctx.Expect(gateDemo(bg, args, &bytes.Buffer{})).To(specs.BeNil())
+			wt := filepath.Join(repo, ".worktrees", "gate-demo")
+			fewer := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(wt, "x_test.go"), []byte(fewer), 0o600)).To(specs.BeNil())
+			// A command that counts nothing on either side would pass the job.
+			ctx.Expect(os.WriteFile(filepath.Join(wt, ".factory", "gates.yaml"), []byte("count_command: go version\n"), 0o600)).To(specs.BeNil())
+			git(ctx, wt, "commit", "-q", "-am", "drop a case and the count")
+
+			var failed bytes.Buffer
+			ctx.Expect(gateDemo(bg, args, &failed)).To(specs.BeNil())
+
+			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the package example.com/x has 1 tests, 2 at the base commit"))
+			ctx.Expect(failed.String()).To(specs.Contain("rule broken: the diff modifies the protected path .factory/gates.yaml"))
+			ctx.Expect(failed.String()).To(specs.Not(specs.Contain("note:")))
+			ctx.Expect(failed.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+		})
+
+		s.It("fails a job that adds .factory/gates.yaml in a repo with no config, naming it", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme\n"), 0o600)).To(specs.BeNil())
+			git(ctx, dir, "init", "-q", "-b", "main")
+			git(ctx, dir, "add", ".")
+			git(ctx, dir, "commit", "-q", "-m", "base")
+			ctx.Expect(os.MkdirAll(filepath.Join(dir, ".factory"), 0o750)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(dir, ".factory", "gates.yaml"), []byte("count_command: go version\n"), 0o600)).To(specs.BeNil())
+
+			var out bytes.Buffer
+			ctx.Expect(gateDemo(context.Background(), []string{"-dir", dir, "-checks", "true"}, &out)).To(specs.BeNil())
+
+			ctx.Expect(out.String()).To(specs.Contain("rule broken: the diff adds the protected path .factory/gates.yaml"))
+			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+		})
+
+		s.It("gated again against the commit its base is at now, fails a job that left from a base before the count was configured", func(ctx *specs.Context) {
+			bg := context.Background()
+			repo := ctx.Testing().TempDir()
+			tests := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n\nfunc TestB(t *testing.T) {}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/x\n\ngo 1.27\n"), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "x_test.go"), []byte(tests), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "init", "-q", "-b", "main")
+			git(ctx, repo, "add", ".")
+			git(ctx, repo, "commit", "-q", "-m", "base")
+			git(ctx, repo, "branch", "old-base")
+			git(ctx, repo, "branch", "job")
+			ctx.Expect(os.MkdirAll(filepath.Join(repo, ".factory"), 0o750)).To(specs.BeNil())
+			ctx.Expect(os.WriteFile(filepath.Join(repo, ".factory", "gates.yaml"), []byte("count_command: go test -json -count=1 ./...\n"), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "add", ".")
+			git(ctx, repo, "commit", "-q", "-m", "configure the count")
+			git(ctx, repo, "switch", "-q", "job")
+			fewer := "package x\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n"
+			ctx.Expect(os.WriteFile(filepath.Join(repo, "x_test.go"), []byte(fewer), 0o600)).To(specs.BeNil())
+			git(ctx, repo, "commit", "-q", "-am", "drop a case")
+
+			// Against the base it left from, nothing configures the count.
+			var old bytes.Buffer
+			ctx.Expect(gateDemo(bg, []string{"-dir", repo, "-base", "old-base", "-checks", "true"}, &old)).To(specs.BeNil())
+			ctx.Expect(old.String()).To(specs.Contain("note: the test count rule did not run"))
+			ctx.Expect(old.String()).To(specs.Contain("the gate passed"))
+
+			var now bytes.Buffer
+			ctx.Expect(gateDemo(bg, []string{"-dir", repo, "-base", "main", "-checks", "true"}, &now)).To(specs.BeNil())
+
+			ctx.Expect(now.String()).To(specs.Contain("rule broken: the diff deletes the protected path .factory/gates.yaml"))
+			ctx.Expect(now.String()).To(specs.Contain("rule broken: the package example.com/x has 1 tests, 2 at the base commit"))
+			ctx.Expect(now.String()).To(specs.Contain("the gate failed"))
+		})
+
 		s.It("says the test count rule did not run without -count", func(ctx *specs.Context) {
 			dir := ctx.Testing().TempDir()
 			ctx.Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme\n"), 0o600)).To(specs.BeNil())

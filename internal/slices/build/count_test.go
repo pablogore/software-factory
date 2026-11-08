@@ -53,6 +53,19 @@ func (s *snapshots) Remove(_ context.Context, _, path string) error {
 	return nil
 }
 
+// repoConfig answers with command, or err, and records the dir and base it
+// was asked at.
+type repoConfig struct {
+	command []string
+	err     error
+	asked   []string
+}
+
+func (r *repoConfig) CountCommand(_ context.Context, dir, base string) ([]string, error) {
+	r.asked = append(r.asked, dir+"@"+base)
+	return r.command, r.err
+}
+
 func listed(output string) domain.ChecksRun {
 	return domain.ChecksRun{Command: "go test -list . ./...", Output: output}
 }
@@ -305,6 +318,68 @@ func TestTestCount(t *testing.T) {
 			broken := errors.New("git: worktree add failed")
 			c := &counter{checks: passing, counts: map[string]domain.ChecksRun{"/wt/j-1": listed(baseList)}}
 			g, store := newCountGate(ctx, c, &snapshots{err: broken})
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.MatchError(broken))
+			ctx.Expect(store.stage(ctx)).ToEqual(domain.StageGate)
+		})
+
+		s.It("counts with the command the repo configures at the recorded base when the operator gives none", func(ctx *specs.Context) {
+			c := &counter{checks: passing, counts: map[string]domain.ChecksRun{
+				"/wt/j-1": listed("TestA\nok  \texample.com/a\t0.1s\nok  \texample.com/b\t0.1s\n"),
+				snap:      listed(baseList),
+			}}
+			g, store := newCountGate(ctx, c, &snapshots{})
+			conf := &repoConfig{command: countCommand}
+			g.CountCommand, g.RepoConfig = nil, conf
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(conf.asked).ToEqual([]string{"/wt/j-1@" + recorded})
+			ctx.Expect(c.dirs).ToEqual([]string{"/wt/j-1", snap})
+			ctx.Expect(store.last(ctx).Violations).ToEqual([]string{
+				"the package example.com/a has 1 tests, 2 at the base commit",
+				"the package example.com/b has 0 tests, 1 at the base commit",
+			})
+			ctx.Expect(store.stage(ctx)).ToEqual("build")
+		})
+
+		s.It("counts with the operator's command over the one the repo configures", func(ctx *specs.Context) {
+			c := &counter{checks: passing, counts: map[string]domain.ChecksRun{
+				"/wt/j-1": listed(baseList),
+				snap:      listed(baseList),
+			}}
+			g, store := newCountGate(ctx, c, &snapshots{})
+			conf := &repoConfig{command: []string{"true"}}
+			g.RepoConfig = conf
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(conf.asked).To(specs.BeEmpty())
+			ctx.Expect(c.dirs).ToEqual([]string{"/wt/j-1", snap})
+			ctx.Expect(store.stage(ctx)).ToEqual("review")
+		})
+
+		s.It("notes that the rule did not run when the repo configures no count command either", func(ctx *specs.Context) {
+			c := &counter{checks: passing}
+			g, store := newCountGate(ctx, c, &snapshots{})
+			g.CountCommand, g.RepoConfig = nil, &repoConfig{}
+
+			_, err := g.Run(bg, "j-1")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(c.dirs).To(specs.BeEmpty())
+			ctx.Expect(store.last(ctx).Notes).ToEqual([]string{build.NoCountCommand})
+			ctx.Expect(store.stage(ctx)).ToEqual("review")
+		})
+
+		s.It("saves nothing when the repo's count command can't be read", func(ctx *specs.Context) {
+			broken := errors.New("parse gates: unknown key")
+			g, store := newCountGate(ctx, &counter{checks: passing}, &snapshots{})
+			g.CountCommand, g.RepoConfig = nil, &repoConfig{err: broken}
 
 			_, err := g.Run(bg, "j-1")
 
