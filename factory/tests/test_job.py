@@ -253,6 +253,7 @@ class GuardTest(unittest.TestCase):
             ("intake", "curl https://example.com", no),
             ("intake", "git show x; curl y", no),
             ("intake", "git show origin/main:a > b", no),
+            ("intake", "git show --output=x origin/main:a", no),
         ]
         for agent, cmd, want in cases:
             with self.subTest(cmd=cmd):

@@ -55,8 +55,9 @@ FORBIDDEN = [
 BUILDER_ONLY = re.compile(r"\bgit\s+(commit|push|add|rm|mv|reset|checkout|switch|rebase|merge|"
                           r"cherry-pick|revert|stash|tag|branch\s+-[dDmM])\b|\bsed\s+-i\b")
 
-# Intake's whole shell: one git read of the base branch, no shell operators.
-INTAKE_BASH = re.compile(r"git\s+(show|ls-tree)\s[^;&|<>`$()\n]*")
+# Intake's whole shell: one git read of the base branch, no shell operators and
+# no --output (git show writes a file with it).
+INTAKE_BASH = re.compile(r"git\s+(show|ls-tree)\s(?!.*--output)[^;&|<>`$()\n]*")
 
 
 def block(why):
