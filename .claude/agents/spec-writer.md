@@ -174,7 +174,8 @@ flowchart LR
 - <tomado de context.md, solo si cambia lo que se construye>
 
 ## Demo
-1. <paso que un humano sigue en menos de 2 minutos>
+1. Corré `<comando de test>`: <qué muestra cuando pasa>
+2. Manual, para la persona: <solo si un paso no se puede automatizar>
 
 ## Flag
 <nombre del flag>
@@ -191,6 +192,11 @@ flowchart LR
 - Valor y Demo son obligatorias. Si no podés escribir una Demo, el slice no entrega valor visible: es una tarea interna. Fusionalo con el slice que le da sentido o pedí replan.
 
 Las líneas largas no son un atajo: el límite está en palabras. Si no te alcanza, el slice es grande: SPLIT.
+
+## Cómo va la Demo
+
+- La Demo es **un comando de test** que el approver corre tal cual (por ejemplo `python3 -m pytest factory/tests` o `go test ./... -run TestDemo`). El builder entrega ese test de punta a punta, con sus fixtures en un directorio temporal del propio test, incluidos repos con commits. No pidas pasos que el approver tenga que armar a mano, como crear un repo o hacer `git commit`.
+- Un paso que no se puede automatizar (mirar algo en pantalla, juzgar un resultado) va aparte y empieza con **"Manual, para la persona:"** (en el idioma de `language`: con `en`, **"Manual, for the person:"**). El approver no lo corre ni escala por él.
 
 ## Excepción de largo (solo si de verdad hace falta)
 
@@ -346,7 +352,7 @@ Antes de guardar, verificá cada punto. Si alguno falla, corregí; no lo entregu
 - [ ] (slice) Si hay un recorrido, una decisión o estados que el texto no muestra de un vistazo, hay un diagrama; si no, no hay.
 - [ ] (slice) La entiende alguien que no leyó el código: una idea por criterio, sin listas de casos ni vocabulario interno.
 - [ ] (slice) Ningún criterio menciona archivos, funciones, tipos o detalles de implementación.
-- [ ] (slice) La Demo se puede hacer en < 2 minutos sin conocer el código.
+- [ ] (slice) La Demo es un comando de test que corre en < 2 minutos sin conocer el código; cada paso que no se puede automatizar está marcado como manual, para la persona.
 - [ ] (initiative/replan) Hay exactamente un slice `next` (ninguno con DONE), y es un corte vertical.
 - [ ] Nada que no vino explícito de un humano está en Decidido.
 - [ ] Solo escribí los archivos de mi modo.
