@@ -20,7 +20,9 @@ type Attempts struct {
 }
 
 // Run prompts s with prompt and waits for its turn to end. It reports true
-// once a result was saved with token, the session's job token. When the turn
+// once a result, or a question to a person, was saved with token, the
+// session's job token: a question needs no result, since the job waits for
+// the answer and the stage runs again with it. When the turn
 // ends without one, it prompts s once more with Retry and the reason, so the
 // same token submits it: a refused result does not spend it. When that turn
 // misses too, it records a domain.AttemptFailed from role on job with the
@@ -48,7 +50,7 @@ func Retry(reason string) string {
 }
 
 // turn runs one turn of s with msg and returns why no result was saved with
-// token during it, or "" when one was.
+// token during it, or "" when one was or a question was asked.
 func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (string, error) {
 	ended := ""
 	ch, err := s.Prompt(ctx, msg)
@@ -68,7 +70,7 @@ func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (stri
 	}
 	o := a.Results.Take(token)
 	switch {
-	case o.Saved:
+	case o.Saved, o.Asked:
 		return "", nil
 	case o.Refused != nil:
 		return "your result was refused: " + o.Refused.Error(), nil

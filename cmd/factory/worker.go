@@ -20,22 +20,28 @@ const (
 const workerUsage = `usage: factory worker submit-result [--url URL] [--job ID] [FILE]
        factory worker run-gate [--url URL] [--job ID]
        factory worker dev-server [--stop] [--url URL] [--job ID]
+       factory worker ask-human [--url URL] [--job ID] --to product|tech [--option TEXT]... QUESTION
 
 submit-result hands the role's result, a JSON value read from FILE or stdin,
 to factoryd as the job's result. run-gate runs the job's checks, as the gate
 will after the result is handed in, and prints whether they pass, their
 output and the rules the diff breaks; it exits 0 only when they pass.
 dev-server starts the job's dev server, with the command the repo
-configures, and prints its port; --stop stops it. The job token comes from $` + worker.TokenEnv + `; --url defaults to $` + urlEnv + ` and
+configures, and prints its port; --stop stops it.
+ask-human asks a person QUESTION, for the product or the tech person, with
+one --option per answer they may choose from: the job waits for the answer
+and your stage runs again with it, so hand in no result and end your turn.
+The job token comes from $` + worker.TokenEnv + `; --url defaults to $` + urlEnv + ` and
 --job to $` + jobEnv + `.
 `
 
 // runWorker runs `factory worker …` with args after "worker" and returns the
-// exit code: 0 when factoryd took the result, ran the checks and they pass,
-// or started or stopped the dev server, 1 when it refused the call, the checks fail or it could not be
-// reached, 2 for a usage error.
+// exit code: 0 when factoryd took the result or the question, ran the
+// checks and they pass, or started or stopped the dev server, 1 when it
+// refused the call, the checks fail or it could not be reached, 2 for a
+// usage error.
 func runWorker(ctx context.Context, args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 0 || (args[0] != "submit-result" && args[0] != "run-gate" && args[0] != "dev-server") {
+	if len(args) == 0 || (args[0] != "submit-result" && args[0] != "run-gate" && args[0] != "dev-server" && args[0] != "ask-human") {
 		_, _ = fmt.Fprint(stderr, workerUsage)
 		return 2
 	}
@@ -49,16 +55,27 @@ func runWorker(ctx context.Context, args []string, getenv func(string) string, s
 	if cmd == "dev-server" {
 		stop = fs.Bool("stop", false, "stop the dev server instead of starting it")
 	}
+	var q worker.Question
+	if cmd == "ask-human" {
+		fs.StringVar(&q.To, "to", "", "who should answer: product or tech")
+		fs.Func("option", "an answer the person may choose from; repeat it for each", func(o string) error {
+			q.Options = append(q.Options, o)
+			return nil
+		})
+	}
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 	token := getenv(worker.TokenEnv)
-	maxArgs := 1
-	if cmd != "submit-result" {
+	minArgs, maxArgs := 0, 1
+	switch cmd {
+	case "run-gate", "dev-server":
 		maxArgs = 0
+	case "ask-human":
+		minArgs = 1
 	}
 	switch {
-	case fs.NArg() > maxArgs:
+	case fs.NArg() < minArgs || fs.NArg() > maxArgs:
 		_, _ = fmt.Fprint(stderr, workerUsage)
 		return 2
 	case token == "":
@@ -72,8 +89,12 @@ func runWorker(ctx context.Context, args []string, getenv func(string) string, s
 		return 2
 	}
 	client := worker.Client{URL: *url, Token: token}
-	if cmd == "run-gate" {
+	switch cmd {
+	case "run-gate":
 		return runGate(ctx, client, *job, stdout, stderr)
+	case "ask-human":
+		q.Question = fs.Arg(0)
+		return askHuman(ctx, client, *job, q, stdout, stderr)
 	}
 	if cmd == "dev-server" {
 		return devServer(ctx, client, *job, *stop, stdout, stderr)
@@ -120,6 +141,19 @@ func devServer(ctx context.Context, client worker.Client, job string, stop bool,
 		return 1
 	}
 	_, _ = fmt.Fprint(stdout, d.Report)
+	return 0
+}
+
+// askHuman asks a person q on job and prints what factoryd saved, worded as
+// the MCP tool ask_human answers it.
+func askHuman(ctx context.Context, client worker.Client, job string, q worker.Question, stdout, stderr io.Writer) int {
+	a, err := client.AskHuman(ctx, job, q)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "factory worker ask-human: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(stdout, "question recorded for job %s: %s. The job waits for a person's answer and your stage runs again with it; "+
+		"hand in no result and end your turn.\n", a.Job, strings.Join(a.Events, ", "))
 	return 0
 }
 

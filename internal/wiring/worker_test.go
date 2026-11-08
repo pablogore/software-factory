@@ -33,8 +33,10 @@ func (onePipeline) Pipeline(_ context.Context, name string) (domain.Pipeline, er
 		return domain.Pipeline{}, fmt.Errorf("no pipeline %q", name)
 	}
 	return domain.Pipeline{Name: "default", Stages: []domain.Stage{
+		{Name: "spec", Kind: domain.KindSpec, Roles: []string{"spec-writer"}},
 		{Name: "build", Kind: domain.KindBuild, Roles: []string{"builder", "only-submits", "no-tools"}},
 		{Name: "review", Kind: domain.KindReview, Roles: []string{"reviewer-code"}, OnChanges: "build"},
+		{Name: "approve", Kind: domain.KindApprove, Roles: []string{"approver"}},
 	}}, nil
 }
 
@@ -78,9 +80,14 @@ func (g *gate) checked() []domain.JobID {
 }
 
 func newWorkerWorld(ctx *specs.Context) workerWorld {
+	return newWorkerWorldIn(ctx, "build")
+}
+
+// newWorkerWorldIn is newWorkerWorld with j-1 in stage.
+func newWorkerWorldIn(ctx *specs.Context, stage string) workerWorld {
 	store, err := memstore.New()
 	ctx.Expect(err).To(specs.BeNil())
-	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
+	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: stage, Round: 1})).To(specs.BeNil())
 	tokens := jobtoken.New()
 	g := &gate{}
 	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, g, gatelock.New(), fixedClock{}, nil))
@@ -228,7 +235,7 @@ func TestWorkerTools(t *testing.T) {
 
 			for _, r := range []struct{ name, role string }{
 				{"the repo's reviewer-code, which lists no tools", "reviewer-code"},
-				{"the repo's approver, which lists no tools", "approver"},
+				{"the repo's approver, whose tools do not list run_gate", "approver"},
 			} {
 				s.It("refuses "+r.name+", running no check", func(ctx *specs.Context) {
 					w := newWorkerWorld(ctx)
@@ -257,6 +264,40 @@ func TestWorkerTools(t *testing.T) {
 				ctx.Expect(isErr).ToEqual(true)
 				ctx.Expect(w.gate.checked()).To(specs.BeEmpty())
 			})
+		})
+
+		s.When("a session asks a person a question", func(s *specs.Spec) {
+			const question = `{"question":"Dark mode for everyone?","options":["yes","beta only"],"to":"product"}`
+			for _, r := range []struct{ role, stage, wait string }{
+				{"spec-writer", "spec", domain.StageNeedsInfo},
+				{"approver", "approve", domain.StageNeedsHuman},
+			} {
+				s.It("takes it from the repo's "+r.role+", leaving the job in "+r.wait, func(ctx *specs.Context) {
+					w := newWorkerWorldIn(ctx, r.stage)
+					cs := w.session(ctx, repoRoot, r.role)
+
+					_, isErr := call(ctx, cs, mcpworker.ToolAskHuman, question)
+
+					ctx.Expect(isErr).ToEqual(false)
+					ctx.Expect(w.feed(ctx)[0]).ToEqual("HumanAsked")
+					job, _, err := w.store.Load(context.Background(), "j-1")
+					ctx.Expect(err).To(specs.BeNil())
+					ctx.Expect(job.Stage).ToEqual(r.wait)
+				})
+			}
+
+			for _, r := range []struct{ role, stage string }{{"builder", "build"}, {"reviewer-code", "review"}} {
+				s.It("refuses the repo's "+r.role+", recording nothing", func(ctx *specs.Context) {
+					w := newWorkerWorldIn(ctx, r.stage)
+					cs := w.session(ctx, repoRoot, r.role)
+
+					text, isErr := call(ctx, cs, mcpworker.ToolAskHuman, question)
+
+					ctx.Expect(isErr).ToEqual(true)
+					ctx.Expect(text).ToEqual(`refused (403): worker: ask human: job token not allowed: role "` + r.role + `" may not use tool "ask_human"`)
+					ctx.Expect(w.feed(ctx)).To(specs.BeEmpty())
+				})
+			}
 		})
 
 		s.It("refuses progress arguments over 1 MiB and records nothing", func(ctx *specs.Context) {

@@ -147,6 +147,8 @@ func eventLabel(ev domain.Event) string {
 		return fmt.Sprintf("%s(role %s, reason %q)", e.EventName(), e.Role, e.Reason)
 	case domain.AgentProgressed:
 		return fmt.Sprintf("%s(role %s, %q)", e.EventName(), e.Role, e.Text)
+	case domain.HumanAsked:
+		return fmt.Sprintf("%s(role %s, to %s, %q, options %q)", e.EventName(), e.Role, e.To, e.Question, e.Options)
 	}
 	return ev.EventName()
 }

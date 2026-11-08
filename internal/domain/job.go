@@ -36,10 +36,10 @@ type Job struct {
 	TriageRetries  int            `json:"triage_retries,omitempty"`  // rounds triage gave the job after a wall; never reset
 	Limits         Limits         `json:"limits,omitzero"`           // limits a person overrode for this job; a nil one is the pipeline's
 	ReworksLifted  bool           `json:"reworks_lifted,omitempty"`  // a person overrode human_reworks to unlimited for this job
-	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, the stage that asked and gets the answer
+	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, or needs-human after an agent's question, the stage that asked and gets the answer
 	Reason         string         `json:"reason,omitempty"`          // in needs-human or triage, why the job is there; rejected by intake, intake's reason
 	Cause          HumanCause     `json:"cause,omitempty"`           // in needs-human, which of HumanCauses put the job there
-	Question       string         `json:"question,omitempty"`        // in needs-human after a wall, the closed question for the person
+	Question       string         `json:"question,omitempty"`        // in needs-human after a wall, the closed question for the person; after an agent's question, in needs-info or needs-human, that question
 	Wall           HumanCause     `json:"wall,omitempty"`            // in triage, the cause the job waits in needs-human with if triage escalates
 	Budget         float64        `json:"budget_usd,omitempty"`      // the job's own budget a person raised; 0 is the scheduler's
 	Paused         *Paused        `json:"paused,omitempty"`          // in needs-human for a spent budget, where the job was

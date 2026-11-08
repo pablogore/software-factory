@@ -1,8 +1,9 @@
 // Package mcpworker serves the worker surface of factoryd to the agents that
 // work on jobs, with the session's job token. For now it is the HTTP routes
 // `factory worker submit-result`, `factory worker run-gate` and `factory
-// worker dev-server` call and the MCP tools submit_result, progress,
-// run_gate and dev_server, all over one Submitter; it
+// worker dev-server` and `factory worker ask-human` call and the MCP tools
+// submit_result, progress, run_gate, dev_server and ask_human, all over one
+// Submitter; it
 // serves nothing else, so a job token gets no other operation from it
 // (06-interfaz-y-observabilidad.md).
 package mcpworker
@@ -40,14 +41,20 @@ const GatePath = "/worker/jobs/{job}/gate"
 // read: the command is the repo's and the port the job's.
 const DevServerPath = "/worker/jobs/{job}/dev-server"
 
-// Submitter decides a result, records a progress message or runs the
-// checks, on a job with the token it came with.
+// AskPath is the route a question to a person is posted to; {job} is its
+// ID. Its body is the question's JSON object, as the MCP tool ask_human's
+// arguments are, and the Submitter decodes both the same way.
+const AskPath = "/worker/jobs/{job}/ask"
+
+// Submitter decides a result, records a progress message, runs the checks
+// or records a question to a person, on a job with the token it came with.
 type Submitter interface {
 	Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
 	Progress(ctx context.Context, token string, job domain.JobID, text string) ([]domain.Event, error)
 	RunGate(ctx context.Context, token string, job domain.JobID) (domain.ChecksRun, error)
 	DevServer(ctx context.Context, token string, job domain.JobID) (int, error)
 	StopDevServer(ctx context.Context, token string, job domain.JobID) error
+	AskHuman(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
 }
 
 // Accepted is the answer to a result that was decided: the job and the
@@ -82,9 +89,10 @@ type Refused struct {
 }
 
 // Handler serves POST ResultPath, POST GatePath, POST and DELETE
-// DevServerPath and the MCP server at MCPPath, all with the token as a bearer token and all over s, so a result
-// is decided, and the checks are run, the same way whichever one the call
-// comes by. Every other request is refused with 403.
+// DevServerPath, POST AskPath and the MCP server at MCPPath, all with the
+// token as a bearer token and all over s, so a result is decided, the
+// checks are run, the dev server is run and a question is recorded the same
+// way whichever one the call comes by. Every other request is refused with 403.
 func Handler(s Submitter) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+ResultPath, func(w http.ResponseWriter, r *http.Request) {
@@ -99,9 +107,12 @@ func Handler(s Submitter) http.Handler {
 	mux.HandleFunc("DELETE "+DevServerPath, func(w http.ResponseWriter, r *http.Request) {
 		devServer(w, r, s, true)
 	})
+	mux.HandleFunc("POST "+AskPath, func(w http.ResponseWriter, r *http.Request) {
+		askHuman(w, r, s)
+	})
 	mux.Handle(MCPPath, mcpHandler(s))
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		write(w, http.StatusForbidden, Refused{Error: jobtoken.ErrForbidden.Error() + ": the worker API only takes a job's result, runs its checks and its dev server"})
+		write(w, http.StatusForbidden, Refused{Error: jobtoken.ErrForbidden.Error() + ": the worker API only takes a job's result, runs its checks and its dev server and takes its questions to a person"})
 	})
 	return mux
 }
@@ -161,6 +172,26 @@ func callDevServer(ctx context.Context, s Submitter, token string, job domain.Jo
 		return DevServer{}, err
 	}
 	return DevServer{Job: job, Port: port, Report: fmt.Sprintf("dev server of job %s on port %d: http://localhost:%d\n", job, port, port)}, nil
+}
+
+func askHuman(w http.ResponseWriter, r *http.Request, s Submitter) {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxResultBytes))
+	if err != nil {
+		if _, tooBig := errors.AsType[*http.MaxBytesError](err); tooBig {
+			write(w, http.StatusRequestEntityTooLarge, Refused{Error: "question over 1 MiB"})
+			return
+		}
+		write(w, http.StatusBadRequest, Refused{Error: "cannot read the question"})
+		return
+	}
+	job := domain.JobID(r.PathValue("job"))
+	evs, err := s.AskHuman(r.Context(), bearer(r.Header), job, data)
+	if err != nil {
+		code, msg := refusal(err)
+		write(w, code, Refused{Error: msg})
+		return
+	}
+	write(w, http.StatusOK, accepted(job, evs))
 }
 
 func accepted(job domain.JobID, evs []domain.Event) Accepted {

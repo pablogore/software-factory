@@ -1,7 +1,8 @@
 // Package worker is the client of factoryd's worker API, for agents without
 // MCP: `factory worker submit-result` hands a role's result over with it,
 // `factory worker run-gate` runs the job's checks and `factory worker
-// dev-server` starts and stops the job's dev server.
+// dev-server` starts and stops the job's dev server, and `factory worker
+// ask-human` asks a person a question.
 package worker
 
 import (
@@ -76,6 +77,29 @@ type ChecksRun struct {
 func (c Client) SubmitResult(ctx context.Context, job string, result []byte) (Accepted, error) {
 	var a Accepted
 	if err := c.call(ctx, http.MethodPost, "submit result", job, "result", bytes.NewReader(result), &a); err != nil {
+		return Accepted{}, err
+	}
+	return a, nil
+}
+
+// Question is a question to a person: the question, the options the person
+// may choose from, if any, and who should answer it, "product" or "tech".
+type Question struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
+	To       string   `json:"to"`
+}
+
+// AskHuman posts q as a question to a person on job, the same body the MCP
+// tool ask_human takes as its arguments. The job then waits for the answer;
+// the call does not. A refusal is a *RefusedError.
+func (c Client) AskHuman(ctx context.Context, job string, q Question) (Accepted, error) {
+	data, err := json.Marshal(q)
+	if err != nil {
+		return Accepted{}, fmt.Errorf("ask human: %w", err)
+	}
+	var a Accepted
+	if err := c.call(ctx, http.MethodPost, "ask human", job, "ask", bytes.NewReader(data), &a); err != nil {
 		return Accepted{}, err
 	}
 	return a, nil

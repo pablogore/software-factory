@@ -22,12 +22,13 @@ import (
 
 // submitter records its calls and answers with err, or with one
 // StageEntered for a result, one AgentProgressed for progress and run for
-// the checks.
+// the checks, and a HumanAsked and a NeedsInfo for a question.
 type submitter struct {
 	err      error
 	calls    []call
 	progress []call
 	gates    []call
+	asks     []call
 	run      domain.ChecksRun
 	devs     []call
 }
@@ -73,6 +74,14 @@ func (s *submitter) DevServer(_ context.Context, token string, job domain.JobID)
 func (s *submitter) StopDevServer(_ context.Context, token string, job domain.JobID) error {
 	s.devs = append(s.devs, call{token, job, "stop"})
 	return s.err
+}
+
+func (s *submitter) AskHuman(_ context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error) {
+	s.asks = append(s.asks, call{token, job, string(data)})
+	if s.err != nil {
+		return nil, s.err
+	}
+	return []domain.Event{domain.HumanAsked{Job: job}, domain.NeedsInfo{Job: job, From: "spec"}}, nil
 }
 
 // gateRun is a failing run of the checks, with a rule the diff broke.
@@ -187,6 +196,34 @@ func TestHandler(t *testing.T) {
 			})
 		})
 
+		s.When("an agent asks a person a question", func(s *specs.Spec) {
+			const question = `{"question":"Dark mode for everyone?","options":["yes","beta only"],"to":"product"}`
+
+			s.It("hands the bearer token, the job and the body to the submitter and names the saved events", func(ctx *specs.Context) {
+				sub := &submitter{}
+				rec := do(mcpworker.Handler(sub), http.MethodPost, "/worker/jobs/j-1/ask", "Bearer tok", question)
+				ctx.Expect(rec.Code).ToEqual(http.StatusOK)
+				ctx.Expect(sub.asks).ToEqual([]call{{"tok", "j-1", question}})
+				var a mcpworker.Accepted
+				ctx.Expect(json.Unmarshal(rec.Body.Bytes(), &a)).To(specs.BeNil())
+				ctx.Expect(a).ToEqual(mcpworker.Accepted{Job: "j-1", Events: []string{"HumanAsked", "NeedsInfo"}})
+			})
+
+			s.It("answers a role that may not ask with 403 and the error", func(ctx *specs.Context) {
+				err := fmt.Errorf("worker: ask human: %w: role %q may not use tool %q", jobtoken.ErrForbidden, "builder", "ask_human")
+				rec := do(mcpworker.Handler(&submitter{err: err}), http.MethodPost, "/worker/jobs/j-1/ask", "Bearer tok", question)
+				ctx.Expect(rec.Code).ToEqual(http.StatusForbidden)
+				ctx.Expect(refusal(ctx, rec)).ToEqual(err.Error())
+			})
+
+			s.It("refuses a question over the size limit without handing it over", func(ctx *specs.Context) {
+				sub := &submitter{}
+				rec := do(mcpworker.Handler(sub), http.MethodPost, "/worker/jobs/j-1/ask", "Bearer tok", strings.Repeat("x", mcpworker.MaxResultBytes+1))
+				ctx.Expect(rec.Code).ToEqual(http.StatusRequestEntityTooLarge)
+				ctx.Expect(sub.asks).To(specs.BeEmpty())
+			})
+		})
+
 		s.It("refuses every other operation with a job token, without submitting anything", func(ctx *specs.Context) {
 			sub := &submitter{}
 			h := mcpworker.Handler(sub)
@@ -197,6 +234,7 @@ func TestHandler(t *testing.T) {
 				{http.MethodGet, "/jobs"},
 				{http.MethodPost, "/worker/jobs/j-1/result/extra"},
 				{http.MethodGet, "/worker/jobs/j-1/gate"},
+				{http.MethodGet, "/worker/jobs/j-1/ask"},
 			} {
 				rec := do(h, r.method, r.path, "Bearer tok", `{}`)
 				ctx.Expect(rec.Code).ToEqual(http.StatusForbidden)
@@ -204,6 +242,7 @@ func TestHandler(t *testing.T) {
 			}
 			ctx.Expect(sub.calls).To(specs.BeEmpty())
 			ctx.Expect(sub.gates).To(specs.BeEmpty())
+			ctx.Expect(sub.asks).To(specs.BeEmpty())
 		})
 	})
 }
