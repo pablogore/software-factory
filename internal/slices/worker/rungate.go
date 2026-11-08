@@ -28,8 +28,8 @@ var (
 // neither waiting nor queued, and runs none. A result submitted meanwhile
 // cancels the run, whose answer is then an error wrapping
 // gatelock.ErrPreempted, never a failed run. The checks run outside the
-// lock Submit and Progress take, so a long run never holds up a progress
-// message.
+// job's lock Submit and Progress take, so a long run never holds up a
+// progress message.
 func (s *Submitter) RunGate(ctx context.Context, token string, job domain.JobID) (domain.ChecksRun, error) {
 	run, release, err := s.startGate(ctx, token, job)
 	if err != nil {
@@ -49,12 +49,12 @@ func (s *Submitter) RunGate(ctx context.Context, token string, job domain.JobID)
 	return checks, nil
 }
 
-// startGate checks token may run job's checks now and takes the job's lock,
-// under the lock Submit revokes tokens under, so a token whose result was
-// saved runs none.
+// startGate checks token may run job's checks now and takes the job's lock
+// in Locks, under the job's lock Submit revokes tokens under, so a token
+// whose result was saved runs none, and no run starts while a submission
+// waits for the one it cancelled.
 func (s *Submitter) startGate(ctx context.Context, token string, job domain.JobID) (context.Context, func(), error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.byJob.lock(job)()
 	g, err := s.Tokens.Authorize(token, jobtoken.OpRunGate, job)
 	if err != nil {
 		return nil, nil, fmt.Errorf("worker: run gate: %w", err)
