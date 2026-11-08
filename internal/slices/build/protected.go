@@ -21,7 +21,10 @@ var ProtectedPaths = []string{
 	".golangci.yml",
 	"docs/factoryd/0*.md",
 	// The repo's gate config: the gate reads it at the base, but a merged
-	// change would loosen the gate of every job after it.
+	// change would loosen the gate of every job after it. The exact entry
+	// is listed too: a file, symlink or submodule named .factory would stand
+	// where the gate looks for its config.
+	".factory",
 	".factory/",
 }
 
@@ -29,11 +32,13 @@ var ProtectedPaths = []string{
 // reads a GNUmakefile or a makefile before the Makefile, and any new file
 // under .github/ can be a workflow, an action or a CODEOWNERS that GitHub
 // runs or enforces. A new file under .factory/ could be the repo's gate
-// config, which the next jobs' gates read once it is merged.
+// config, which the next jobs' gates read once it is merged, and a new
+// .factory entry would take the place of that folder.
 var ProtectedAdds = []string{
 	"GNUmakefile",
 	"makefile",
 	".github/",
+	".factory",
 	".factory/",
 }
 

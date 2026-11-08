@@ -237,6 +237,21 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
 		})
 
+		s.It("fails a job that adds a .factory file in a repo with no config, naming it", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme\n"), 0o600)).To(specs.BeNil())
+			git(ctx, dir, "init", "-q", "-b", "main")
+			git(ctx, dir, "add", ".")
+			git(ctx, dir, "commit", "-q", "-m", "base")
+			ctx.Expect(os.WriteFile(filepath.Join(dir, ".factory"), []byte("count_command: go version\n"), 0o600)).To(specs.BeNil())
+
+			var out bytes.Buffer
+			ctx.Expect(gateDemo(context.Background(), []string{"-dir", dir, "-checks", "true"}, &out)).To(specs.BeNil())
+
+			ctx.Expect(out.String()).To(specs.Contain("rule broken: the diff adds the protected path .factory\n"))
+			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+		})
+
 		s.It("gated again against the commit its base is at now, fails a job that left from a base before the count was configured", func(ctx *specs.Context) {
 			bg := context.Background()
 			repo := ctx.Testing().TempDir()
