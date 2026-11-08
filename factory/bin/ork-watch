@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Follow an Ork run for an orchestrator: one line per change, then exit.
+
+    factory/bin/ork-watch <run> [--every <seconds>]
+
+Prints a line when a step finishes or is skipped, when a question opens
+(QUESTION <id> ...), and when the run ends (END <status>). Meant for a
+monitor: every line is something the orchestrator has to look at, and a
+question is never missed because it isn't in the log stream.
+"""
+import json
+import subprocess
+import sys
+import time
+
+
+def ork(*args):
+    out = subprocess.run(["ork", *args], capture_output=True, text=True)
+    return out.stdout if out.returncode == 0 else ""
+
+
+def emit(line):
+    print(line, flush=True)
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if argv else 2
+    run, every = argv[0], 5.0
+    if "--every" in argv:
+        every = float(argv[argv.index("--every") + 1])
+
+    seen_events, seen_questions = 0, set()
+    while True:
+        lines = [l for l in ork("logs", run, "--json").splitlines() if l.startswith("{")]
+        for line in lines[seen_events:]:
+            item = json.loads(line)
+            event = item.get("event", item)
+            kind = event.get("type")
+            if kind == "node.finished":
+                out = event.get("output") or {}
+                cost = (event.get("usage") or {}).get("costUsd", 0) or 0
+                summary = (out.get("summary") or event.get("error") or "").replace("\n", " ")
+                emit(f"STEP {event.get('id')} r{event.get('round', 1)} "
+                     f"{out.get('status', 'ok' if event.get('ok') else 'fail')} "
+                     f"${cost:.4f} {summary[:160]}")
+            elif kind == "node.skipped":
+                emit(f"SKIP {event.get('id')}")
+            elif kind == "loop.exhausted":
+                emit(f"LOOP out of rounds {event.get('from')} -> {event.get('to')}")
+            elif kind == "run.finished":
+                result = event.get("result") or {}
+                emit(f"END {result.get('status', 'finished')} ${result.get('costUsd', 0):.4f}")
+                return 0
+        seen_events = len(lines)
+
+        raw = ork("decide", "--json", "--run", run)
+        try:
+            open_now = json.loads(raw) if raw.strip() else []
+        except json.JSONDecodeError:
+            open_now = []
+        for d in open_now:
+            if d.get("id") in seen_questions:
+                continue
+            seen_questions.add(d.get("id"))
+            options = ",".join(o.get("id", o) if isinstance(o, dict) else str(o)
+                               for o in d.get("options") or [])
+            question = (d.get("question") or "").replace("\n", " ")
+            emit(f"QUESTION {d.get('id')} {d.get('kind')} {d.get('node')} "
+                 f"[{options}] rec={d.get('recommended', '')} {question[:200]}")
+        time.sleep(every)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

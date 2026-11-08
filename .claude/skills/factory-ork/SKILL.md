@@ -32,11 +32,15 @@ For each issue:
    in the software-factory repo itself use
    `python3 -m unittest discover factory/tests`. Keep the run id it prints.
 2. Tell the user in one line: issue, run id, and that `ork ui` shows it live.
-3. Follow it with the Monitor tool on `ork logs <run> -f`, so you hear about
-   each step without polling. Don't relay every line: tell the user only when
-   a node finishes (with its cost), a check fails, or the run ends.
-4. When the log shows a question (`? ` or `asks`), run `ork decide --json` and
-   handle it as **Decisions** says.
+3. Follow it with the Monitor tool on `factory/bin/ork-watch <run>`. It prints
+   one line per change and exits when the run ends: `STEP` (a step finished,
+   with status and cost), `SKIP`, `LOOP` (out of rounds), `QUESTION` (Ork waits
+   on an answer) and `END`. Don't monitor `ork logs -f` or `ork ps`: a question
+   doesn't show up there, and the run sits waiting while you wait too. Tell the
+   user about each `STEP`, `LOOP` and `END` in one line; don't relay more.
+4. On every `QUESTION` line, handle it at once as **Decisions** says. If you
+   ever suspect the run is stuck, run `ork decide --json --run <run>` before
+   anything else: a run "waiting on you" is waiting on a decision.
 5. When the run ends, run `factory/bin/ork-job <run>`: it writes the job
    folder `.ork/jobs/issue-<n>-<run>/` (job.md, intake.md, spec.md, build.md,
    review-<role>.md, approver.md, one file per round). Read job.md, and
