@@ -350,14 +350,19 @@ the others, and the ones that don't depend on it run to their own end. While
 paused, don't start `new` lines. Slices of issues already in progress keep
 following their checkpoint. Crash `resume`s are not new work.
 
-**Caps per issue.** Sum, for the issue, the `cost_usd` of all jobs with its
-`initiative_id` (`factory/bin/job summary`), and count its slices. When it
-passes **5 slices or USD 8**, tell the user in one line
-(`#<n>: 6 slices, $9.40 — pausing this issue`) and hold this issue: its running
-agents finish, but no new slice job (`next-slice` / `checkpoint-ok`) starts
-until the user says `continuar`. Other issues are unaffected. Between rounds
+**Caps per issue.** Before starting a new slice job (`next-slice` /
+`checkpoint-ok`), run `factory/bin/job caps <ids>` with the jobs this run
+touched. It sums each issue's cost over the jobs with its `initiative_id`, and
+counts its slices. An issue that passes **5 slices or USD 8** prints one line
+(`#<n>: 6 slices, $9.40 — pausing this issue`): tell the user that line and
+hold this issue: its running agents finish, but no new slice job starts until
+the user says `continuar`. Other issues are unaffected. Between rounds
 `job advance <job> build` checks the same USD 8 itself: over it, it fails and
 leaves the job in `needs-human` (no triage), with the cost in decision.md.
+With `"cost_check": false` in `factory/config.json` (a subscription), no USD
+cap applies: neither the USD 8 per issue (here and between rounds) nor
+`--max-usd`. `job caps` reads that key and skips them; the 5 slices,
+`max_rounds` and `--max-jobs` still hold.
 
 **The pause message**, once everything running has settled (or right away if
 nothing runs), in under ~12 lines:
@@ -377,8 +382,11 @@ Then end your turn and wait. Don't start anything on silence. `continuar` /
 **`--auto [--max-jobs N] [--max-usd N]`** leaves the factory unattended: it does
 not pause between issues. It still stops starting new work when: `--max-jobs`
 jobs have been started (default 5), the run's accumulated cost reaches
-`--max-usd` (default 20), any job goes to `needs-human` or `needs-info`, or an
-issue hits the per-issue caps above. Then it gives the pause message.
+`--max-usd` (default 20; not with `cost_check: false`), any job goes to
+`needs-human` or `needs-info`, or an issue hits the per-issue caps above. Check
+the caps with `factory/bin/job caps --max-jobs <N> --max-usd <N> <ids>` (the
+jobs this run started) before starting work: any line but `ok` is a cap. Then
+it gives the pause message.
 
 **Resuming.** State lives in files, so a new session picks up where a dead one
 stopped. For a `resume` job, run its stage's step again: `intake`, `initiative`, `spec`, `rate` and `replan`
