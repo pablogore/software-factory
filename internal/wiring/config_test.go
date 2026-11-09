@@ -1,6 +1,9 @@
 package wiring_test
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -65,6 +68,17 @@ func TestValidateRoles(t *testing.T) {
 			ctx.Expect(err.Error()).To(specs.Contain("no roles/*.yaml in " + dir))
 		})
 
+		s.It("fails naming the pipeline and the role when a pipeline names a role with no file", func(ctx *specs.Context) {
+			dir := configRoot(ctx, "claude", "opus")
+			setReviewer(ctx, dir, "claude", "sonnet")
+			write(ctx, dir, "pipelines/flow.yaml", "name: flow\nstages:\n  - build\n  - review:\n      parallel: [reviewer, ghost]\n      on_changes: build\n  - approve\n")
+
+			_, err := wiring.ValidateRoles(dir)
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`pipelines/flow.yaml: stage review: invalid value: role "ghost" is not loaded`)
+		})
+
 		s.It("fails on a role file named for another role", func(ctx *specs.Context) {
 			dir := configRoot(ctx, "claude", "opus")
 			write(ctx, dir, "roles/approver.yaml", "name: builder\nkind: build\nprompt: roles/builder.md\nmode: blocking\nagent: claude\nmodel: opus\n")
@@ -72,6 +86,32 @@ func TestValidateRoles(t *testing.T) {
 			_, err := wiring.ValidateRoles(dir)
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+		})
+	})
+}
+
+func TestRepoPipelines(t *testing.T) {
+	specs.Describe(t, "the repo's pipelines", func(s *specs.Spec) {
+		s.It("each load with the repo's roles", func(ctx *specs.Context) {
+			roleFiles, err := filepath.Glob(filepath.Join(repoRoot, "roles", "*.yaml"))
+			ctx.Expect(err).To(specs.BeNil())
+			var roles []domain.Role
+			for _, f := range roleFiles {
+				rs, err := wiring.LoadRoleSession(repoRoot, strings.TrimSuffix(filepath.Base(f), ".yaml"))
+				ctx.Expect(err).To(specs.BeNil())
+				roles = append(roles, rs.Role)
+			}
+			files, err := filepath.Glob(filepath.Join(repoRoot, "pipelines", "*.yaml"))
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(files).To(specs.Not(specs.BeEmpty()))
+			for _, f := range files {
+				data, err := os.ReadFile(f)
+				ctx.Expect(err).To(specs.BeNil())
+
+				_, err = configyaml.LoadPipeline(data, roles)
+
+				ctx.Expect(err).To(specs.BeNil())
+			}
 		})
 	})
 }

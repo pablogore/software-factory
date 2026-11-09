@@ -8,11 +8,11 @@ import (
 	"github.com/pablogore/software-factory/internal/wiring"
 )
 
-// configValidate loads every role of a configuration root and prints what
-// is worth a look without failing: a warning is not an error.
+// configValidate loads every role and pipeline of a configuration root and
+// prints what is worth a look without failing: a warning is not an error.
 func configValidate(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("config-validate", flag.ContinueOnError)
-	dir := fs.String("config", ".", "configuration root, with roles.yaml and roles/")
+	dir := fs.String("config", ".", "configuration root, with roles.yaml, roles/ and pipelines/")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
