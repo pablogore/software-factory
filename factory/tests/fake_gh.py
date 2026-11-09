@@ -118,7 +118,7 @@ def main(argv):
         p = find_pr(s, pos[0])
         print(json.dumps(pick({**p, "baseRefName": p["base"]}, o["json"][0])))
     elif group == "pr" and cmd == "ready":
-        find_pr(s, pos[0])["isDraft"] = False
+        find_pr(s, pos[0])["isDraft"] = "undo" in o
     elif group == "pr" and cmd == "comment":
         find_pr(s, pos[0])["comments"].append({"author": {"login": me}, "authorAssociation": "OWNER",
                                                "body": o["body"][0], "createdAt": now()})
