@@ -73,7 +73,7 @@ func TestLoadRoleSession(t *testing.T) {
 			ctx.Expect(rs.Role.Kind).ToEqual(domain.KindBuild)
 			ctx.Expect(rs.Role.Agent).ToEqual("claude")
 			ctx.Expect(rs.Role.Model).ToEqual("opus")
-			ctx.Expect(rs.Agent).ToEqual(acp.Config{Command: "claude-code-acp", Env: []string{"ANTHROPIC_MODEL=opus"}})
+			ctx.Expect(rs.Agent).ToEqual(acp.Config{Command: "claude-code-acp", Env: []string{"ANTHROPIC_MODEL=opus"}, UserHome: true})
 			ctx.Expect(rs.Prompt).ToEqual(string(prompt))
 		})
 
@@ -89,7 +89,7 @@ func TestLoadRoleSession(t *testing.T) {
 			ctx.Expect(rs.Role.Kind).ToEqual(r.kind)
 			ctx.Expect(rs.Role.Agent).ToEqual("claude")
 			ctx.Expect(rs.Role.Model).ToEqual(r.model)
-			ctx.Expect(rs.Agent).ToEqual(acp.Config{Command: "claude-code-acp", Env: []string{"ANTHROPIC_MODEL=" + r.model}})
+			ctx.Expect(rs.Agent).ToEqual(acp.Config{Command: "claude-code-acp", Env: []string{"ANTHROPIC_MODEL=" + r.model}, UserHome: true})
 			ctx.Expect(rs.Prompt).ToEqual(string(prompt))
 			ctx.Expect(strings.Count(rs.Prompt, "\n")).To(specs.BeLessThanOrEqual(60))
 			for _, word := range protocolWords {
@@ -114,6 +114,16 @@ func TestLoadRoleSession(t *testing.T) {
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 			ctx.Expect(err.Error()).To(specs.Contain(`"../builder"`))
+		})
+
+		s.It("launches the agent with the variables it passes and the home roles.yaml gives it", func(ctx *specs.Context) {
+			dir := configRoot(ctx, "codex", "gpt-5.5")
+			write(ctx, dir, "roles.yaml", "agents:\n  codex:\n    command: codex-acp\n    args: [--model, \"{model}\"]\n    env_passthrough: [OPENAI_API_KEY]\n    home: user\n")
+
+			rs, err := wiring.LoadRoleSession(dir, "builder")
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(rs.Agent).ToEqual(acp.Config{Command: "codex-acp", Args: []string{"--model", "gpt-5.5"}, PassEnv: []string{"OPENAI_API_KEY"}, UserHome: true})
 		})
 
 		s.It("gives the next session the agent and model the YAML says now", func(ctx *specs.Context) {
