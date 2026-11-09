@@ -22,6 +22,11 @@ Usage:
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
   job cleanup                    remove worktrees and branches that finished jobs left behind (queue does it too)
+  job doctor                     list .worktrees/ folders that belong to no open job, as candidates to delete; deletes nothing
+  job claim <job> <pid>          take the job's builder lock for process <pid> (the session spawning the builder);
+                                 refused while another live process holds it; a dead holder's lock is taken over;
+                                 the same <pid> claiming again keeps it
+  job release <job>              free the job's builder lock (leaving build frees it too)
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
   job caps [--max-jobs N] [--max-usd N] [<job>...]
                                  the caps /factory run hit for the run's jobs: an issue over 5 slices or USD 8, and with
@@ -429,6 +434,52 @@ def cmd_cleanup():
             print(f"warning: {d} belongs to no job; remove it by hand if it isn't yours", file=sys.stderr)
 
 
+def cmd_doctor():
+    """Folders in .worktrees/ that no open job owns: no job at all, or a finished one."""
+    wt = REPO / ".worktrees"
+    open_ = {Path(j["worktree"]).name for j in all_jobs() if j["stage"] not in TERMINAL}
+    orphans = [d for d in sorted(wt.iterdir()) if d.is_dir() and d.name not in open_] if wt.exists() else []
+    for d in orphans:
+        print(f"orphan\t{d}")
+    print(f"{len(orphans)} worktree(s) belong to no open job; nothing was deleted", file=sys.stderr)
+
+
+# ---- Builder lock ------------------------------------------------------------
+
+
+def builder_lock(job_id):
+    return job_dir(job_id) / "builder.lock"
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def cmd_claim(job, pid):
+    """One builder per job. `load` holds the job's flock, so check-and-write is atomic."""
+    path = builder_lock(job["id"])
+    if path.exists():
+        held = json.loads(path.read_text())
+        require(held["pid"] == pid or not alive(held["pid"]),
+                f"{job['id']}: a builder already has this job (pid {held['pid']} since {held['since']}); "
+                "wait for it to finish, or stop that process")
+        if held["pid"] != pid:
+            print(f"{job['id']}: builder pid {held['pid']} is gone; taking over its lock", file=sys.stderr)
+    path.write_text(json.dumps({"pid": pid, "since": now()}) + "\n")
+    print(f"{job['id']}: builder lock held by pid {pid}")
+
+
+def cmd_release(job):
+    builder_lock(job["id"]).unlink(missing_ok=True)
+    print(f"{job['id']}: builder lock free")
+
+
 # ---- Issue → issue.md ------------------------------------------------------
 
 
@@ -793,7 +844,7 @@ def finish_slice_job(job, stage, old):
         require(job.get("abandoned"), "only a slice dropped by a direction change ends `rejected` here")
 
 
-def advance(job, stage):
+def advance(job, stage, triage=True):
     with_defaults(job)
     old = job["stage"]
     require(stage in TRANSITIONS.get(old, set()) or (stage == "merged" and old not in TERMINAL),
@@ -1083,7 +1134,7 @@ def advance(job, stage):
         tl = (d / "triage.md").read_text().split("\n", 1)[1].strip()
         (d / "decision.md").write_text(f"ESCALATE\n\n{tl}\n\n## What stopped the job\n{why}\n")
 
-    if stage == "needs-human" and old in TRIAGED_FROM and not capped:
+    if stage == "needs-human" and old in TRIAGED_FROM and triage and not capped:
         stage = "triage"  # decision.md holds why; the tech-lead decides what's next
 
     if stage == "needs-human":
@@ -1105,6 +1156,9 @@ def advance(job, stage):
 
     if stage in TERMINAL:
         drop_worktree(job)
+
+    if old == "build":  # the builder is done with this round
+        builder_lock(job["id"]).unlink(missing_ok=True)
 
     job["stage"] = stage
     job["ended"] = now() if stage in TERMINAL | WAITING else None
@@ -1628,12 +1682,17 @@ def cmd_merge(job):
         print(f"{job['id']}: merged PR #{job['pr']}")
         return
 
-    def fail(why):
+    def fail(why, triage=True):
         escalate(job, why)
-        done = advance(sync(job), "needs-human")
+        done = advance(sync(job), "needs-human", triage)
         save(done)
         print(f"{job['id']}: {done['stage']}: {why.splitlines()[0]}")
 
+    # Someone may have retargeted the PR on GitHub: never merge into a branch the job didn't review.
+    pr_base = gh_json("pr", "view", str(job["pr"]), "--json", "baseRefName")["baseRefName"]
+    if pr_base != job["base"]:
+        return fail(f"PR #{job['pr']} targets {pr_base}, but the job's base is {job['base']}; not merging.",
+                    triage=False)  # the tech-lead can't retarget a PR: a human decides
     git(job, "fetch", "origin", job["base"])
     merged = git(job, "merge", "--no-edit", f"origin/{job['base']}", check=False)
     if merged.returncode != 0:
@@ -1921,6 +1980,12 @@ def main(argv):
             print(f"{job['id']}: {job['stage']} round {job['round']} gate {job['gate'] or '-'} {reviews}".rstrip())
         elif cmd == "cleanup" and not args:
             cmd_cleanup()
+        elif cmd == "doctor" and not args:
+            cmd_doctor()
+        elif cmd == "claim" and len(args) == 2 and args[1].isdigit():
+            cmd_claim(resolve(args[0]), int(args[1]))
+        elif cmd == "release" and len(args) == 1:
+            cmd_release(resolve(args[0]))
         elif cmd == "summary":
             cmd_summary(args)
         elif cmd == "caps":

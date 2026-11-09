@@ -94,7 +94,7 @@ step "1. Copying the factory"
 FILES=(.claude/skills/factory/SKILL.md)
 for f in "$SRC"/.claude/agents/*.md; do FILES+=(".claude/agents/$(basename "$f")"); done
 for f in "$SRC"/factory/bin/*; do [ -f "$f" ] && FILES+=("factory/bin/$(basename "$f")"); done
-FILES+=(factory/dashboard.html factory/vendor/mermaid.min.js factory/vendor/mermaid.LICENSE)
+FILES+=(factory/dashboard.html factory/pipeline.js factory/vendor/mermaid.min.js factory/vendor/mermaid.LICENSE)
 for f in "$SRC"/factory/tests/*.py; do FILES+=("factory/tests/$(basename "$f")"); done
 for f in "$SRC"/factory/tests/fixtures/*.md; do FILES+=("factory/tests/fixtures/$(basename "$f")"); done
 

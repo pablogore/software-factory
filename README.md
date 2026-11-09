@@ -160,6 +160,7 @@ factory/
   bin/specgate                checks spec.md (≤ 250 words, 1–4 criteria of ≤ 30 words, Valor, Demo, at most one mermaid diagram; a longer spec with `## Excepción de largo` waits for a human: `job spec-ok`) and slices.md
   initiatives/<id>/           vision.md, context.md, slices.md, replan.md, initiative.json (gitignored)
   dashboard.html              the board
+  pipeline.js                 the drawer's pipeline graph: each step's state, from the job's files
 examples/jobs/                finished jobs from a real run
 INSTALL.md                    instructions for the installing agent
 DESIGN.md                     how it works and why
