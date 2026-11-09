@@ -1512,7 +1512,8 @@ def cmd_next_slice(initiative_id):
     job = with_defaults({
         "id": job_id, "issue": init["issue"], "title": first["title"], "issue_url": first["issue_url"],
         "pr": None, "pr_url": None, "branch": f"factory/{job_id}", "base": first["base"],
-        "worktree": str(REPO / ".worktrees" / job_id), "initiative_id": initiative_id, "stage": "spec", "round": 0, "round_limit": CONFIG["max_rounds"],
+        "worktree": str(REPO / ".worktrees" / job_id),
+        "initiative_id": initiative_id, "stage": "spec", "round": 0, "round_limit": CONFIG["max_rounds"],
         "intake": None, "agents": None, "gate": None, "reviews": {}, "cost_usd": 0.0,
         "started": now(), "ended": None})
     shutil.copy(job_dir(first["id"]) / "issue.md", job_dir(job_id) / "issue.md")
