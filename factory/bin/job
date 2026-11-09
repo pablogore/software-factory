@@ -9,7 +9,8 @@ orchestrator never improvises them.
 Usage:
   job queue                      what /factory run should do with each labeled issue
   job create <issue>             new job for an open `factory` issue; fetches origin/<base> first; prints the job id;
-                                 an issue naming paths not in origin/<base> goes straight to needs-info
+                                 an issue naming paths not in origin/<base>, and not ignored by its .gitignore,
+                                 goes straight to needs-info
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job> [--direction]  needs-human → spec (old jobs) | build (rework) | replan (direction); stdin and PR comments
@@ -42,6 +43,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1073,10 +1075,29 @@ def issue_texts(issue):
                                     if c["author"]["login"] in trusted and not c["body"].startswith(MARKER)]
 
 
+def ignored_in_base(paths, files):
+    """The paths the `.gitignore` files of origin/<base> ignore, read from the base, not the checkout.
+    Ignore rules from outside the repo, like the user's global excludes, don't count."""
+    ignores = [f for f in files if Path(f).name == ".gitignore"]
+    if not paths or not ignores:
+        return set()
+    with tempfile.TemporaryDirectory() as tmp:
+        run(["git", "init", "-q", tmp])
+        for f in ignores:
+            dest = Path(tmp) / f
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(run(["git", "show", f"origin/{BASE}:{f}"]).stdout)
+        # -z keeps non-ASCII paths as they are; without it git quotes them
+        res = subprocess.run(["git", "-c", "core.excludesFile=/dev/null", "check-ignore", "--no-index", "-z", "--stdin"],
+                             cwd=tmp, input="\0".join(paths), capture_output=True, text=True)
+    return set(res.stdout.split("\0")) - {""}
+
+
 def missing_paths(issue):
     """Backticked tokens of the issue that look like repo paths but aren't in origin/<base>.
     A token looks like a path when it has a `/` or an extension some file in the base has;
-    refs, URLs, commands and placeholders don't count. None when origin/<base> can't be read."""
+    refs, URLs, commands, placeholders and paths the base's `.gitignore` ignores don't count.
+    None when origin/<base> can't be read."""
     tree = run(["git", "ls-tree", "-r", "--name-only", f"origin/{BASE}"], check=False)
     if tree.returncode != 0:
         print(f"warning: couldn't list origin/{BASE}; the issue's paths aren't checked: "
@@ -1104,7 +1125,8 @@ def missing_paths(issue):
                 continue
             if path.rstrip("/") not in files | dirs and path not in missing:
                 missing.append(path)
-    return missing
+    ignored = ignored_in_base(missing, files)
+    return [p for p in missing if p not in ignored]
 
 
 def write_base_question(job, missing):

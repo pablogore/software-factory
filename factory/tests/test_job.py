@@ -398,6 +398,48 @@ class TestDemoCreateChecksIssuePaths(JobBase):
         self.assertEqual((self.labels, self.comments), ([], []))
 
 
+class TestDemoCreateSkipsIgnoredPaths(TestDemoCreateChecksIssuePaths):
+    """Paths the base's `.gitignore` ignores don't send the issue to needs-info; other missing paths still do."""
+
+    def setUp(self):
+        super().setUp()
+        git = lambda *a: subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.tmp, check=True, capture_output=True)
+        (self.tmp / ".gitignore").write_text("factory/jobs/\n*.log\nnotas/\n")
+        (self.tmp / "src" / ".gitignore").write_text("gen/\n")
+        git("add", ".gitignore", "src/.gitignore")
+        git("commit", "-m", "ignores")
+        git("push", "origin", "main")
+        # an ignore rule only in the local checkout, not in origin/main: it doesn't count
+        (self.tmp / ".gitignore").write_text("factory/jobs/\n*.log\nnotas/\nlib/\n")
+
+    def test_demo_only_ignored_paths_go_to_intake(self):
+        j = self.create("Read `factory/jobs/121-x/spec.md`, `src/gen/out.py` and `build.log`.")
+        self.assertEqual(j["stage"], "intake")
+        self.assertFalse((self.job.job_dir(j["id"]) / "intake.md").exists())
+        self.assertEqual((self.labels, self.comments), ([], []))
+
+    def test_demo_ignored_and_missing_path_lists_only_the_missing_one(self):
+        j = self.create("Read `factory/jobs/121-x/spec.md` and change `lib/gone.py`.")
+        self.assertEqual(j["stage"], "needs-info")
+        question = self.job.section(self.job.job_dir(j["id"]) / "intake.md", "Questions")
+        self.assertIn("`lib/gone.py` is not in", question)
+        self.assertNotIn("factory/jobs", question)
+        self.assertTrue(any(k.get("add") == "factory:needs-info" for _, k in self.labels))
+
+    def test_demo_ignored_accented_path_isnt_missing(self):
+        j = self.create("Read `notas/canción.md` and change `lib/gone.py`.")
+        self.assertEqual(j["stage"], "needs-info")
+        question = self.job.section(self.job.job_dir(j["id"]) / "intake.md", "Questions")
+        self.assertIn("`lib/gone.py` is not in", question)
+        self.assertNotIn("canci", question)
+
+    def test_demo_missing_path_not_ignored_still_stops_the_issue(self):
+        j = self.create("Change `lib/gone.py`.")
+        self.assertEqual(j["stage"], "needs-info")
+        self.assertIn("`lib/gone.py`", self.job.section(self.job.job_dir(j["id"]) / "intake.md", "Questions"))
+
+
 class GuardTest(unittest.TestCase):
     GUARD = SRC / "bin" / "guard"
     REPO = SRC.parent
