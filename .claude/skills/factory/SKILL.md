@@ -208,7 +208,11 @@ Then `factory/bin/route <id>` and `factory/bin/job advance <id> build`. Go to
 feedback; when it returns, `factory/bin/job advance <id> build`. If `advance`
 refuses because the spec isn't amended yet, resume the spec-writer once.
 
-**build.** Spawn or resume `builder-<id>` with
+**build.** First `factory/bin/job claim <id> $PPID` (`$PPID` is this
+session): one builder per job. If it refuses, another live session has the job's
+builder: don't spawn one, tell the user. Leaving `build` (`advance`) frees the
+lock; `factory/bin/job release <id>` frees it when you stop a builder by hand.
+Then spawn or resume `builder-<id>` with
 `<header> Build round <N>. Port: <port>.` plus what this round is for: the
 gate's `round-<N>/gate-retry-<k>.log`, the reviews in `round-<N-1>/`, or, after
 feedback, `The user gave feedback: read feedback-<k>.md, address it, push, and update build.md for round <N>.` (an old job without `initiative_id` also reads the spec's "Changes from feedback <k>"). On a spike (`kind` spike) add

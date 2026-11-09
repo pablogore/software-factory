@@ -21,6 +21,11 @@ Usage:
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
   job sync <job>                 refresh reviews, gate and cost from the job's files
   job cleanup                    remove worktrees and branches that finished jobs left behind (queue does it too)
+  job doctor                     list .worktrees/ folders that belong to no open job, as candidates to delete; deletes nothing
+  job claim <job> <pid>          take the job's builder lock for process <pid> (the session spawning the builder);
+                                 refused while another live process holds it; a dead holder's lock is taken over;
+                                 the same <pid> claiming again keeps it
+  job release <job>              free the job's builder lock (leaving build frees it too)
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
   job status [<job>...]          the summary, plus one line per job waiting on a human: its question or escalation
   job spec-check <job>           run specgate on spec.md; counts failures (3rd → needs-human);
@@ -408,6 +413,52 @@ def cmd_cleanup():
     for d in sorted(wt.iterdir()) if wt.exists() else []:
         if d.is_dir() and d.name not in known and not d.name.startswith("_"):
             print(f"warning: {d} belongs to no job; remove it by hand if it isn't yours", file=sys.stderr)
+
+
+def cmd_doctor():
+    """Folders in .worktrees/ that no open job owns: no job at all, or a finished one."""
+    wt = REPO / ".worktrees"
+    open_ = {Path(j["worktree"]).name for j in all_jobs() if j["stage"] not in TERMINAL}
+    orphans = [d for d in sorted(wt.iterdir()) if d.is_dir() and d.name not in open_] if wt.exists() else []
+    for d in orphans:
+        print(f"orphan\t{d}")
+    print(f"{len(orphans)} worktree(s) belong to no open job; nothing was deleted", file=sys.stderr)
+
+
+# ---- Builder lock ------------------------------------------------------------
+
+
+def builder_lock(job_id):
+    return job_dir(job_id) / "builder.lock"
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def cmd_claim(job, pid):
+    """One builder per job. `load` holds the job's flock, so check-and-write is atomic."""
+    path = builder_lock(job["id"])
+    if path.exists():
+        held = json.loads(path.read_text())
+        require(held["pid"] == pid or not alive(held["pid"]),
+                f"{job['id']}: a builder already has this job (pid {held['pid']} since {held['since']}); "
+                "wait for it to finish, or stop that process")
+        if held["pid"] != pid:
+            print(f"{job['id']}: builder pid {held['pid']} is gone; taking over its lock", file=sys.stderr)
+    path.write_text(json.dumps({"pid": pid, "since": now()}) + "\n")
+    print(f"{job['id']}: builder lock held by pid {pid}")
+
+
+def cmd_release(job):
+    builder_lock(job["id"]).unlink(missing_ok=True)
+    print(f"{job['id']}: builder lock free")
 
 
 # ---- Issue → issue.md ------------------------------------------------------
@@ -1077,6 +1128,9 @@ def advance(job, stage):
     if stage in TERMINAL:
         drop_worktree(job)
 
+    if old == "build":  # the builder is done with this round
+        builder_lock(job["id"]).unlink(missing_ok=True)
+
     job["stage"] = stage
     job["ended"] = now() if stage in TERMINAL | WAITING else None
     if capped:  # the job is saved in needs-human, but the move to build failed
@@ -1742,6 +1796,12 @@ def main(argv):
             print(f"{job['id']}: {job['stage']} round {job['round']} gate {job['gate'] or '-'} {reviews}".rstrip())
         elif cmd == "cleanup" and not args:
             cmd_cleanup()
+        elif cmd == "doctor" and not args:
+            cmd_doctor()
+        elif cmd == "claim" and len(args) == 2 and args[1].isdigit():
+            cmd_claim(resolve(args[0]), int(args[1]))
+        elif cmd == "release" and len(args) == 1:
+            cmd_release(resolve(args[0]))
         elif cmd == "summary":
             cmd_summary(args)
         elif cmd == "status":
