@@ -5,6 +5,10 @@ Usage:
   specgate spec <spec.md> [--long-ok]     a slice spec the builder can start from
   specgate slices <slices.md> [--done]    the slice table; --done allows no `next` (replan DONE)
 
+A slice table has exactly one `next`, or 2 to 3 that are all marked
+`[parallel: path, path]` in their Valor cell with no shared files (the same
+path, or a directory and a path inside it).
+
 Prints `SPECGATE: PASS`, or `SPECGATE: FAIL` and one error per line. Exit 0 on
 PASS, 1 on FAIL. The orchestrator hands the errors back to the spec-writer.
 
@@ -32,6 +36,8 @@ MERMAID = re.compile(r"^```[ \t]*mermaid[ \t]*\n(.*?)^```[ \t]*$\n?", re.M | re.
 STATES = {"next", "idea", "in-progress", "merged", "done", "dropped"}
 KINDS = {"slice", "spike"}
 ROW = re.compile(r"^\|\s*([A-Za-z0-9_.-]+)\s*\|\s*([^|]*?)\s*\|(.*)\|\s*([^|]*?)\s*\|\s*$")
+PARALLEL = re.compile(r"\[parallel(?::([^\]]*))?\]")  # in the Valor cell: `[parallel: path, path]`
+MAX_PARALLEL = 3           # `parallel` slices that can be `next` at once
 
 
 def section(text, heading):
@@ -150,13 +156,39 @@ def check_slices(text, allow_no_next=False):
             errors.append(f"{i}: type {kind!r} isn't one of {', '.join(sorted(KINDS))}")
         if state not in STATES:
             errors.append(f"{i}: state {state!r} isn't one of {', '.join(sorted(STATES))}")
+    files = {}  # slice → the files of its `[parallel: ...]` mark
+    for line in text.splitlines():
+        m = ROW.match(line)
+        p = m and PARALLEL.search(m[3])
+        if p:
+            paths = (f.strip(" `").removeprefix("./").rstrip("/") for f in (p[1] or "").split(","))
+            files[m[1]] = [f for f in paths if f]
+            if not files[m[1]]:
+                errors.append(f"{m[1]}: `parallel` without files; list them as `[parallel: path, path]`")
     nexts = [r[0] for r in rows if r[2] == "next"]
     if allow_no_next:
         if nexts:
             errors.append(f"DONE but slices still `next`: {', '.join(nexts)}")
+    elif len(nexts) > 1 and all(i in files for i in nexts):
+        if len(nexts) > MAX_PARALLEL:
+            errors.append(f"{len(nexts)} `parallel` slices are `next`; the maximum is {MAX_PARALLEL}")
+        for n, a in enumerate(nexts):
+            for b in nexts[n + 1:]:
+                shared = [fa if fa == fb else f"{fa} ({a}) / {fb} ({b})"
+                          for fa in files[a] for fb in files[b] if overlaps(fa, fb)]
+                if shared:
+                    errors.append(f"parallel slices {a} and {b} share files: {', '.join(shared)}")
     elif len(nexts) != 1:
-        errors.append(f"exactly one `next` is required, found {len(nexts)}")
+        lone = [i for i in nexts if i not in files]
+        errors.append(f"exactly one `next` is required, found {len(nexts)}" +
+                      (f"; 2 to {MAX_PARALLEL} can be `next` together only if all are `parallel` "
+                       f"(not `parallel`: {', '.join(lone)})" if nexts else ""))
     return errors
+
+
+def overlaps(a, b):
+    """The same path, or one is a directory that holds the other."""
+    return a == b or b.startswith(a + "/") or a.startswith(b + "/")
 
 
 def main(argv):
