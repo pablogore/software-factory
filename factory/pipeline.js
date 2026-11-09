@@ -38,13 +38,15 @@ function pipelineSteps(job, firstLines) {
   const at = STEP_OF_STAGE[job.stage] || null
   const running = RUNNING_STAGES.has(job.stage)
   const gateFailed = (firstLines[`${dir}checks.md`] || '').trim() === 'GATE: FAIL'
+  // A rework round runs only job.round_reviewers; the others don't write a file this round.
+  const runs = (label) => !job.round_reviewers || job.round_reviewers.includes(label)
   return steps.map(({ id, label, path }) => {
     const first = firstLines[path]
     const doc = first === undefined ? null : path
-    const current = id === at
-    let state = doc ? STATE_OF_TONE[tone(first.trim())] || 'ok' : 'pending'
     // Reviewers write once per round, so a reviewer with a verdict is done even while others run.
-    if (current && running && !(id === 'review' && doc)) state = 'running'
+    const current = id === at && (id !== 'review' || (!doc && runs(label)))
+    let state = doc ? STATE_OF_TONE[tone(first.trim())] || 'ok' : 'pending'
+    if (current && running) state = 'running'
     else if (id === 'build' && gateFailed) state = 'failed'
     return { id, label, doc, state, current }
   })

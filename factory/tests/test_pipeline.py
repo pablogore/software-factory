@@ -64,7 +64,7 @@ class TestDemoPipeline(unittest.TestCase):
             ("intake", "ok", False, "intake.md"),
             ("spec", "ok", False, "spec.md"),
             ("build", "ok", False, "build.md"),
-            ("code", "changes", True, "round-1/review-code.md"),
+            ("code", "changes", False, "round-1/review-code.md"),
             ("ux", "running", True, None),
             ("approver", "pending", False, None),
         ])
@@ -116,6 +116,15 @@ class PipelineStatesTest(unittest.TestCase):
                                             "build.md": "STATUS: BLOCKED\n", "decision.md": "ESCALATE\n"})
         self.assertEqual(out[2]["state"], "failed")
         self.assertEqual((out[-1]["state"], out[-1]["current"]), ("failed", True))
+
+    def test_rework_round_runs_only_its_reviewers(self):
+        rework = dict(job("review", 2), round_reviewers=["code"])
+        out = steps(rework, {"intake.md": "DECISION: ACCEPT\n", "spec.md": "STATUS: READY\n",
+                             "build.md": "STATUS: READY\n", "round-1/review-ux.md": "VERDICT: PASS\n",
+                             "round-2/checks.md": "GATE: PASS\n"})
+        self.assertEqual([(s["label"], s["state"], s["current"]) for s in out[3:5]], [
+            ("code", "running", True), ("ux", "pending", False),
+        ])
 
     def test_needs_info_is_changes_on_intake(self):
         out = steps(job("needs-info", reviewers=None), {"intake.md": "DECISION: NEEDS-INFO\n"})
