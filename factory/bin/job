@@ -87,6 +87,9 @@ TRIAGED_FROM = {"build", "review", "merging"}
 # The most an issue may cost (every job of its initiative) before another
 # build round needs a human; the skill's between-slice cap is the same USD 8.
 ISSUE_CAP_USD = 8.0
+# config.json `cost_check: false` turns the cost cap off (a subscription pays
+# no per-token cost); the round and gate-retry limits still apply.
+COST_CHECK = CONFIG.get("cost_check", True)
 # A failing gate sends the job back to its builder this many times per round
 # before it needs a human; config.json `gate_retries` overrides it.
 GATE_RETRIES = CONFIG.get("gate_retries", 2)
@@ -651,7 +654,10 @@ def issue_cost(job):
 
 def over_cap(job, what=None):
     """Why the next round (or `what`) waits for a human, with decision.md written,
-    when the issue is over ISSUE_CAP_USD; None when it may start."""
+    when the issue is over ISSUE_CAP_USD; None when it may start or the cost
+    check is off."""
+    if not COST_CHECK:
+        return None
     spent = issue_cost(job)
     if spent <= ISSUE_CAP_USD:
         return None
