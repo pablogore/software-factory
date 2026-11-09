@@ -210,7 +210,7 @@
     font-family: var(--mono); font-size: 12px; cursor: default;
   }
   .step[data-file] { cursor: pointer; } .step[data-file]:hover { background: var(--card-hover); }
-  .step .st { font-size: 10.5px; color: var(--faint); }
+  .step .st { font-size: 10.5px; color: var(--muted); }
   .step.ok .st { color: var(--pass); } .step.changes .st { color: var(--changes); }
   .step.failed .st { color: var(--human); } .step.running .st { color: var(--active); }
   .step.on { border-color: var(--muted); }
@@ -278,7 +278,10 @@
     .board { grid-template-columns: 1fr; padding: 16px 16px 32px; }
     footer { padding: 0 16px 24px; }
     .d-head { padding: 16px; }
-    .pipe { padding: 10px 16px; }
+    .pipe { padding: 10px 16px; gap: 4px; }
+    .pipe .arrow { font-size: 13px; }
+    .step { min-width: 0; padding: 4px 6px; font-size: 11px; }
+    .step .st { font-size: 10px; }
     .d-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
     .files {
       border-right: 0; border-bottom: 1px solid var(--line); display: flex; gap: 4px;
