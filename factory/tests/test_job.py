@@ -482,6 +482,33 @@ class TestDemoCreateSkipsIgnoredPaths(TestDemoCreateChecksIssuePaths):
         self.assertIn("`lib/gone.py`", self.job.section(self.job.job_dir(j["id"]) / "intake.md", "Questions"))
 
 
+class TestDemoRepoGitignoreSkipsJobsAndWorktrees(TestDemoCreateChecksIssuePaths):
+    """With this repo's real `.gitignore` on the base, job and worktree files don't stop the issue."""
+
+    def setUp(self):
+        super().setUp()
+        git = lambda *a: subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.tmp, check=True, capture_output=True)
+        shutil.copy(SRC.parent / ".gitignore", self.tmp / ".gitignore")
+        git("add", ".gitignore")
+        git("commit", "-m", "repo ignores")
+        git("push", "origin", "main")
+
+    def test_demo_job_and_worktree_paths_go_to_intake(self):
+        j = self.create("Read `factory/jobs/122-x/spec.md` and `.worktrees/122-x/factory/bin/job`.")
+        self.assertEqual(j["stage"], "intake")
+        self.assertFalse((self.job.job_dir(j["id"]) / "intake.md").exists())
+        self.assertEqual((self.labels, self.comments), ([], []))
+
+    def test_demo_missing_path_outside_them_still_stops_the_issue(self):
+        j = self.create("Read `factory/jobs/122-x/spec.md` and change `lib/gone.py`.")
+        self.assertEqual(j["stage"], "needs-info")
+        question = self.job.section(self.job.job_dir(j["id"]) / "intake.md", "Questions")
+        self.assertIn("`lib/gone.py` is not in", question)
+        self.assertNotIn("factory/jobs", question)
+        self.assertTrue(any(k.get("add") == "factory:needs-info" for _, k in self.labels))
+
+
 class GuardTest(unittest.TestCase):
     GUARD = SRC / "bin" / "guard"
     REPO = SRC.parent
