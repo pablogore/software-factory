@@ -838,7 +838,7 @@ def finish_slice_job(job, stage, old):
         require(job.get("abandoned"), "only a slice dropped by a direction change ends `rejected` here")
 
 
-def advance(job, stage):
+def advance(job, stage, triage=True):
     with_defaults(job)
     old = job["stage"]
     require(stage in TRANSITIONS.get(old, set()) or (stage == "merged" and old not in TERMINAL),
@@ -1128,7 +1128,7 @@ def advance(job, stage):
         tl = (d / "triage.md").read_text().split("\n", 1)[1].strip()
         (d / "decision.md").write_text(f"ESCALATE\n\n{tl}\n\n## What stopped the job\n{why}\n")
 
-    if stage == "needs-human" and old in TRIAGED_FROM and not capped:
+    if stage == "needs-human" and old in TRIAGED_FROM and triage and not capped:
         stage = "triage"  # decision.md holds why; the tech-lead decides what's next
 
     if stage == "needs-human":
@@ -1676,12 +1676,17 @@ def cmd_merge(job):
         print(f"{job['id']}: merged PR #{job['pr']}")
         return
 
-    def fail(why):
+    def fail(why, triage=True):
         escalate(job, why)
-        done = advance(sync(job), "needs-human")
+        done = advance(sync(job), "needs-human", triage)
         save(done)
         print(f"{job['id']}: {done['stage']}: {why.splitlines()[0]}")
 
+    # Someone may have retargeted the PR on GitHub: never merge into a branch the job didn't review.
+    pr_base = gh_json("pr", "view", str(job["pr"]), "--json", "baseRefName")["baseRefName"]
+    if pr_base != job["base"]:
+        return fail(f"PR #{job['pr']} targets {pr_base}, but the job's base is {job['base']}; not merging.",
+                    triage=False)  # the tech-lead can't retarget a PR: a human decides
     git(job, "fetch", "origin", job["base"])
     merged = git(job, "merge", "--no-edit", f"origin/{job['base']}", check=False)
     if merged.returncode != 0:

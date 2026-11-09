@@ -115,7 +115,8 @@ def main(argv):
                if p["head"] == o["head"][0] and p["state"] == "OPEN"]
         print(json.dumps(out))
     elif group == "pr" and cmd == "view":
-        print(json.dumps(pick(find_pr(s, pos[0]), o["json"][0])))
+        p = find_pr(s, pos[0])
+        print(json.dumps(pick({**p, "baseRefName": p["base"]}, o["json"][0])))
     elif group == "pr" and cmd == "ready":
         find_pr(s, pos[0])["isDraft"] = False
     elif group == "pr" and cmd == "comment":
