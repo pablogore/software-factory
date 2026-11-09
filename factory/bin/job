@@ -28,6 +28,9 @@ Usage:
                                  the same <pid> claiming again keeps it
   job release <job>              free the job's builder lock (leaving build frees it too)
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
+  job caps [--max-jobs N] [--max-usd N] [<job>...]
+                                 the caps /factory run hit for the run's jobs: an issue over 5 slices or USD 8, and with
+                                 --auto the run over --max-jobs or --max-usd; `ok` when none; `cost_check: false` skips the USD ones
   job status [<job>...]          the summary, plus one line per job waiting on a human: its question or escalation
   job spec-check <job>           run specgate on spec.md; counts failures (3rd → needs-human);
                                  a spec asking for a length exception → needs-human
@@ -107,8 +110,11 @@ TRIAGED_FROM = {"build", "review", "merging"}
 # The most an issue may cost (every job of its initiative) before another
 # build round needs a human; the skill's between-slice cap is the same USD 8.
 ISSUE_CAP_USD = 8.0
-# config.json `cost_check: false` turns the cost cap off (a subscription pays
-# no per-token cost); the round and gate-retry limits still apply.
+# The most slice jobs an issue starts before the skill holds it for a human.
+ISSUE_SLICES = 5
+# config.json `cost_check: false` turns every cost cap off (a subscription pays
+# no per-token cost): this one, and `job caps`' USD 8 and --max-usd; the round,
+# gate-retry, slice and --max-jobs limits still apply.
 COST_CHECK = CONFIG.get("cost_check", True)
 # A failing gate sends the job back to its builder this many times per round
 # before it needs a human; config.json `gate_retries` overrides it.
@@ -877,7 +883,7 @@ def finish_slice_job(job, stage, old):
         require(job.get("abandoned"), "only a slice dropped by a direction change ends `rejected` here")
 
 
-def advance(job, stage):
+def advance(job, stage, triage=True):
     with_defaults(job)
     old = job["stage"]
     require(stage in TRANSITIONS.get(old, set()) or (stage == "merged" and old not in TERMINAL),
@@ -1182,7 +1188,7 @@ def advance(job, stage):
         tl = (d / "triage.md").read_text().split("\n", 1)[1].strip()
         (d / "decision.md").write_text(f"ESCALATE\n\n{tl}\n\n## What stopped the job\n{why}\n")
 
-    if stage == "needs-human" and old in TRIAGED_FROM and not capped:
+    if stage == "needs-human" and old in TRIAGED_FROM and triage and not capped:
         stage = "triage"  # decision.md holds why; the tech-lead decides what's next
 
     if stage == "needs-human":
@@ -1771,12 +1777,17 @@ def cmd_merge(job):
         print(f"{job['id']}: merged PR #{job['pr']}")
         return
 
-    def fail(why):
+    def fail(why, triage=True):
         escalate(job, why)
-        done = advance(sync(job), "needs-human")
+        done = advance(sync(job), "needs-human", triage)
         save(done)
         print(f"{job['id']}: {done['stage']}: {why.splitlines()[0]}")
 
+    # Someone may have retargeted the PR on GitHub: never merge into a branch the job didn't review.
+    pr_base = gh_json("pr", "view", str(job["pr"]), "--json", "baseRefName")["baseRefName"]
+    if pr_base != job["base"]:
+        return fail(f"PR #{job['pr']} targets {pr_base}, but the job's base is {job['base']}; not merging.",
+                    triage=False)  # the tech-lead can't retarget a PR: a human decides
     git(job, "fetch", "origin", job["base"])
     merged = git(job, "merge", "--no-edit", f"origin/{job['base']}", check=False)
     if merged.returncode != 0:
@@ -1974,6 +1985,38 @@ def cmd_summary(args, show_pending=False):
     print(f"total ${sum(j['cost_usd'] for j in jobs):.2f} (API-equivalent, factory agents only)")
 
 
+def caps(run_jobs, max_jobs=None, max_usd=None):
+    """Why /factory run starts no new work, one line per cap hit: an issue of
+    `run_jobs` (every job when empty) over ISSUE_SLICES slices or ISSUE_CAP_USD,
+    and, for --auto, the run over `max_jobs` started or `max_usd` spent. With
+    `cost_check: false` no USD cap applies."""
+    everyone = all_jobs()
+    cost = {j["id"]: cost_usd(j) for j in everyone}
+    lines = []
+    for init in dict.fromkeys(j["initiative_id"] for j in run_jobs or everyone if j["initiative_id"]):
+        mine = [j for j in everyone if j["initiative_id"] == init]
+        spent = sum(cost[j["id"]] for j in mine)
+        if len(mine) > ISSUE_SLICES or (COST_CHECK and spent > ISSUE_CAP_USD):
+            lines.append(f"#{mine[0]['issue']}: {len(mine)} slices, ${spent:.2f} — pausing this issue")
+    if max_jobs is not None and len(run_jobs) >= max_jobs:
+        lines.append(f"run: {len(run_jobs)} jobs started, --max-jobs {max_jobs:g} — starting no new work")
+    spent = sum(cost.get(j["id"], 0.0) for j in run_jobs)
+    if max_usd is not None and COST_CHECK and spent >= max_usd:
+        lines.append(f"run: ${spent:.2f} spent, --max-usd {max_usd:g} — starting no new work")
+    return lines
+
+
+def cmd_caps(args):
+    opts = {"--max-jobs": None, "--max-usd": None}
+    while args and args[0] in opts:
+        if len(args) < 2:
+            die(f"{args[0]} needs a number")
+        opts[args[0]] = float(args[1])
+        args = args[2:]
+    lines = caps([resolve(a) for a in args], opts["--max-jobs"], opts["--max-usd"])
+    print("\n".join(lines) if lines else "ok")
+
+
 def main(argv):
     if not argv or argv[0] in {"-h", "--help"}:
         print(__doc__.strip())
@@ -2042,6 +2085,8 @@ def main(argv):
             cmd_release(resolve(args[0]))
         elif cmd == "summary":
             cmd_summary(args)
+        elif cmd == "caps":
+            cmd_caps(args)
         elif cmd == "status":
             cmd_summary(args, show_pending=True)
         else:

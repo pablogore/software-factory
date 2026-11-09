@@ -267,6 +267,60 @@ class JobTest(JobBase):
         self.assertEqual((j["stage"], j["round"]), ("needs-human", 3))
         self.assertIn("Review rounds exhausted", (self.job.job_dir("007-test") / "decision.md").read_text())
 
+    # ---- job caps: the skill's pause between slices and --auto caps ---------
+
+    def issue_jobs(self, costs, initiative_id="i1"):
+        """One job per cost for issue #7's initiative; returns their ids."""
+        ids = [f"{k:03d}-s{k}" for k in range(1, len(costs) + 1)]
+        self.job.cost_usd = lambda j: dict(zip(ids, costs)).get(j["id"], 0.0)
+        for k, jid in enumerate(ids, 1):
+            self.job.job_dir(jid).mkdir(parents=True)
+            self.job.save({"id": jid, "issue": 7, "stage": "merged", "initiative_id": initiative_id,
+                           "slice_id": f"S{k}", "cost_usd": 0.0})
+        return ids
+
+    def caps(self, *args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.job.main(["caps", *args])
+        return out.getvalue().strip()
+
+    def test_demo_cost_check_off_issue_over_usd_8_starts_more_slices(self):
+        self.cost_check(False)
+        ids = self.issue_jobs([5.0, 4.0])
+        self.assertEqual(self.caps(*ids), "ok")
+
+    def test_demo_cost_check_off_auto_ignores_max_usd(self):
+        self.cost_check(False)
+        ids = self.issue_jobs([3.0, 3.0], initiative_id=None)
+        self.assertEqual(self.caps("--max-jobs", "5", "--max-usd", "1", *ids), "ok")
+
+    def test_demo_cost_check_off_slice_and_max_jobs_caps_still_hold(self):
+        self.cost_check(False)
+        ids = self.issue_jobs([0.0] * 6)
+        self.assertEqual(self.caps("--max-jobs", "6", "--max-usd", "0", *ids).splitlines(), [
+            "#7: 6 slices, $0.00 — pausing this issue",
+            "run: 6 jobs started, --max-jobs 6 — starting no new work",
+        ])
+
+    def test_demo_cost_check_missing_usd_caps_hold_as_before(self):
+        self.assertTrue(self.job.COST_CHECK)
+        ids = self.issue_jobs([5.0, 3.01])
+        self.assertEqual(self.caps("--max-jobs", "5", "--max-usd", "8", *ids).splitlines(), [
+            "#7: 2 slices, $8.01 — pausing this issue",
+            "run: $8.01 spent, --max-usd 8 — starting no new work",
+        ])
+
+    def test_demo_cost_check_true_usd_caps_hold_as_before(self):
+        self.cost_check(True)
+        ids = self.issue_jobs([5.0, 3.01])
+        self.assertEqual(self.caps(*ids), "#7: 2 slices, $8.01 — pausing this issue")
+        self.assertEqual(self.caps("--max-usd", "20", *ids), "#7: 2 slices, $8.01 — pausing this issue")
+
+    def test_cost_check_on_at_the_caps_nothing_holds(self):
+        ids = self.issue_jobs([5.0, 3.0, 0.0, 0.0, 0.0])
+        self.assertEqual(self.caps("--max-jobs", "6", "--max-usd", "8.01", *ids), "ok")
+
     # ---- feedback -----------------------------------------------------------
 
     def escalated(self):

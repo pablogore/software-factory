@@ -37,8 +37,18 @@ def steps(job, files):
         shutil.rmtree(tmp)
 
 
-def job(stage, rnd=0, reviewers=REVIEWERS):
-    return {"id": "7-demo", "stage": stage, "round": rnd, "agents": {"reviewers": reviewers} if reviewers else None}
+def loop(job):
+    """reviewLoop(job): the reviewers → build loop, or None."""
+    script = ("const { reviewLoop } = require(process.argv[1]);"
+              "console.log(JSON.stringify(reviewLoop(JSON.parse(require('fs').readFileSync(0, 'utf8')))))")
+    res = subprocess.run(["node", "-e", script, str(PIPELINE)], input=json.dumps(job),
+                         capture_output=True, text=True, check=True)
+    return json.loads(res.stdout)
+
+
+def job(stage, rnd=0, reviewers=REVIEWERS, limit=3):
+    return {"id": "7-demo", "stage": stage, "round": rnd, "round_limit": limit,
+            "agents": {"reviewers": reviewers} if reviewers else None}
 
 
 def table(out):
@@ -96,8 +106,41 @@ class TestDemoPipeline(unittest.TestCase):
             ("approver", "ok", False, "decision.md"),
         ])
 
+    def test_demo_first_round_has_no_loop(self):
+        # Round 1 runs every reviewer: none is skipped and there's no loop back to build.
+        first = dict(job("review", 1), round_reviewers=None)
+        out = steps(first, {"intake.md": "DECISION: ACCEPT\n", "spec.md": "STATUS: READY\n",
+                            "build.md": "STATUS: READY\n", "round-1/checks.md": "GATE: PASS\n"})
+        self.assertEqual([(s["label"], s["state"], s["current"]) for s in out[3:5]], [
+            ("code", "running", True), ("ux", "running", True),
+        ])
+        self.assertIsNone(loop(first))
+
+    def test_demo_rework_round_2_skips_a_reviewer(self):
+        # ux passed in round 1, so round 2 re-runs only code: ux is skipped, not pending.
+        rework = dict(job("review", 2), round_reviewers=["code"])
+        out = steps(rework, {
+            "intake.md": "DECISION: ACCEPT\n", "spec.md": "STATUS: READY\n", "build.md": "STATUS: READY\n",
+            "round-1/checks.md": "GATE: PASS\n", "round-1/review-code.md": "VERDICT: CHANGES\n",
+            "round-1/review-ux.md": "VERDICT: PASS\n", "round-2/checks.md": "GATE: PASS\n",
+        })
+        self.assertEqual(table(out)[3:5], [
+            ("code", "running", True, None),
+            ("ux", "skipped", False, None),
+        ])
+        self.assertEqual(loop(rework), {"round": 2, "limit": 3})
+
 
 class PipelineStatesTest(unittest.TestCase):
+    def test_skipped_reviewer_stays_skipped_while_rebuilding(self):
+        rework = dict(job("build", 2), round_reviewers=["code"])
+        out = steps(rework, {"intake.md": "DECISION: ACCEPT\n", "spec.md": "STATUS: READY\n",
+                             "build.md": "STATUS: READY\n", "round-1/review-ux.md": "VERDICT: PASS\n"})
+        self.assertEqual([(s["label"], s["state"]) for s in out[3:5]], [("code", "pending"), ("ux", "skipped")])
+
+    def test_loop_shows_the_jobs_own_limit(self):
+        self.assertEqual(loop(job("build", 4, limit=6)), {"round": 4, "limit": 6})
+
     def test_gate_failure_fails_build(self):
         out = steps(job("triage", 1), {"intake.md": "DECISION: ACCEPT\n", "spec.md": "STATUS: READY\n",
                                        "build.md": "STATUS: READY\n", "round-1/checks.md": "GATE: FAIL\n"})
@@ -123,7 +166,7 @@ class PipelineStatesTest(unittest.TestCase):
                              "build.md": "STATUS: READY\n", "round-1/review-ux.md": "VERDICT: PASS\n",
                              "round-2/checks.md": "GATE: PASS\n"})
         self.assertEqual([(s["label"], s["state"], s["current"]) for s in out[3:5]], [
-            ("code", "running", True), ("ux", "pending", False),
+            ("code", "running", True), ("ux", "skipped", False),
         ])
 
     def test_needs_info_is_changes_on_intake(self):
