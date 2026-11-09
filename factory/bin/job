@@ -23,9 +23,10 @@ Usage:
   job sync <job>                 refresh reviews, gate and cost from the job's files
   job cleanup                    remove worktrees and branches that finished jobs left behind (queue does it too)
   job doctor                     list .worktrees/ folders that belong to no open job, as candidates to delete; deletes nothing
-  job claim <job> <pid>          take the job's builder lock for process <pid> (the session spawning the builder);
-                                 refused while another live process holds it; a dead holder's lock is taken over;
-                                 the same <pid> claiming again keeps it
+  job claim <job> --spawn <pid>  take the job's builder lock for builder-<job> before spawning it; <pid> is the
+                                 session spawning it; refused while any live session holds the lock, this one too;
+                                 a dead session's lock is taken over
+  job claim <job> --resume <name>  accept resuming builder <name> only if it holds the job's live lock
   job release <job>              free the job's builder lock (leaving build frees it too)
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
   job caps [--max-jobs N] [--max-usd N] [<job>...]
@@ -466,18 +467,35 @@ def alive(pid):
     return True
 
 
-def cmd_claim(job, pid):
+def held_lock(job_id):
+    """The job's builder lock, or None when it's free or its session died."""
+    path = builder_lock(job_id)
+    if not path.exists():
+        return None
+    held = json.loads(path.read_text())
+    return held if alive(held["pid"]) else None
+
+
+def cmd_claim_spawn(job, pid):
     """One builder per job. `load` holds the job's flock, so check-and-write is atomic."""
     path = builder_lock(job["id"])
+    held = held_lock(job["id"])
+    if held:
+        raise Refused(f"{job['id']}: {held['builder']} already has this job (session pid {held['pid']} "
+                      f"since {held['since']}); resume it with --resume, or stop it and `job release`")
     if path.exists():
-        held = json.loads(path.read_text())
-        require(held["pid"] == pid or not alive(held["pid"]),
-                f"{job['id']}: a builder already has this job (pid {held['pid']} since {held['since']}); "
-                "wait for it to finish, or stop that process")
-        if held["pid"] != pid:
-            print(f"{job['id']}: builder pid {held['pid']} is gone; taking over its lock", file=sys.stderr)
-    path.write_text(json.dumps({"pid": pid, "since": now()}) + "\n")
-    print(f"{job['id']}: builder lock held by pid {pid}")
+        print(f"{job['id']}: the session that held the builder lock is gone; taking it over", file=sys.stderr)
+    name = f"builder-{job['id']}"
+    path.write_text(json.dumps({"pid": pid, "builder": name, "since": now()}) + "\n")
+    print(f"{job['id']}: builder lock held by {name} (session pid {pid})")
+
+
+def cmd_claim_resume(job, name):
+    held = held_lock(job["id"])
+    require(held is not None and held["builder"] == name,
+            f"{job['id']}: {name} doesn't hold the builder lock "
+            f"({'held by ' + held['builder'] if held else 'no live builder holds it'})")
+    print(f"{job['id']}: {name} holds the builder lock; resume it")
 
 
 def cmd_release(job):
@@ -2079,8 +2097,10 @@ def main(argv):
             cmd_cleanup()
         elif cmd == "doctor" and not args:
             cmd_doctor()
-        elif cmd == "claim" and len(args) == 2 and args[1].isdigit():
-            cmd_claim(resolve(args[0]), int(args[1]))
+        elif cmd == "claim" and len(args) == 3 and args[1] == "--spawn" and args[2].isdigit():
+            cmd_claim_spawn(resolve(args[0]), int(args[2]))
+        elif cmd == "claim" and len(args) == 3 and args[1] == "--resume":
+            cmd_claim_resume(resolve(args[0]), args[2])
         elif cmd == "release" and len(args) == 1:
             cmd_release(resolve(args[0]))
         elif cmd == "summary":

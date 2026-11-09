@@ -1,4 +1,4 @@
-"""One builder per job (`job claim` / `job release`) and `job doctor`'s orphan worktrees.
+"""One builder per job (`job claim --spawn|--resume` / `job release`) and `job doctor`'s orphan worktrees.
 
 The commands run for real on a temporary copy of factory/; the builders are
 real processes (`sleep`), alive or already reaped.
@@ -53,40 +53,65 @@ class TestDemoBuilderLock(unittest.TestCase):
         p.wait()
         return p.pid
 
-    def test_demo_second_builder_on_a_live_job_is_refused(self):
+    def lock(self, job_id):
+        return json.loads((self.tmp / "factory/jobs" / job_id / "builder.lock").read_text())
+
+    def test_demo_builder_lock_second_spawn_from_the_same_session_is_refused(self):
+        self.add_job("001-a", "build")
+        session = self.live_builder()
+        self.assertEqual(self.job("claim", "001-a", "--spawn", session).returncode, 0)
+        res = self.job("claim", "001-a", "--spawn", session)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn(f"builder-001-a already has this job (session pid {session}", res.stderr)
+        self.assertEqual((self.lock("001-a")["pid"], self.lock("001-a")["builder"]), (session, "builder-001-a"))
+
+    def test_demo_builder_lock_spawn_from_another_live_session_is_refused(self):
         self.add_job("001-a", "build")
         first, second = self.live_builder(), self.live_builder()
-        self.assertEqual(self.job("claim", "001-a", first).returncode, 0)
-        res = self.job("claim", "001-a", second)
-        self.assertNotEqual(res.returncode, 0)
-        self.assertIn(f"a builder already has this job (pid {first}", res.stderr)
-        lock = json.loads((self.tmp / "factory/jobs/001-a/builder.lock").read_text())
-        self.assertEqual(lock["pid"], first)
+        self.assertEqual(self.job("claim", "001-a", "--spawn", first).returncode, 0)
+        self.assertEqual(self.job("claim", "001-a", "--spawn", second).returncode, 1)
+        self.assertEqual(self.lock("001-a")["pid"], first)
 
-    def test_demo_same_session_claiming_again_keeps_the_lock(self):
+    def test_demo_builder_lock_resume_is_accepted_only_for_its_builder(self):
         self.add_job("001-a", "build")
-        pid = self.live_builder()
-        self.assertEqual(self.job("claim", "001-a", pid).returncode, 0)
-        self.assertEqual(self.job("claim", "001-a", pid).returncode, 0)
+        self.assertEqual(self.job("claim", "001-a", "--spawn", self.live_builder()).returncode, 0)
+        res = self.job("claim", "001-a", "--resume", "builder-001-a")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        res = self.job("claim", "001-a", "--resume", "builder-002-b")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("builder-002-b doesn't hold the builder lock (held by builder-001-a)", res.stderr)
 
-    def test_demo_dead_builder_lock_is_taken_over(self):
+    def test_demo_builder_lock_resume_without_a_lock_is_refused(self):
+        self.add_job("001-a", "build")
+        res = self.job("claim", "001-a", "--resume", "builder-001-a")
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("no live builder holds it", res.stderr)
+
+    def test_demo_builder_lock_dead_session_lock_is_taken_by_a_new_spawn(self):
         self.add_job("001-a", "build")
         dead = self.dead_builder()
-        self.assertEqual(self.job("claim", "001-a", dead).returncode, 0)
-        pid = self.live_builder()
-        res = self.job("claim", "001-a", pid)
+        self.assertEqual(self.job("claim", "001-a", "--spawn", dead).returncode, 0)
+        self.assertEqual(self.job("claim", "001-a", "--resume", "builder-001-a").returncode, 1)
+        session = self.live_builder()
+        res = self.job("claim", "001-a", "--spawn", session)
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn(f"builder pid {dead} is gone", res.stderr)
-        lock = json.loads((self.tmp / "factory/jobs/001-a/builder.lock").read_text())
-        self.assertEqual(lock["pid"], pid)
+        self.assertIn("the session that held the builder lock is gone", res.stderr)
+        self.assertEqual(self.lock("001-a")["pid"], session)
 
-    def test_demo_release_frees_the_job_for_the_next_builder(self):
+    def test_demo_builder_lock_old_pid_form_is_refused(self):
+        self.add_job("001-a", "build")
+        res = self.job("claim", "001-a", self.live_builder())
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("bad arguments", res.stderr)
+        self.assertFalse((self.tmp / "factory/jobs/001-a/builder.lock").exists())
+
+    def test_demo_builder_lock_release_frees_the_job_for_the_next_spawn(self):
         self.add_job("001-a", "build")
         first, second = self.live_builder(), self.live_builder()
-        self.assertEqual(self.job("claim", "001-a", first).returncode, 0)
+        self.assertEqual(self.job("claim", "001-a", "--spawn", first).returncode, 0)
         self.assertEqual(self.job("release", "001-a").returncode, 0)
         self.assertFalse((self.tmp / "factory/jobs/001-a/builder.lock").exists())
-        self.assertEqual(self.job("claim", "001-a", second).returncode, 0)
+        self.assertEqual(self.job("claim", "001-a", "--spawn", second).returncode, 0)
 
     def test_demo_doctor_lists_orphan_worktrees_and_deletes_nothing(self):
         self.add_job("001-open", "build")
@@ -108,11 +133,11 @@ class TestDemoBuilderLock(unittest.TestCase):
 
 
 class TestDemoLeavingBuildFreesTheLock(JobBase):
-    def test_demo_blocked_builder_leaving_build_frees_the_lock(self):
+    def test_demo_builder_lock_blocked_builder_leaving_build_frees_it(self):
         j = self.make("build", pr=None)
         self.write("build.md", "STATUS: BLOCKED\n\n## Blocked\nno env\n")
         with contextlib.redirect_stdout(io.StringIO()):
-            self.job.cmd_claim(self.job.load(j["id"]), os.getpid())
+            self.job.cmd_claim_spawn(self.job.load(j["id"]), os.getpid())
         lock = self.job.builder_lock(j["id"])
         self.assertTrue(lock.exists())
         self.job.advance(self.job.sync(j), "needs-human")
