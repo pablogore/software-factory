@@ -180,7 +180,6 @@ class PipelineStatesTest(unittest.TestCase):
         self.assertEqual((out[0]["state"], out[0]["current"]), ("changes", True))
 
 
-
 class TestDemoPipelineWithoutNode(unittest.TestCase):
     def test_demo_without_node_pipeline_tests_are_skipped(self):
         tmp = tempfile.mkdtemp()
@@ -192,7 +191,9 @@ class TestDemoPipelineWithoutNode(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("OK (skipped=13)", res.stderr)
+        loader = unittest.TestLoader()
+        count = sum(loader.loadTestsFromTestCase(c).countTestCases() for c in (TestDemoPipeline, PipelineStatesTest))
+        self.assertIn(f"OK (skipped={count})", res.stderr)
         self.assertIn("skipped 'needs node on the PATH", res.stderr)
         self.assertNotIn(" ... ok", res.stderr)
 
