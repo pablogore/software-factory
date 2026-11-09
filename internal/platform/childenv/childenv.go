@@ -4,17 +4,20 @@
 package childenv
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pablogore/software-factory/internal/domain"
 )
 
 // passed are the variables a job's process gets from factoryd's
 // environment as they are; every LC_* variable is passed too.
 var passed = []string{"PATH", "LANG", "TMPDIR"}
 
-// Base is the environment of a process factoryd runs in the job's worktree
-// home: PATH, the locale and TMPDIR from factoryd's environment, HOME set to
+// Base is the environment of a process factoryd runs on a job's code with
+// home as its HOME: PATH, the locale and TMPDIR from factoryd's environment, HOME set to
 // home, and the Go caches where factoryd's own are.
 func Base(home string) []string {
 	var e []string
@@ -34,8 +37,8 @@ func Base(home string) []string {
 
 // caches are the Go caches factoryd uses, set even when factoryd's
 // environment leaves them to their defaults: those hang off HOME, and a
-// HOME in the worktree would leave the checks downloading and building
-// everything again, into the worktree.
+// job's own HOME would leave the checks downloading and building everything
+// again, for every job.
 func caches() []string {
 	var e []string
 	if v, ok := os.LookupEnv("GOMODCACHE"); ok {
@@ -55,4 +58,44 @@ func caches() []string {
 		}
 	}
 	return e
+}
+
+// Homes are the HOMEs of jobs' processes: one directory per job under Root,
+// apart from every worktree, so a job's agent and gate share one and no two
+// jobs do.
+type Homes struct {
+	Root string
+}
+
+// DefaultHomes keeps the jobs' HOMEs in factoryd's data directory, under
+// the user's cache directory.
+func DefaultHomes() (Homes, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return Homes{}, fmt.Errorf("childenv: homes: %w", err)
+	}
+	return Homes{Root: filepath.Join(dir, "factoryd", "homes")}, nil
+}
+
+// For is job's HOME, an absolute path, made when it is missing. It refuses
+// ids that would land outside Root.
+func (h Homes) For(job domain.JobID) (string, error) {
+	if h.Root == "" {
+		return "", fmt.Errorf("childenv: %w: homes root", domain.ErrMissingField)
+	}
+	id := string(job)
+	if id == "" {
+		return "", fmt.Errorf("childenv: home: %w: job id", domain.ErrMissingField)
+	}
+	if id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
+		return "", fmt.Errorf("childenv: home of job %q: %w", id, domain.ErrInvalidValue)
+	}
+	home, err := filepath.Abs(filepath.Join(h.Root, id))
+	if err != nil {
+		return "", fmt.Errorf("childenv: home of job %q: %w", id, err)
+	}
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return "", fmt.Errorf("childenv: home of job %q: %w", id, err)
+	}
+	return home, nil
 }
