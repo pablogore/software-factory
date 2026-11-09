@@ -13,6 +13,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/wiring"
@@ -49,7 +50,7 @@ func checkWith(ctx *specs.Context, command []string, timeout time.Duration, maxO
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 	ctx.Expect(store.RecordBase(context.Background(), "j-1", base)).To(specs.BeNil())
-	g := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), command, nil, timeout, maxOutput)
+	g := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), childenv.Homes{Root: ctx.Testing().TempDir()}, command, nil, timeout, maxOutput)
 	run, err := g.Check(context.Background(), "j-1")
 	ctx.Expect(err).To(specs.BeNil())
 	return run

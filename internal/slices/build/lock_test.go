@@ -18,7 +18,7 @@ type afterRelease struct {
 	clean    bool
 }
 
-func (a *afterRelease) Run(context.Context, string, []string) (domain.ChecksRun, error) {
+func (a *afterRelease) Run(context.Context, domain.JobID, string, []string) (domain.ChecksRun, error) {
 	select {
 	case <-a.released:
 		a.clean = true
@@ -85,7 +85,7 @@ func TestGateLock(t *testing.T) {
 // checkFunc is a passing checks run that calls f while it runs.
 type checkFunc func()
 
-func (f checkFunc) Run(context.Context, string, []string) (domain.ChecksRun, error) {
+func (f checkFunc) Run(context.Context, domain.JobID, string, []string) (domain.ChecksRun, error) {
 	f()
 	return passing, nil
 }

@@ -24,11 +24,12 @@ type worktrees interface {
 	Prepare(ctx context.Context, job domain.JobID) (ports.Worktree, error)
 }
 
-// checks runs a command in a directory and reports how it went. A command
+// checks runs a command for a job in a directory and reports how it went;
+// the job picks the environment it runs with, such as its HOME. A command
 // that ran and exited non-zero is a run, not an error; an error means it
 // could not be run at all.
 type checks interface {
-	Run(ctx context.Context, dir string, command []string) (domain.ChecksRun, error)
+	Run(ctx context.Context, job domain.JobID, dir string, command []string) (domain.ChecksRun, error)
 }
 
 // bases is what the gate needs of ports.BaseLog: the commit recorded when

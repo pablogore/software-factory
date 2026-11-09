@@ -18,6 +18,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/slices/build"
@@ -45,11 +46,12 @@ func newSharedGate(ctx *specs.Context) sharedGate {
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 	ctx.Expect(store.RecordBase(context.Background(), "j-1", base)).To(specs.BeNil())
 	locks := gatelock.New()
+	homes := childenv.Homes{Root: ctx.Testing().TempDir()}
 	long := []string{"sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $! > " + pidFile + "; wait"}
-	runGate := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, long, nil, time.Minute, wiring.DefaultRunGateMaxOutput)
+	runGate := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, long, nil, time.Minute, wiring.DefaultRunGateMaxOutput)
 	// The real gate passes only when no process of the run_gate run is left.
 	noneLeft := []string{"sh", "-c", "! kill -0 $(cat " + pidFile + ") 2>/dev/null"}
-	gate := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, noneLeft, nil)
+	gate := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, noneLeft, nil)
 	tokens := jobtoken.New()
 	token, err := tokens.Issue(jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: []string{"submit_result", "progress", "run_gate"}, Round: 1})
 	ctx.Expect(err).To(specs.BeNil())

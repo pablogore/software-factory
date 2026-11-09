@@ -74,19 +74,20 @@ func (d *diffs) InWorktree(_ context.Context, _, file string) (string, error) {
 	return d.after[file], d.readErr
 }
 
-// checks answers every run with run, or with err, and records where and
-// what it was asked to run.
+// checks answers every run with run, or with err, and records for which job,
+// where and what it was asked to run.
 type checks struct {
 	run     domain.ChecksRun
 	err     error
+	job     domain.JobID
 	dir     string
 	command []string
 	calls   int
 }
 
-func (c *checks) Run(_ context.Context, dir string, command []string) (domain.ChecksRun, error) {
+func (c *checks) Run(_ context.Context, job domain.JobID, dir string, command []string) (domain.ChecksRun, error) {
 	c.calls++
-	c.dir, c.command = dir, command
+	c.job, c.dir, c.command = job, dir, command
 	return c.run, c.err
 }
 
@@ -134,13 +135,14 @@ func TestGate(t *testing.T) {
 	specs.Describe(t, "build.Gate", func(s *specs.Spec) {
 		bg := context.Background()
 
-		s.It("runs make check by default in the job's worktree, with no agent", func(ctx *specs.Context) {
+		s.It("runs make check by default for the job in its worktree, with no agent", func(ctx *specs.Context) {
 			c := &checks{run: passing}
 			g, _ := newGate(ctx, domain.StageGate, 1, c)
 
 			_, err := g.Run(bg, "j-1")
 
 			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(c.job).ToEqual(domain.JobID("j-1"))
 			ctx.Expect(c.dir).ToEqual("/wt/j-1")
 			ctx.Expect(c.command).ToEqual([]string{"make", "check"})
 		})
