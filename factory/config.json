@@ -2,6 +2,7 @@
   "concurrency": 3,
   "max_rounds": 3,
   "base_branch": "main",
+  "allowed_bases": ["main", "arch/factoryd-go"],
   "language": "es",
   "checkpoint": "every-slice",
   "merge_method": "merge",
