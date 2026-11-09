@@ -21,6 +21,10 @@ Stop and tell the user if any of these fail:
 - None of the files in step 1 already exist. If one does, show the user the
   clash and ask before overwriting.
 
+Node is optional and not a reason to stop. The dashboard's pipeline tests
+(`factory/tests/test_pipeline.py`) need `node` on the PATH; without it those
+tests are skipped, not failed.
+
 ## 1. Copy
 
 Copy these files to the same paths in the project, unchanged:
