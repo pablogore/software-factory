@@ -392,6 +392,76 @@ class GateRetryE2E(E2EBase):
         self.assertIn("factory:needs-human", self.gh()["issues"][str(n)]["labels"])
 
 
+class PausedE2E(E2EBase):
+    """An agent cut short by a rate limit: the job waits in `paused`, spends no
+    round, and resumes in the step that was cut."""
+
+    built = GateRetryE2E.built
+
+    def agent(self, reply):
+        """A simulated agent: a script that ends with `reply`, as Claude Code's agent would."""
+        script = self.tmp / "agent.sh"
+        script.write_text(f"#!/bin/sh\ncat <<'EOF'\n{reply}\nEOF\n")
+        script.chmod(0o755)
+        return self.sh(str(script)).stdout
+
+    def row(self, jid):
+        return next(r.split("\t") for r in self.job("queue").stdout.splitlines() if r.split("\t")[2] == jid)
+
+    def test_demo_paused_by_a_rate_limit_and_resumed_in_the_same_step(self):
+        jid, n = self.built("Paused by a limit")
+        before = self.stage(jid)
+
+        # Another error is not a pause: the job stays in build.
+        res = self.job("pause", jid, ok=False, input=self.agent("API Error: 500 internal server error"))
+        self.assertIn("isn't a rate limit", res.stderr)
+        self.assertEqual(self.stage(jid)["stage"], "build")
+
+        # The builder is cut by the subscription's limit, which resets in an hour.
+        reset = int(time.time()) + 3600
+        out = self.job("pause", jid, input=self.agent(f"Claude AI usage limit reached|{reset}")).stdout
+        self.assertIn(f"{jid}: paused in build (round 1)", out)
+        j = self.stage(jid)
+        when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(reset))
+        self.assertEqual(j["stage"], "paused")
+        self.assertEqual(j["pause"]["from"], "build")
+        self.assertEqual(j["pause"]["resume_at"], when)
+        self.assertIn("usage limit reached", j["pause"]["reason"])
+        self.assertEqual((j["round"], j["round_limit"], j.get("gate_retries")),
+                         (before["round"], before["round_limit"], before.get("gate_retries")))
+        self.assertNotIn("factory:needs-human", self.gh()["issues"][str(n)]["labels"])
+
+        # Not due yet: `/factory run` shows it waiting; status shows reason and time.
+        row = self.row(jid)
+        self.assertEqual((row[0], row[3]), ("wait", "paused"))
+        self.assertIn(when, row[4])
+        self.assertIn(f"paused in build: Claude AI usage limit reached|{reset}; resumes after {when}",
+                      self.job("status", jid).stdout)
+
+        # `/factory run <n>` resumes it now, in build, same round.
+        self.assertEqual(self.job("resume", str(n)).stdout.strip(), f"{jid}: build (round 1), resumed")
+        self.assertNotIn("pause", self.stage(jid))
+        self.build(jid, n, {"done.txt": "ok\n"}, "work")
+        self.assertIn("GATE: PASS (" + jid + " round 1", self.to_review(jid))
+        self.assertIn("review (round 1)", self.job("advance", jid, "review").stdout)
+
+        # A reviewer cut with no reset time: only `/factory run <n>` resumes it.
+        self.job("pause", jid, input=self.agent("You've hit your limit"))
+        j = self.stage(jid)
+        self.assertEqual((j["stage"], j["round"], j["pause"]["resume_at"]), ("paused", 1, None))
+        row = self.row(jid)
+        self.assertEqual(row[0], "wait")
+        self.assertIn("reset time unknown", row[4])
+
+        # Its reset time passed: `/factory run` lists it as resume, back in review.
+        j["pause"]["resume_at"] = "2000-01-01T00:00:00Z"
+        (self.repo / f"factory/jobs/{jid}/job.json").write_text(json.dumps(j))
+        self.assertEqual(self.row(jid)[0], "resume")
+        self.assertEqual(self.job("resume", jid).stdout.strip(), f"{jid}: review (round 1), resumed")
+        self.reviews(jid, 1, code="PASS")
+        self.assertIn("approve (round 1)", self.job("advance", jid, "approve").stdout)
+
+
 class InitiativeE2E(E2EBase):
     """An initiative of three slices: S1 → replan CONTINUE → S2 with SPLIT →
     replan with direction feedback → DONE. FACTORY_SHOW=1 prints job.json and

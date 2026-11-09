@@ -661,6 +661,54 @@ class TestDemoCreateBaseLabel(TestDemoCreateChecksIssuePaths):
         self.assertEqual(self.job.load(j["id"])["base"], "main")
 
 
+class PausedTest(JobBase):
+    """A rate-limited agent pauses the job in its stage; `job resume` puts it back there."""
+
+    AT = __import__("datetime").datetime(2026, 11, 8, 12, 0, tzinfo=__import__("datetime").timezone.utc)
+
+    def test_paused_recognizes_limit_messages_and_their_reset_time(self):
+        cases = [
+            ("Claude AI usage limit reached|1794153600", "2026-11-08T16:00:00Z"),
+            ("5-hour limit reached ∙ resets 3pm (America/New_York)", "2026-11-08T20:00:00Z"),
+            ("You've hit your limit · resets 9am (UTC)", "2026-11-09T09:00:00Z"),
+            ("API Error: 429 rate_limit_error. Please try again in 30 minutes.", "2026-11-08T12:30:00Z"),
+            ("Quota exceeded until 2026-11-08T18:00:00Z", "2026-11-08T18:00:00Z"),
+            ("API Error: Rate limit reached", None),
+        ]
+        for text, when in cases:
+            with self.subTest(text=text):
+                reason, resume_at = self.job.rate_limit(text, self.AT)
+                self.assertEqual(resume_at, when)
+                self.assertTrue(reason)
+
+    def test_paused_ignores_other_replies(self):
+        for text in ("STATUS: READY", "VERDICT: CHANGES\n\nadd a rate limit to the API",
+                     "STATUS: READY\n\nThe job pauses on a rate limit now.",
+                     "API Error: 500 internal server error", "WRITE REFUSED: denied", ""):
+            with self.subTest(text=text):
+                self.assertIsNone(self.job.rate_limit(text, self.AT))
+
+    def test_paused_job_keeps_its_round_and_holds_no_slot(self):
+        j = self.make("review", round_=2, gate_retries=1)
+        j["pause"] = {"from": "review", "reason": "limit", "resume_at": None, "at": "x"}
+        j = self.job.advance(j, "paused")
+        self.assertEqual((j["stage"], j["round"], j["round_limit"], j["gate_retries"]), ("paused", 2, 3, 1))
+        self.job.save(j)
+        self.assertEqual(self.job.running(self.job.all_jobs()), [])
+        self.assertIn("paused in review: limit; reset time unknown", self.job.pending(j))
+        with self.assertRaisesRegex(self.job.Refused, "it resumes there, not in build"):
+            self.job.advance(dict(j), "build")
+        j = self.job.advance(j, "review")
+        self.assertEqual((j["stage"], j["round"], j["round_limit"], j["gate_retries"]), ("review", 2, 3, 1))
+        self.assertNotIn("pause", j)
+
+    def test_paused_only_through_job_pause(self):
+        with self.assertRaisesRegex(self.job.Refused, "use `job pause`"):
+            self.job.advance(self.make("build"), "paused")
+        with self.assertRaisesRegex(self.job.Refused, "not a legal transition"):
+            self.job.advance(self.make("gate"), "paused")
+
+
 class GuardTest(unittest.TestCase):
     GUARD = SRC / "bin" / "guard"
     REPO = SRC.parent

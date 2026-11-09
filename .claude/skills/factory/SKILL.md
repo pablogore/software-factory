@@ -114,6 +114,15 @@ reply is not proof: `factory/bin/job advance` checks the file on disk. If an
 agent says WRITE REFUSED, don't respawn it: stop and do the **write check**
 below.
 
+**Rate limits.** When an agent ends without its usual reply (no verdict line,
+or its file is missing), pass its whole final reply to the script before
+anything else: `factory/bin/job pause <id> <<'REPLY'` … `REPLY`. If it is a
+rate limit or quota cut, the job goes to `paused` with the reason and the reset
+time, in the stage that was cut; the round isn't spent. Report its line, don't
+advance that job while it is paused (its other agents may still finish), and
+don't respawn anything for it. If the script refuses (not a rate limit), go on
+with the job's step as usual. A paused job holds no concurrency slot.
+
 **Write check.** Before the first agent of a session, write
 `factory/jobs/.write-check` with the Write tool (the same tool the agents use;
 a shell command can pass where the Write tool is refused), then delete it with
@@ -388,12 +397,17 @@ old job: **spec (old job)**; a slice that never built: **spec**), **replan** for
 `checkpoint: auto` it shows as `resume` once a slot is free (the replan found
 none): run `factory/bin/job checkpoint-ok <initiative>` and go to **spec**. A
 `resume` line with stage `next-slice` is an initiative whose next slice never got
-a job: run `factory/bin/job next-slice <initiative>` and go to **spec**.
+a job: run `factory/bin/job next-slice <initiative>` and go to **spec**. A `paused` job
+shows as `resume` once its reset time has passed and as `wait` before (or when
+the reset time is unknown): for a `resume` line run `factory/bin/job resume <id>`
+and run the step of the stage it prints, as above.
 
 ## /factory run <n>
 
 Run one issue with the same steps, write check first. If `factory/bin/job queue` shows a job for
-it, resume that job; otherwise `factory/bin/job create <n>`. Finish with the
+it, resume that job (a `paused` one too, even before its reset time:
+`factory/bin/job resume <n>`, then the step of the stage it prints); otherwise
+`factory/bin/job create <n>`. Finish with the
 summary line for that job.
 
 ## /factory <anything>

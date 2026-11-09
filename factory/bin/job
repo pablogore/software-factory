@@ -32,6 +32,9 @@ Usage:
   job next-slice <initiative>    create the job for the initiative's `next` slice
   job checkpoint-ok <initiative> a human OKs the next slice after a replan (checkpoint: every-slice)
   job set-checkpoint <initiative> every-slice|auto
+  job pause <job>                an agent cut short by a rate limit or quota (its final reply on stdin) → paused,
+                                 with the reason and the reset time; refuses any other reply
+  job resume <job>               paused → the stage it was paused in, same round
 
 <job> is a job id (004-dark-mode) or an issue number (12).
 """
@@ -45,8 +48,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parents[2]
 FACTORY = REPO / "factory"
@@ -59,6 +63,8 @@ BASE = CONFIG["base_branch"]
 ALLOWED_BASES = CONFIG.get("allowed_bases", [BASE])
 MARKER = "<!-- factory -->"
 
+# Stages where an agent runs: a rate limit can cut it short and pause the job there.
+PAUSABLE = {"intake", "initiative", "spec", "rate", "build", "review", "approve", "replan", "triage"}
 TRANSITIONS = {
     "intake": {"needs-info", "rejected", "spec", "initiative"},
     "needs-info": {"intake", "initiative", "spec", "rejected"},
@@ -74,11 +80,15 @@ TRANSITIONS = {
     "merging": {"needs-human"},
     "needs-human": {"spec", "build", "replan", "rejected"},
     "triage": {"build", "needs-human"},
+    "paused": PAUSABLE,
 }
+for _s in PAUSABLE:
+    TRANSITIONS[_s].add("paused")
 TERMINAL = {"merged", "rejected", "done"}
 # Any unfinished job can move to merged once its PR is merged on GitHub,
 # whether the factory merged it or a person did mid-round.
-WAITING = {"needs-info", "needs-human", "checkpoint"}
+# A paused job waits for its reset time and holds no concurrency slot.
+WAITING = {"needs-info", "needs-human", "checkpoint", "paused"}
 CONCURRENCY = CONFIG["concurrency"]
 # PR authors whose comments count as feedback, besides the operator.
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -787,7 +797,17 @@ def advance(job, stage):
     intake_body = lambda: "\n".join((d / "intake.md").read_text().split("\n\n", 1)[1:]).strip()
     capped = None  # why, when the issue's cost cap stops a new round
 
-    if old == "intake" and stage == "initiative":
+    if stage == "paused":
+        require(job.get("pause"), "use `job pause` with the agent's reply to pause a job")
+
+    elif old == "paused" and stage != "merged":
+        # Back to the step that was cut, in the same round: the cut spends no round or gate retry.
+        was = job["pause"]["from"]
+        require(stage == was, f"{job['id']} was paused in {was}; it resumes there, not in {stage}")
+        require_slot(job["id"])
+        job.pop("pause")
+
+    elif old == "intake" and stage == "initiative":
         require(decision == "ACCEPT", f"intake.md says DECISION: {decision}, not ACCEPT")
         require(job["initiative_id"], "old jobs go intake → spec")
         i = job["intake"]
@@ -1088,6 +1108,95 @@ def advance(job, stage):
     return job
 
 
+# ---- Rate limits -----------------------------------------------------------
+# An agent the subscription cuts short ends with Claude Code's limit message
+# instead of its verdict: "Claude AI usage limit reached|<epoch>", "5-hour limit
+# reached ∙ resets 3pm (America/New_York)", "API Error: 429 ... rate_limit_error".
+
+RATE_LIMIT = re.compile(r"usage limit|rate[ _-]?limit|hit your (?:\w+ )?limit|limit reached|quota"
+                        r"|out of (?:extra )?usage|too many requests|\b429\b", re.I)
+# An agent that wrote its verdict finished its work, whatever else its reply says.
+VERDICT = re.compile(r"^(?:(?:STATUS|VERDICT|DECISION|GATE):|(?:APPROVE|ESCALATE|RETRY)\b)")
+UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def reset_time(text, at):
+    """When the limit resets, as a UTC datetime, or None when the message doesn't say."""
+    m = re.search(r"\|(\d{10})\b", text)
+    if m:
+        return datetime.fromtimestamp(int(m.group(1)), timezone.utc)
+    m = re.search(r"\b(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2}))", text)
+    if m:
+        return datetime.fromisoformat(m.group(1).replace("Z", "+00:00")).astimezone(timezone.utc)
+    m = re.search(r"(?:try again|retry|resets?) (?:in|after) (\d+)\s*(s|sec|second|m|min|minute|h|hr|hour)s?\b", text, re.I)
+    if m:
+        return at + timedelta(seconds=int(m.group(1)) * UNITS[m.group(2)[0].lower()])
+    m = re.search(r"resets?(?: at)? (\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*\(([\w/+-]+)\))?", text, re.I)
+    if m and (m.group(2) or m.group(3)):
+        hour, minute, half = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+        if half:
+            hour = hour % 12 + (12 if half == "pm" else 0)
+        if hour > 23 or minute > 59:
+            return None
+        try:
+            tz = ZoneInfo(m.group(4)) if m.group(4) else at.astimezone().tzinfo
+        except (ValueError, KeyError):
+            tz = at.astimezone().tzinfo
+        local = at.astimezone(tz)
+        when = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if when <= local:
+            when += timedelta(days=1)
+        return when.astimezone(timezone.utc)
+    return None
+
+
+def rate_limit(text, at=None):
+    """(reason, resume_at) when `text`, an agent's final reply, is a rate limit or
+    quota cut; resume_at is None when the reset time is unknown. None otherwise."""
+    at = at or datetime.now(timezone.utc)
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    if not lines or VERDICT.match(lines[0]):
+        return None
+    hit = next((l for l in lines if RATE_LIMIT.search(l)), None)
+    if not hit:
+        return None
+    when = reset_time(text, at)
+    return one_line(hit), when.strftime("%Y-%m-%dT%H:%M:%SZ") if when else None
+
+
+def due(job):
+    """True when a paused job's reset time has passed."""
+    when = job["pause"]["resume_at"]
+    return bool(when) and when <= now()
+
+
+def pause_note(job):
+    p = job["pause"]
+    then = f"resumes after {p['resume_at']}" if p["resume_at"] else "reset time unknown"
+    return f"paused in {p['from']}: {p['reason']}; {then}"
+
+
+def cmd_pause(job, text):
+    if job["stage"] not in PAUSABLE:
+        die(f"{job['id']} is in {job['stage']}, where no agent runs")
+    cut = rate_limit(text)
+    if not cut:
+        die("the reply isn't a rate limit or quota cut; advance the job as usual")
+    job["pause"] = {"from": job["stage"], "reason": cut[0], "resume_at": cut[1], "at": now()}
+    save(advance(sync(job), "paused"))
+    then = f"`/factory run` resumes it after {cut[1]}" if cut[1] else "reset time unknown"
+    print(f"{job['id']}: paused in {job['pause']['from']} (round {job['round']}): {cut[0]}; "
+          f"{then}, `/factory run {job['issue']}` resumes it now")
+
+
+def cmd_resume(job):
+    if job["stage"] != "paused":
+        die(f"{job['id']} is in {job['stage']}, not paused")
+    job = advance(sync(job), job["pause"]["from"])
+    save(job)
+    print(f"{job['id']}: {job['stage']} (round {job['round']}), resumed")
+
+
 # ---- Commands --------------------------------------------------------------
 
 
@@ -1295,6 +1404,10 @@ def cmd_queue():
                 replied_rows.append(("resume", n, j["id"], j["stage"], "author replied"))
             else:
                 other_rows.append(("wait", n, j["id"], j["stage"], "waiting for the author"))
+        elif j["stage"] == "paused" and due(j):
+            replied_rows.append(("resume", n, j["id"], j["stage"], f"{pause_note(j)}: `job resume {j['id']}`"))
+        elif j["stage"] == "paused":
+            other_rows.append(("wait", n, j["id"], j["stage"], f"{pause_note(j)}; `/factory run {n}` resumes it now"))
         elif j["stage"] == "checkpoint" and auto_checkpoint(j):
             replied_rows.append(("resume", n, j["id"], j["stage"],
                                  f"auto: `job checkpoint-ok {j['initiative_id']}` starts the next slice"))
@@ -1626,7 +1739,7 @@ def cmd_reviewers(job):
 
 
 def cmd_reject(job, text):
-    if job["stage"] not in WAITING:
+    if job["stage"] not in WAITING - {"paused"}:
         die(f"{job['id']} is in {job['stage']}, not needs-info or needs-human")
     if not text.strip():
         die("no reason on stdin")
@@ -1683,6 +1796,8 @@ def pending(job):
             path, heading = d / "intake.md", "Questions"
         text = section(path, heading) if path.exists() else None
         return "question: " + one_line(text or f"(no {heading} in {path.name})")
+    if job["stage"] == "paused":
+        return pause_note(job)
     if job["stage"] == "needs-human":
         path = d / "decision.md"
         if not path.exists():
@@ -1746,6 +1861,10 @@ def main(argv):
             init["checkpoint"] = args[1]
             save_initiative(init)
             print(f"{args[0]}: checkpoint {args[1]}")
+        elif cmd == "pause" and len(args) == 1:
+            cmd_pause(resolve(args[0]), "" if sys.stdin.isatty() else sys.stdin.read())
+        elif cmd == "resume" and len(args) == 1:
+            cmd_resume(resolve(args[0]))
         elif cmd == "plan-check" and not args:
             cmd_plan_check()
         elif cmd == "reviewers" and len(args) == 1:
