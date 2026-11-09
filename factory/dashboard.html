@@ -164,7 +164,7 @@
   .drawer {
     position: fixed; top: 0; right: 0; bottom: 0; width: 100vw;
     background: var(--panel); border-left: 1px solid var(--line);
-    display: grid; grid-template-rows: auto 1fr; transform: translateX(100%);
+    display: grid; grid-template-rows: auto auto 1fr; transform: translateX(100%);
     transition: transform .25s ease;
   }
   .open .scrim { opacity: 1; pointer-events: auto; }
@@ -196,6 +196,27 @@
   .file .v { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
   .v.good { background: var(--pass); } .v.warn { background: var(--changes); } .v.stop { background: var(--human); }
   .doc { overflow-y: auto; padding: 28px 40px 60px; font-size: 16px; min-width: 0; }
+
+  /* Pipeline graph */
+  .pipe {
+    display: flex; align-items: center; gap: 6px; padding: 12px 24px;
+    border-bottom: 1px solid var(--line); overflow-x: auto;
+  }
+  .pipe .arrow { color: var(--faint); font-size: 16px; }
+  .pipe .par { display: grid; gap: 4px; }
+  .step {
+    display: grid; gap: 1px; min-width: 92px; text-align: left; padding: 5px 10px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    font-family: var(--mono); font-size: 12px; cursor: default;
+  }
+  .step[data-file] { cursor: pointer; } .step[data-file]:hover { background: var(--card-hover); }
+  .step .st { font-size: 10.5px; color: var(--muted); }
+  .step.ok .st { color: var(--pass); } .step.changes .st { color: var(--changes); }
+  .step.failed .st { color: var(--human); } .step.running .st { color: var(--active); }
+  .step.on { border-color: var(--muted); }
+  .step.current { border-color: var(--active); box-shadow: 0 0 0 1px var(--active); }
+  .step.running .st { animation: breathe 1.6s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .step.running .st { animation: none; } }
 
   /* Rendered markdown */
   .md { max-width: 1100px; line-height: 1.65; }
@@ -257,6 +278,10 @@
     .board { grid-template-columns: 1fr; padding: 16px 16px 32px; }
     footer { padding: 0 16px 24px; }
     .d-head { padding: 16px; }
+    .pipe { padding: 10px 16px; gap: 4px; }
+    .pipe .arrow { font-size: 13px; }
+    .step { min-width: 0; padding: 4px 6px; font-size: 11px; }
+    .step .st { font-size: 10px; }
     .d-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
     .files {
       border-right: 0; border-bottom: 1px solid var(--line); display: flex; gap: 4px;
@@ -293,6 +318,7 @@
       <div class="links" id="d-links"></div>
       <button class="close" data-close aria-label="Close">×</button>
     </div>
+    <nav class="pipe" id="d-pipe" aria-label="Pipeline"></nav>
     <div class="d-body">
       <nav class="files" id="d-files"></nav>
       <article class="doc"><div class="md" id="d-doc"></div></article>
@@ -300,6 +326,7 @@
   </aside>
 </div>
 
+<script src="pipeline.js"></script>
 <script>
 const POLL_MS = 20000
 const COLUMNS = [
@@ -580,12 +607,7 @@ function sortFiles(files) {
   })
 }
 
-function tone(first) {
-  if (/^(VERDICT:\s*PASS|GATE:\s*PASS|APPROVE|STATUS:\s*READY|DECISION:\s*ACCEPT)$/.test(first)) return 'good'
-  if (/^(VERDICT:\s*CHANGES|DECISION:\s*NEEDS-INFO)$/.test(first)) return 'warn'
-  if (/^(ESCALATE|REJECTED|STATUS:\s*BLOCKED|GATE:\s*FAIL|DECISION:\s*REJECT)$/.test(first)) return 'stop'
-  return null
-}
+// tone() and pipelineSteps() are in pipeline.js.
 
 const firstLines = new Map()
 
@@ -605,9 +627,15 @@ async function refreshDrawer() {
     text = await fetchText(base + openPath)
     firstLines.set(base + openPath, text.split('\n')[0].trim())
   }
-  await Promise.all(files.filter((f) => !firstLines.has(base + f)).map(async (f) => {
+  // The graph's files are rewritten as the job moves (build.md each round), so re-read those.
+  const live = new Set(['intake.md', 'spec.md', 'build.md', 'decision.md', `round-${job.round}/checks.md`,
+    ...Object.keys(job.agents?.reviewers || {}).map((r) => `round-${job.round}/review-${r}.md`)])
+  await Promise.all(files.filter((f) => f !== openPath && (live.has(f) || !firstLines.has(base + f))).map(async (f) => {
     firstLines.set(base + f, (await fetchText(base + f)).split('\n')[0].trim())
   }))
+
+  const known = Object.fromEntries(files.map((f) => [f, firstLines.get(base + f)]))
+  $('d-pipe').innerHTML = pipelineHtml(pipelineSteps(job, known))
 
   let group = null
   $('d-files').innerHTML = files.map((f) => {
@@ -628,6 +656,18 @@ async function refreshDrawer() {
     $('d-doc').innerHTML = text === null ? '<p class="note">Intake hasn’t written anything yet.</p>' : markdown(text)
     drawDiagrams($('d-doc'))
   }
+}
+
+// Reviewers run side by side, so they stack between build and approver.
+function pipelineHtml(steps) {
+  const step = (s) => `<button class="step ${s.state} ${s.current ? 'current' : ''} ${s.doc && s.doc === openPath ? 'on' : ''}"
+    ${s.doc ? `data-file="${esc(s.doc)}"` : 'aria-disabled="true"'} title="${esc(s.doc || 'no document yet')}">
+    <span>${esc(s.label)}</span><span class="st">${esc(s.state)}</span></button>`
+  const reviews = steps.filter((s) => s.id === 'review')
+  const cols = [...steps.filter((s) => s.id !== 'review' && s.id !== 'approver').map(step)]
+  if (reviews.length) cols.push(`<div class="par">${reviews.map(step).join('')}</div>`)
+  cols.push(step(steps[steps.length - 1]))
+  return cols.join('<span class="arrow" aria-hidden="true">→</span>')
 }
 
 async function openDrawer(id) {
