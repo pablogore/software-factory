@@ -9,11 +9,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 )
 
 // waitDelay is how long a run waits, once its process group is gone, for
@@ -31,9 +33,11 @@ const (
 	poll     = 10 * time.Millisecond
 )
 
-// Runner runs commands with the environment of factoryd. A zero Runner
-// keeps the whole output and has no time limit of its own, as the gate runs
-// the checks; Timeout and MaxOutput bound a run a builder asks for.
+// Runner runs commands with childenv.Base, HOME in their directory, as their
+// whole environment, so no credential of factoryd's reaches the checks of a
+// job's branch. A zero Runner keeps the whole output and has no time limit
+// of its own, as the gate runs the checks; Timeout and MaxOutput bound a run
+// a builder asks for.
 type Runner struct {
 	// Timeout, when positive, is how long a run may take: then the command
 	// is stopped with its whole process group and the run, failed, says so
@@ -70,6 +74,10 @@ func (r Runner) Run(ctx context.Context, dir string, command []string) (domain.C
 	// The command writes to a pipe of the run's own, not one exec copies
 	// from, so Wait returns once the command exits even while a child in
 	// the background holds the pipe.
+	home, err := filepath.Abs(dir)
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("checkrun: %q in %s: %w", name, dir, err)
+	}
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("checkrun: %q in %s: %w", name, dir, err)
@@ -77,6 +85,7 @@ func (r Runner) Run(ctx context.Context, dir string, command []string) (domain.C
 	defer func() { _ = pr.Close() }()
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = dir, pw, pw
+	cmd.Env = childenv.Base(home)
 	ownGroup(cmd)
 	start := time.Now()
 	err = cmd.Start()
