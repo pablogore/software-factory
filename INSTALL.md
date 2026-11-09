@@ -70,6 +70,8 @@ It must be non-interactive, must not rewrite files (no `--fix`, no
 **`factory/config.json`.**
 
 - `base_branch`: the default branch.
+- `allowed_bases` (optional): the branches an issue can pick as its job's base
+  with a `base:<branch>` label. Without it, only `base_branch` is allowed.
 - `merge_method`: `merge`, `squash` or `rebase`, one the repo allows
   (`gh api repos/{owner}/{repo} --jq '{allow_merge_commit, allow_squash_merge, allow_rebase_merge}'`).
 - `protected_paths`: keep the two factory entries and don't add the project's

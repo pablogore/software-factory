@@ -9,8 +9,9 @@ orchestrator never improvises them.
 Usage:
   job queue                      what /factory run should do with each labeled issue
   job create <issue>             new job for an open `factory` issue; fetches origin/<base> first; prints the job id;
-                                 an issue naming paths not in origin/<base>, and not ignored by its .gitignore,
-                                 goes straight to needs-info
+                                 a `base:<branch>` label sets the job's base (one of config.json `allowed_bases`,
+                                 else only `base_branch`); an issue naming paths not in origin/<base>, and not
+                                 ignored by its .gitignore, goes straight to needs-info
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
   job feedback <job> [--direction]  needs-human → spec (old jobs) | build (rework) | replan (direction); stdin and PR comments
@@ -55,6 +56,7 @@ BIN = FACTORY / "bin"
 CONFIG = json.loads((FACTORY / "config.json").read_text())
 LABELS = CONFIG["labels"]
 BASE = CONFIG["base_branch"]
+ALLOWED_BASES = CONFIG.get("allowed_bases", [BASE])
 MARKER = "<!-- factory -->"
 
 TRANSITIONS = {
@@ -164,6 +166,7 @@ def with_defaults(job):
     job.setdefault("initiative_id", None)
     job.setdefault("slice_id", None)
     job.setdefault("kind", "slice")
+    job.setdefault("base", BASE)
     return job
 
 
@@ -708,9 +711,9 @@ def start_slice(job, row):
     require(row["state"] == "next", f"slice {row['id']} isn't `next`")
     job["slice_id"], job["kind"] = row["id"], row["kind"]
     set_slice_state(job["initiative_id"], row["id"], "in-progress")
-    run(["git", "fetch", "origin", BASE])
+    run(["git", "fetch", "origin", job["base"]])
     Path(job["worktree"]).parent.mkdir(parents=True, exist_ok=True)
-    run(["git", "worktree", "add", "-b", job["branch"], job["worktree"], f"origin/{BASE}"])
+    run(["git", "worktree", "add", "-b", job["branch"], job["worktree"], f"origin/{job['base']}"])
     init = load_initiative(job["initiative_id"])
     init["status"] = "active"
     if job["id"] not in init["jobs"]:
@@ -920,9 +923,9 @@ def advance(job, stage):
         elif stage == "rejected":
             label("issue", job["issue"], remove=LABELS["queue"])
         else:
-            run(["git", "fetch", "origin", BASE])
+            run(["git", "fetch", "origin", job["base"]])
             Path(job["worktree"]).parent.mkdir(parents=True, exist_ok=True)
-            run(["git", "worktree", "add", "-b", job["branch"], job["worktree"], f"origin/{BASE}"])
+            run(["git", "worktree", "add", "-b", job["branch"], job["worktree"], f"origin/{job['base']}"])
 
     elif old == "needs-info" and stage == "intake":
         require_slot(job["id"])
@@ -950,8 +953,8 @@ def advance(job, stage):
         status = first_line(d / "build.md")
         require(status == "STATUS: READY", f"build.md starts with {status!r}, not STATUS: READY")
         require(not git(job, "status", "--porcelain").stdout.strip(), "the worktree has uncommitted changes")
-        require(int(git(job, "rev-list", "--count", f"origin/{BASE}..HEAD").stdout) > 0,
-                f"{job['branch']} has no commits on top of origin/{BASE}")
+        require(int(git(job, "rev-list", "--count", f"origin/{job['base']}..HEAD").stdout) > 0,
+                f"{job['branch']} has no commits on top of origin/{job['base']}")
         git(job, "fetch", "origin", job["branch"], check=False)
         head = git(job, "rev-parse", "HEAD").stdout.strip()
         res = git(job, "rev-parse", f"origin/{job['branch']}", check=False)
@@ -1088,12 +1091,12 @@ def advance(job, stage):
 # ---- Commands --------------------------------------------------------------
 
 
-def fetch_base():
+def fetch_base(base=BASE):
     """Fetch origin/<base>, so intake and the tech-lead read the base as it is on GitHub now.
     A failed fetch warns and goes on."""
-    res = run(["git", "fetch", "origin", BASE], check=False)
+    res = run(["git", "fetch", "origin", base], check=False)
     if res.returncode != 0:
-        print(f"warning: couldn't fetch origin/{BASE}; intake and the tech-lead may read a stale copy: "
+        print(f"warning: couldn't fetch origin/{base}; intake and the tech-lead may read a stale copy: "
               f"{(res.stderr or res.stdout).strip()}", file=sys.stderr)
 
 
@@ -1104,7 +1107,7 @@ def issue_texts(issue):
                                     if c["author"]["login"] in trusted and not c["body"].startswith(MARKER)]
 
 
-def ignored_in_base(paths, files):
+def ignored_in_base(paths, files, base):
     """The paths the `.gitignore` files of origin/<base> ignore, read from the base, not the checkout.
     Ignore rules from outside the repo, like the user's global excludes, don't count."""
     ignores = [f for f in files if Path(f).name == ".gitignore"]
@@ -1115,21 +1118,21 @@ def ignored_in_base(paths, files):
         for f in ignores:
             dest = Path(tmp) / f
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(run(["git", "show", f"origin/{BASE}:{f}"]).stdout)
+            dest.write_text(run(["git", "show", f"origin/{base}:{f}"]).stdout)
         # -z keeps non-ASCII paths as they are; without it git quotes them
         res = subprocess.run(["git", "-c", "core.excludesFile=/dev/null", "check-ignore", "--no-index", "-z", "--stdin"],
                              cwd=tmp, input="\0".join(paths), capture_output=True, text=True)
     return set(res.stdout.split("\0")) - {""}
 
 
-def missing_paths(issue):
+def missing_paths(issue, base):
     """Backticked tokens of the issue that look like repo paths but aren't in origin/<base>.
     A token looks like a path when it has a `/` or an extension some file in the base has;
     refs, URLs, commands, placeholders and paths the base's `.gitignore` ignores don't count.
     None when origin/<base> can't be read."""
-    tree = run(["git", "ls-tree", "-r", "--name-only", f"origin/{BASE}"], check=False)
+    tree = run(["git", "ls-tree", "-r", "--name-only", f"origin/{base}"], check=False)
     if tree.returncode != 0:
-        print(f"warning: couldn't list origin/{BASE}; the issue's paths aren't checked: "
+        print(f"warning: couldn't list origin/{base}; the issue's paths aren't checked: "
               f"{(tree.stderr or tree.stdout).strip()}", file=sys.stderr)
         return None
     files = set(tree.stdout.splitlines())
@@ -1154,23 +1157,40 @@ def missing_paths(issue):
                 continue
             if path.rstrip("/") not in files | dirs and path not in missing:
                 missing.append(path)
-    ignored = ignored_in_base(missing, files)
+    ignored = ignored_in_base(missing, files, base)
     return [p for p in missing if p not in ignored]
 
 
 def write_base_question(job, missing):
     """intake.md for an issue that names paths origin/<base> doesn't have: ask for the right base."""
-    names = ", ".join(f"`{p}`" for p in missing)
+    names, base = ", ".join(f"`{p}`" for p in missing), job["base"]
     (job_dir(job["id"]) / "intake.md").write_text(
         "DECISION: NEEDS-INFO\n\n"
         "## Summary\n"
-        f"- The issue names paths that aren't in `origin/{BASE}`: {names}.\n"
+        f"- The issue names paths that aren't in `origin/{base}`: {names}.\n"
         "- Intake didn't run: the job would be built on the wrong base.\n\n"
         "## Why\n"
-        f"`job create` checked the issue's backticked paths against `origin/{BASE}` and these are missing: {names}.\n\n"
+        f"`job create` checked the issue's backticked paths against `origin/{base}` and these are missing: {names}.\n\n"
         "## Questions\n"
-        f"1. {names} {'is' if len(missing) == 1 else 'are'} not in `origin/{BASE}`. "
+        f"1. {names} {'is' if len(missing) == 1 else 'are'} not in `origin/{base}`. "
         "Which base branch should this issue be built on?\n")
+
+
+def issue_base(issue):
+    """The base a `base:<branch>` label asks for, or `base_branch` without one.
+    Refuses more than one such label, an invalid branch name, or a branch not in `allowed_bases`."""
+    asked = [l["name"].removeprefix("base:") for l in issue["labels"] if l["name"].startswith("base:")]
+    if not asked:
+        return BASE
+    allowed = ", ".join(ALLOWED_BASES)
+    if len(asked) > 1:
+        die(f"issue #{issue['number']} has more than one base label: {', '.join(f'base:{b}' for b in asked)}")
+    base = asked[0]
+    if run(["git", "check-ref-format", "--branch", base], check=False).returncode != 0:
+        die(f"issue #{issue['number']} asks for base {base!r}, which isn't a valid branch name; allowed: {allowed}")
+    if base not in ALLOWED_BASES:
+        die(f"issue #{issue['number']} asks for base {base!r}, which isn't allowed; allowed: {allowed}")
+    return base
 
 
 def slugify(title):
@@ -1191,7 +1211,8 @@ def cmd_create(number):
         die(f"issue #{number} is {issue['state'].lower()}")
     if LABELS["queue"] not in {l["name"] for l in issue["labels"]}:
         die(f"issue #{number} isn't labeled {LABELS['queue']}")
-    fetch_base()
+    base = issue_base(issue)
+    fetch_base(base)
     JOBS.mkdir(parents=True, exist_ok=True)
     numbers = [int(p.name.split("-")[0]) for p in JOBS.iterdir() if p.name[:3].isdigit()]
     job_id = f"{max(numbers, default=0) + 1:03d}-{slugify(issue['title'])}"
@@ -1199,7 +1220,7 @@ def cmd_create(number):
     job = {
         "id": job_id, "issue": issue["number"], "title": issue["title"], "issue_url": issue["url"],
         "pr": None, "pr_url": None,
-        "branch": f"factory/{job_id}",
+        "branch": f"factory/{job_id}", "base": base,
         "worktree": str(REPO / ".worktrees" / job_id),
         "slice_id": None, "kind": "slice",
         "initiative_id": job_id, "stage": "intake", "round": 0, "round_limit": CONFIG["max_rounds"],
@@ -1208,11 +1229,11 @@ def cmd_create(number):
     }
     write_issue_md(job)
     save(job)
-    missing = missing_paths(issue)
+    missing = missing_paths(issue, base)
     if missing:
         write_base_question(job, missing)
         save(advance(sync(job), "needs-info"))
-        print(f"{job_id}: needs-info, not intake: the issue names paths not in origin/{BASE}: "
+        print(f"{job_id}: needs-info, not intake: the issue names paths not in origin/{base}: "
               f"{', '.join(missing)}", file=sys.stderr)
     print(job_id)
 
@@ -1377,8 +1398,8 @@ def cmd_next_slice(initiative_id):
     job_dir(job_id).mkdir()
     job = with_defaults({
         "id": job_id, "issue": init["issue"], "title": first["title"], "issue_url": first["issue_url"],
-        "pr": None, "pr_url": None, "branch": f"factory/{job_id}", "worktree": str(REPO / ".worktrees" / job_id),
-        "initiative_id": initiative_id, "stage": "spec", "round": 0, "round_limit": CONFIG["max_rounds"],
+        "pr": None, "pr_url": None, "branch": f"factory/{job_id}", "base": first["base"],
+        "worktree": str(REPO / ".worktrees" / job_id), "initiative_id": initiative_id, "stage": "spec", "round": 0, "round_limit": CONFIG["max_rounds"],
         "intake": None, "agents": None, "gate": None, "reviews": {}, "cost_usd": 0.0,
         "started": now(), "ended": None})
     shutil.copy(job_dir(first["id"]) / "issue.md", job_dir(job_id) / "issue.md")
@@ -1493,14 +1514,14 @@ def cmd_merge(job):
         save(done)
         print(f"{job['id']}: {done['stage']}: {why.splitlines()[0]}")
 
-    git(job, "fetch", "origin", BASE)
-    merged = git(job, "merge", "--no-edit", f"origin/{BASE}", check=False)
+    git(job, "fetch", "origin", job["base"])
+    merged = git(job, "merge", "--no-edit", f"origin/{job['base']}", check=False)
     if merged.returncode != 0:
         git(job, "merge", "--abort", check=False)
-        return fail(f"The branch conflicts with {BASE}:\n\n```\n{merged.stdout.strip()}\n```")
+        return fail(f"The branch conflicts with {job['base']}:\n\n```\n{merged.stdout.strip()}\n```")
     gate = subprocess.run([str(BIN / "gate"), job["id"], "--merge"], capture_output=True, text=True)
     if gate.returncode != 0:
-        return fail(f"The gate failed after syncing with {BASE}. "
+        return fail(f"The gate failed after syncing with {job['base']}. "
                     f"See round-{job['round']}/merge-checks.md.\n\n{gate.stdout.strip()}")
     try:
         git(job, "push", "origin", job["branch"])
