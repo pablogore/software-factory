@@ -4,7 +4,7 @@ stages:
   - spec
   - build
   - review:
-      parallel: [reviewer-security, reviewer-ux, reviewer-ui, reviewer-code, security-deep]
+      parallel: [reviewer-security, reviewer-ux, reviewer-ui, reviewer-code]
       on_changes: build
       max_rounds: 3
   - approve

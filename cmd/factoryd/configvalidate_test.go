@@ -10,6 +10,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/configyaml"
+	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/wiring"
 )
 
@@ -76,6 +77,49 @@ func TestConfigValidate(t *testing.T) {
 			ctx.Expect(err.Error()).To(specs.Contain(`"nadie"`))
 			ctx.Expect(err.Error()).ToEqual(demoErr.Error())
 			ctx.Expect(out.String()).To(specs.BeEmpty())
+		})
+	})
+}
+
+// TestDemoConfigValidatePipelines is the S1 demo: the repo's pipelines load
+// with its roles, and a pipeline naming a role with no file fails the command.
+func TestDemoConfigValidatePipelines(t *testing.T) {
+	specs.Describe(t, "factoryd config-validate on pipelines", func(s *specs.Spec) {
+		s.It("succeeds on the repo, whose pipelines name only its roles", func(ctx *specs.Context) {
+			var out bytes.Buffer
+
+			err := configValidate([]string{"--config", "../.."}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).To(specs.Contain("configuration in ../.. is valid"))
+		})
+
+		s.It("fails naming the pipeline and the role when a pipeline names a role with no file", func(ctx *specs.Context) {
+			dir := configValidateRoot(ctx, "agent: claude\nmodel: sonnet\n")
+			ctx.Expect(os.MkdirAll(filepath.Join(dir, "pipelines"), 0o755)).To(specs.BeNil())
+			data := "name: default\nstages:\n  - build\n  - review:\n      parallel: [reviewer, security-deep]\n      on_changes: build\n  - approve\n"
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "pipelines", "default.yaml"), []byte(data), 0o600)).To(specs.BeNil())
+			var out bytes.Buffer
+
+			err := configValidate([]string{"--config", dir}, &out)
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).To(specs.Contain("pipelines/default.yaml"))
+			ctx.Expect(err.Error()).To(specs.Contain(`role "security-deep" is not loaded`))
+			ctx.Expect(out.String()).To(specs.BeEmpty())
+		})
+
+		s.It("still succeeds with a warning when the pipelines load", func(ctx *specs.Context) {
+			dir := configValidateRoot(ctx, "agent: claude\nmodel: opus\n")
+			ctx.Expect(os.MkdirAll(filepath.Join(dir, "pipelines"), 0o755)).To(specs.BeNil())
+			data := "name: default\nstages:\n  - build\n  - review:\n      parallel: [reviewer]\n      on_changes: build\n  - approve\n"
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "pipelines", "default.yaml"), []byte(data), 0o600)).To(specs.BeNil())
+			var out bytes.Buffer
+
+			err := configValidate([]string{"--config", dir}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).ToEqual("warning: reviewer uses the same agent and model as builder: claude opus\nconfiguration in " + dir + " is valid, with warnings\n")
 		})
 	})
 }

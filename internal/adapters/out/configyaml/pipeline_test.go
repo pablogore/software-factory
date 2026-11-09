@@ -11,7 +11,7 @@ import (
 	"github.com/pablogore/software-factory/internal/domain"
 )
 
-var reviewers = []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "reviewer-code", "security-deep"}
+var reviewers = []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "reviewer-code"}
 
 // shortFlow is the smallest stage list that loads: build, review, one approve.
 const shortFlow = "name: p\nstages:\n  - build\n  - review:\n      parallel: [reviewer-code]\n      on_changes: build\n  - approve\n"
