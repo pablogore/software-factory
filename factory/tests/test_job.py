@@ -211,6 +211,62 @@ class JobTest(JobBase):
         j = self.job.advance(self.job.sync(j), "build")
         self.assertEqual(j["round"], 2)
 
+    # ---- cost_check off in config.json ---------------------------------------
+
+    def cost_check(self, value):
+        """Reload the job script with config.json `cost_check: value`."""
+        cfg = self.tmp / "factory" / "config.json"
+        cfg.write_text(json.dumps({**json.loads(cfg.read_text()), "cost_check": value}))
+        self.job = load_job_module(self.tmp)
+        self.setUp_fakes()
+
+    def test_demo_cost_check_off_over_the_cap_starts_another_round(self):
+        self.cost_check(False)
+        j = self.review_wants_changes()
+        self.costs(3.01, 5.0)
+        j = self.job.advance(self.job.sync(j), "build")
+        self.assertEqual((j["stage"], j["round"]), ("build", 2))
+        self.assertFalse((self.job.job_dir("007-test") / "decision.md").exists())
+        self.assertFalse(any(k.get("add") == "factory:needs-human" for _, k in self.labels))
+
+    def test_demo_cost_check_off_gate_retry_and_triage_retry_over_the_cap_go_on(self):
+        self.cost_check(False)
+        self.job.git = lambda job, *a, check=True: type("R", (), {"stdout": "abc\n", "returncode": 0})()
+        self.job.cost_usd = lambda j: 9.0
+        j = self.job.advance(self.failed_gate(initiative_id="i1"), "build")
+        self.assertEqual((j["stage"], j["round"], j["gate_retries"]), ("build", 1, 1))
+        j = self.make("triage", initiative_id="i1")
+        self.write("triage.md", "RETRY\n\nfix the flaky test\n")
+        j = self.job.advance(self.job.sync(j), "build")
+        self.assertEqual((j["stage"], j["round"]), ("build", 2))
+
+    def test_demo_cost_check_missing_over_the_cap_still_goes_to_needs_human(self):
+        self.assertNotIn("cost_check", json.loads((self.tmp / "factory" / "config.json").read_text()))
+        self.assertTrue(self.job.COST_CHECK)
+        self.review_wants_changes()
+        self.costs(3.01, 5.0)
+        with self.assertRaisesRegex(self.job.Refused, "Issue #7 has cost \\$8.01, over the \\$8.00 cap"):
+            self.job.advance(self.job.sync(self.job.load("007-test")), "build")
+        saved = self.job.load("007-test")
+        self.assertEqual((saved["stage"], saved["round"]), ("needs-human", 1))
+
+    def test_demo_cost_check_off_rounds_exhausted_still_go_to_needs_human(self):
+        self.cost_check(False)
+        self.pr["isDraft"] = False
+        self.costs(30.0, 5.0)
+        j = self.make("review", round_=3, initiative_id="i1", slice_id="S2")
+        for lens, v in (("code", "CHANGES"), ("ux", "PASS"), ("ui", "PASS")):
+            self.write(f"round-3/review-{lens}.md", f"VERDICT: {v}\n")
+        j = self.job.sync(j)
+        with self.assertRaisesRegex(self.job.Refused, "round 3 of 3: go to needs-human"):
+            self.job.advance(j, "build")
+        j = self.job.advance(j, "needs-human")
+        self.assertEqual(j["stage"], "triage")  # script escalations reach the tech-lead first
+        self.write("triage.md", "ESCALATE\n\nout of rounds\n")
+        j = self.job.advance(self.job.sync(j), "needs-human")
+        self.assertEqual((j["stage"], j["round"]), ("needs-human", 3))
+        self.assertIn("Review rounds exhausted", (self.job.job_dir("007-test") / "decision.md").read_text())
+
     # ---- feedback -----------------------------------------------------------
 
     def escalated(self):
