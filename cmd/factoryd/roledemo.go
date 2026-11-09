@@ -50,7 +50,7 @@ func roleDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg.Args = rs.Agent.Args
+	cfg.Args, cfg.PassEnv, cfg.UserHome = rs.Agent.Args, rs.Agent.PassEnv, rs.Agent.UserHome
 	cfg.Env = append(cfg.Env, rs.Agent.Env...)
 
 	_, _ = fmt.Fprintf(out, "role %s (%s) from %s\n", rs.Role.Name, rs.Role.Kind, *dir)

@@ -25,13 +25,22 @@ const protocolVersion = 1
 // before it kills it, when Config.Grace is not set.
 const DefaultGrace = 5 * time.Second
 
-// Config is how an agent is launched: its command, its arguments and the
-// variables it gets on top of the few childenv.Base passes, and how long its
-// sessions last. Nothing else of factoryd's environment reaches it.
+// Config is how an agent is launched: its command, its arguments, the
+// variables it gets on top of the few childenv.Base passes, its HOME, and how
+// long its sessions last. Nothing else of factoryd's environment reaches it.
 type Config struct {
 	Command string
 	Args    []string
 	Env     []string
+	// PassEnv names the variables of factoryd's environment the agent gets
+	// as they are, such as its provider's API key; one factoryd lacks is
+	// left out.
+	PassEnv []string
+	// UserHome launches the agent with the operator's HOME, for an agent
+	// that logs in with the operator's account; otherwise its HOME is the
+	// job's own in Homes.
+	UserHome bool
+	Homes    childenv.Homes
 	// Timeout is how long a session may run from its start before it is
 	// ended as a cancelled one is; zero means it never times out.
 	Timeout time.Duration
@@ -66,9 +75,13 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 	if err != nil {
 		return nil, fmt.Errorf("acp: directory %q: %w", s.Dir, err)
 	}
+	env, err := a.env(s.Job)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(a.cfg.Command, a.cfg.Args...)
 	cmd.Dir = dir
-	cmd.Env = append(childenv.Base(dir), a.cfg.Env...)
+	cmd.Env = env
 	ownGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -105,6 +118,29 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 		sess.mu.Unlock()
 	}
 	return sess, nil
+}
+
+// env is the agent's whole environment in a session of job: childenv.Base
+// with its HOME, the variables it passes from factoryd's and then its own,
+// which win.
+func (a *Agent) env(job domain.JobID) ([]string, error) {
+	var home string
+	var err error
+	if a.cfg.UserHome {
+		home, err = os.UserHomeDir()
+	} else {
+		home, err = a.cfg.Homes.For(job)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("acp: home: %w", err)
+	}
+	env := childenv.Base(home)
+	for _, k := range a.cfg.PassEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return append(env, a.cfg.Env...), nil
 }
 
 // grace is how long the agent has to stop when asked.

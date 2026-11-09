@@ -22,7 +22,8 @@ type RoleSession struct {
 	Role domain.Role
 	// Prompt is the text of the role's prompt file.
 	Prompt string
-	// Agent launches the agent the role names, with the role's model.
+	// Agent launches the agent the role names, with the role's model; its
+	// Homes is left for the caller to set.
 	Agent acp.Config
 }
 
@@ -72,5 +73,5 @@ func LoadRoleSession(dir, name string) (RoleSession, error) {
 	if err != nil {
 		return RoleSession{}, err
 	}
-	return RoleSession{Role: r, Prompt: string(prompt), Agent: acp.Config{Command: a.Command, Args: a.Args, Env: a.Env}}, nil
+	return RoleSession{Role: r, Prompt: string(prompt), Agent: acp.Config{Command: a.Command, Args: a.Args, Env: a.Env, PassEnv: a.PassEnv, UserHome: a.UserHome}}, nil
 }

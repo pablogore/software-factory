@@ -19,12 +19,24 @@ const ModelPlaceholder = "{model}"
 // ErrUnknownAgent means a role names an agent roles.yaml does not configure.
 var ErrUnknownAgent = errors.New("agent not configured")
 
+// HomeUser is the home that launches an agent with the operator's HOME.
+const HomeUser = "user"
+
+// Withheld are the variables no agent's env_passthrough may name: factoryd's
+// own credentials, GitHub's and its channels', which no agent gets.
+var Withheld = []string{"GITHUB_TOKEN", "GH_TOKEN", "DISCORD_BOT_TOKEN", "DISCORD_TOKEN"}
+
 // Agent is how one configured agent is launched.
 type Agent struct {
 	Command string
 	Args    []string
 	// Env is NAME=value pairs, sorted by name.
 	Env []string
+	// PassEnv names the variables of factoryd's environment the agent gets
+	// as they are.
+	PassEnv []string
+	// UserHome launches the agent with the operator's HOME, not its job's.
+	UserHome bool
 }
 
 // Agents are the configured agents by name.
@@ -35,14 +47,17 @@ type agentsFile struct {
 }
 
 type agentFile struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
+	Command        string            `yaml:"command"`
+	Args           []string          `yaml:"args"`
+	Env            map[string]string `yaml:"env"`
+	EnvPassthrough []string          `yaml:"env_passthrough"`
+	Home           string            `yaml:"home"`
 }
 
 // LoadAgents parses roles.yaml (05-config.md): each agent a role can name,
 // with the command that launches it. Every agent takes ModelPlaceholder in
-// its args or env, so a role's model is never dropped without a word.
+// its args or env, so a role's model is never dropped without a word, and
+// passes none of Withheld.
 func LoadAgents(data []byte) (Agents, error) {
 	var f agentsFile
 	if err := decodeStrict(data, &f); err != nil {
@@ -63,9 +78,20 @@ func LoadAgents(data []byte) (Agents, error) {
 			env = append(env, k+"="+v)
 		}
 		slices.Sort(env)
-		ag := Agent{Command: a.Command, Args: a.Args, Env: env}
+		ag := Agent{Command: a.Command, Args: a.Args, Env: env, PassEnv: a.EnvPassthrough, UserHome: a.Home == HomeUser}
 		if !slices.ContainsFunc(append(slices.Clone(ag.Args), ag.Env...), takesModel) {
 			return nil, fmt.Errorf("roles.yaml: agent %s: %w: no %s in its args or env, so it would never get a role's model", name, domain.ErrInvalidValue, ModelPlaceholder)
+		}
+		if a.Home != "" && a.Home != HomeUser {
+			return nil, fmt.Errorf("roles.yaml: agent %s: %w: home %q, only %q", name, domain.ErrInvalidValue, a.Home, HomeUser)
+		}
+		for _, k := range a.EnvPassthrough {
+			if k == "" || strings.Contains(k, "=") {
+				return nil, fmt.Errorf("roles.yaml: agent %s: %w: env_passthrough %q is not a variable name", name, domain.ErrInvalidValue, k)
+			}
+			if slices.Contains(Withheld, k) {
+				return nil, fmt.Errorf("roles.yaml: agent %s: %w: env_passthrough names %s, one of factoryd's tokens no agent gets", name, domain.ErrInvalidValue, k)
+			}
 		}
 		agents[name] = ag
 	}
@@ -89,7 +115,7 @@ func (as Agents) For(r domain.Role) (Agent, error) {
 		return Agent{}, fmt.Errorf("role %s: %w: model", r.Name, domain.ErrMissingField)
 	}
 	fill := func(s string) string { return strings.ReplaceAll(s, ModelPlaceholder, r.Model) }
-	out := Agent{Command: a.Command}
+	out := Agent{Command: a.Command, PassEnv: a.PassEnv, UserHome: a.UserHome}
 	for _, s := range a.Args {
 		out.Args = append(out.Args, fill(s))
 	}
