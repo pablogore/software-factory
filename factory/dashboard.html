@@ -213,6 +213,9 @@
   .step .st { font-size: 10.5px; color: var(--muted); }
   .step.ok .st { color: var(--pass); } .step.changes .st { color: var(--changes); }
   .step.failed .st { color: var(--human); } .step.running .st { color: var(--active); }
+  .step.skipped { border-style: dashed; background: none; color: var(--faint); }
+  .step.skipped .st { color: var(--faint); font-style: italic; }
+  .pipe .loop { font-family: var(--mono); font-size: 10.5px; color: var(--changes); white-space: nowrap; }
   .step.on { border-color: var(--muted); }
   .step.current { border-color: var(--active); box-shadow: 0 0 0 1px var(--active); }
   .step.running .st { animation: breathe 1.6s ease-in-out infinite; }
@@ -635,7 +638,7 @@ async function refreshDrawer() {
   }))
 
   const known = Object.fromEntries(files.map((f) => [f, firstLines.get(base + f)]))
-  $('d-pipe').innerHTML = pipelineHtml(pipelineSteps(job, known))
+  $('d-pipe').innerHTML = pipelineHtml(pipelineSteps(job, known), reviewLoop(job))
 
   let group = null
   $('d-files').innerHTML = files.map((f) => {
@@ -658,14 +661,17 @@ async function refreshDrawer() {
   }
 }
 
-// Reviewers run side by side, so they stack between build and approver.
-function pipelineHtml(steps) {
+// Reviewers run side by side, so they stack between build and approver;
+// from round 2 the loop back to build sits under them.
+function pipelineHtml(steps, loop) {
+  const none = (s) => s.state === 'skipped' ? 'not run this round' : 'no document yet'
   const step = (s) => `<button class="step ${s.state} ${s.current ? 'current' : ''} ${s.doc && s.doc === openPath ? 'on' : ''}"
-    ${s.doc ? `data-file="${esc(s.doc)}"` : 'aria-disabled="true"'} title="${esc(s.doc || 'no document yet')}">
+    ${s.doc ? `data-file="${esc(s.doc)}"` : 'aria-disabled="true"'} title="${esc(s.doc || none(s))}">
     <span>${esc(s.label)}</span><span class="st">${esc(s.state)}</span></button>`
   const reviews = steps.filter((s) => s.id === 'review')
   const cols = [...steps.filter((s) => s.id !== 'review' && s.id !== 'approver').map(step)]
-  if (reviews.length) cols.push(`<div class="par">${reviews.map(step).join('')}</div>`)
+  const back = loop ? `<span class="loop" title="reviewers → build">↩ build · round ${loop.round} of ${loop.limit}</span>` : ''
+  if (reviews.length) cols.push(`<div class="par">${reviews.map(step).join('')}${back}</div>`)
   cols.push(step(steps[steps.length - 1]))
   return cols.join('<span class="arrow" aria-hidden="true">→</span>')
 }

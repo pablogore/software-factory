@@ -23,7 +23,7 @@ const STATE_OF_TONE = { good: 'ok', warn: 'changes', stop: 'failed' }
 // firstLines maps a path inside the job folder ("spec.md", "round-1/review-code.md")
 // to its first line; a missing path means the file doesn't exist.
 // Each step: { id, label, doc (null when the file doesn't exist), state, current }.
-// state is pending, running, ok, changes or failed.
+// state is pending, running, ok, changes, skipped or failed.
 function pipelineSteps(job, firstLines) {
   const round = job.round || 0
   const dir = `round-${round}/`
@@ -46,10 +46,16 @@ function pipelineSteps(job, firstLines) {
     // Reviewers write once per round, so a reviewer with a verdict is done even while others run.
     const current = id === at && (id !== 'review' || (!doc && runs(label)))
     let state = doc ? STATE_OF_TONE[tone(first.trim())] || 'ok' : 'pending'
-    if (current && running) state = 'running'
+    if (id === 'review' && !runs(label)) state = 'skipped'
+    else if (current && running) state = 'running'
     else if (id === 'build' && gateFailed) state = 'failed'
     return { id, label, doc, state, current }
   })
 }
 
-if (typeof module !== 'undefined') module.exports = { tone, pipelineSteps }
+// The reviewers → build loop from round 2 on: { round, limit }, or null in the first round.
+function reviewLoop(job) {
+  return (job.round || 0) >= 2 ? { round: job.round, limit: job.round_limit } : null
+}
+
+if (typeof module !== 'undefined') module.exports = { tone, pipelineSteps, reviewLoop }
