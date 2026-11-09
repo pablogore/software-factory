@@ -309,7 +309,7 @@ const COLUMNS = [
   { label: 'Review', who: 'routed reviewers', stages: ['review'] },
   { label: 'Approve', who: 'approver · merge', stages: ['approve', 'merging'] },
   { label: 'Replan', who: 'spec-writer · checkpoint', stages: ['replan', 'checkpoint'] },
-  { label: 'Triage', who: 'tech-lead', stages: ['triage'] },
+  { label: 'Triage', who: 'tech-lead · paused', stages: ['triage', 'paused'] },
   { label: 'Needs human', who: 'you', stages: ['needs-human'], cls: 'human' },
   { label: 'Done', who: 'merged · done · rejected', stages: ['merged', 'rejected', 'done'], cls: 'merged-col' },
 ]
@@ -401,6 +401,7 @@ function card(job, rounds) {
   const [num, ...slug] = job.id.split('-')
   const flag = human ? '<span class="flag">your call</span>'
     : job.stage === 'needs-info' ? '<span class="flag wait">asked author</span>'
+    : job.stage === 'paused' ? '<span class="flag wait">paused</span>'
     : job.stage === 'rejected' ? '<span class="flag wait">rejected</span>' : ''
   const risk = job.intake?.risk
   const meta = [
@@ -420,6 +421,8 @@ function card(job, rounds) {
       <div class="links">${links(job)}</div>
       ${rounds.length && !done ? `<div class="rounds">${rounds.join('')}</div>` : ''}
       <div class="meta">${meta}</div>
+      ${job.stage === 'paused' && job.pause ? `<div class="hint">${esc(job.pause.reason)}<br>${job.pause.resume_at
+        ? `resumes after ${esc(new Date(job.pause.resume_at).toLocaleString())}` : 'reset time unknown'}: /factory run ${esc(job.issue)}</div>` : ''}
       ${human ? `<div class="hint">${job.pr ? `merge PR #${job.pr} to approve<br>` : ''}or give feedback: /factory &lt;anything&gt;</div>` : ''}
     </article>`
 }
