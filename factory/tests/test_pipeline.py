@@ -2,11 +2,14 @@
 
 Each test writes an example job folder in a temp dir, reads it like the dashboard
 does (every .md file and its first line) and runs pipelineSteps() with node.
+Without node on the PATH those tests are skipped.
 """
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +17,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PIPELINE = HERE.parent / "pipeline.js"
 REVIEWERS = {"code": "haiku", "ux": "sonnet"}
+NEEDS_NODE = unittest.skipUnless(shutil.which("node"), "needs node on the PATH to run factory/pipeline.js")
 
 
 def steps(job, files):
@@ -55,6 +59,7 @@ def table(out):
     return [(s["label"], s["state"], s["current"], s["doc"]) for s in out]
 
 
+@NEEDS_NODE
 class TestDemoPipeline(unittest.TestCase):
     def test_demo_job_in_intake(self):
         out = steps(job("intake", reviewers=None), {"issue.md": "# Issue\n"})
@@ -131,6 +136,7 @@ class TestDemoPipeline(unittest.TestCase):
         self.assertEqual(loop(rework), {"round": 2, "limit": 3})
 
 
+@NEEDS_NODE
 class PipelineStatesTest(unittest.TestCase):
     def test_skipped_reviewer_stays_skipped_while_rebuilding(self):
         rework = dict(job("build", 2), round_reviewers=["code"])
@@ -172,6 +178,23 @@ class PipelineStatesTest(unittest.TestCase):
     def test_needs_info_is_changes_on_intake(self):
         out = steps(job("needs-info", reviewers=None), {"intake.md": "DECISION: NEEDS-INFO\n"})
         self.assertEqual((out[0]["state"], out[0]["current"]), ("changes", True))
+
+
+
+class TestDemoPipelineWithoutNode(unittest.TestCase):
+    def test_demo_without_node_pipeline_tests_are_skipped(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            env = dict(os.environ, PATH=tmp, PYTHONPATH=str(HERE), PYTHONDONTWRITEBYTECODE="1")
+            res = subprocess.run([sys.executable, "-m", "unittest", "-v",
+                                  "test_pipeline.TestDemoPipeline", "test_pipeline.PipelineStatesTest"],
+                                 cwd=tmp, env=env, capture_output=True, text=True)
+        finally:
+            shutil.rmtree(tmp)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("OK (skipped=13)", res.stderr)
+        self.assertIn("skipped 'needs node on the PATH", res.stderr)
+        self.assertNotIn(" ... ok", res.stderr)
 
 
 if __name__ == "__main__":

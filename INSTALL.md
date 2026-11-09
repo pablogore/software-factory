@@ -18,6 +18,9 @@ Stop and tell the user if any of these fail:
 - `claude --version` is 2.1.257 or later (the factory's agents run on Opus, Sonnet and Haiku).
 - `python3 --version` is 3.10 or later. The scripts use only the standard
   library.
+- `node --version` works, for the dashboard's pipeline tests
+  (`factory/tests/test_pipeline.py`). It's optional: without node on the PATH
+  those tests are skipped, not failed.
 - None of the files in step 1 already exist. If one does, show the user the
   clash and ask before overwriting.
 
