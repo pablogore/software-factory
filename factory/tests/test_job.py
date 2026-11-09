@@ -572,6 +572,95 @@ class TestDemoRepoGitignoreSkipsJobsAndWorktrees(TestDemoCreateChecksIssuePaths)
         self.assertTrue(any(k.get("add") == "factory:needs-info" for _, k in self.labels))
 
 
+class TestDemoCreateBaseLabel(TestDemoCreateChecksIssuePaths):
+    """A `base:<branch>` label sets the job's base, from config.json `allowed_bases`; else `base_branch`."""
+
+    def configure(self, **cfg):
+        path = self.tmp / "factory" / "config.json"
+        config = {k: v for k, v in json.loads(path.read_text()).items() if k != "allowed_bases"}
+        path.write_text(json.dumps({**config, "base_branch": "main", **cfg}, indent=2))
+        self.job = load_job_module(self.tmp)
+        self.setUp_fakes()
+
+    def create_labeled(self, *labels):
+        self.job.fetch_issue = lambda n: {
+            "number": 7, "title": "Do a thing", "body": "Make it blue.", "author": {"login": "ana"},
+            "labels": [{"name": "factory"}] + [{"name": l} for l in labels], "state": "OPEN",
+            "url": "https://x/7", "comments": []}
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                self.job.main(["create", "7"])
+            except SystemExit:
+                return None, err.getvalue()
+        return self.job.load(out.getvalue().strip()), err.getvalue()
+
+    def assertRefused(self, *labels, says=()):
+        j, err = self.create_labeled(*labels)
+        self.assertIsNone(j)
+        for text in says:
+            self.assertIn(text, err)
+        self.assertEqual([p for p in self.job.JOBS.iterdir() if p.is_dir()] if self.job.JOBS.exists() else [], [])
+
+    def test_demo_allowed_base_label_sets_the_jobs_base(self):
+        self.configure(allowed_bases=["main", "arch/other"])
+        j, _ = self.create_labeled("base:main")
+        self.assertEqual((j["base"], j["stage"]), ("main", "intake"))
+        self.assertEqual(self.job.load(j["id"])["base"], "main")
+
+    def test_demo_other_allowed_base_label_sets_that_base(self):
+        self.configure(allowed_bases=["main", "arch/other"])
+        j, _ = self.create_labeled("base:arch/other")
+        self.assertEqual((j["base"], j["stage"]), ("arch/other", "intake"))
+
+    def test_demo_base_not_allowed_refuses_the_job(self):
+        self.configure(allowed_bases=["main", "arch/other"])
+        self.assertRefused("base:dev", says=("'dev'", "allowed: main, arch/other"))
+
+    def test_demo_invalid_base_name_refuses_the_job(self):
+        self.configure(allowed_bases=["main", "arch/other"])
+        self.assertRefused("base:bad..name", says=("'bad..name'", "valid branch name", "allowed: main, arch/other"))
+
+    def test_demo_more_than_one_base_label_refuses_the_job(self):
+        self.configure(allowed_bases=["main", "arch/other"])
+        self.assertRefused("base:main", "base:arch/other", says=("more than one base label",))
+
+    def test_demo_no_base_label_uses_base_branch(self):
+        self.configure(allowed_bases=["main", "arch/other"])
+        j, _ = self.create_labeled()
+        self.assertEqual((j["base"], j["stage"]), ("main", "intake"))
+
+    def test_demo_without_allowed_bases_only_base_branch_is_accepted(self):
+        self.configure()
+        self.assertRefused("base:arch/other", says=("'arch/other'", "allowed: main"))
+        j, _ = self.create_labeled("base:main")
+        self.assertEqual(j["base"], "main")
+
+    def test_demo_missing_paths_are_checked_against_the_labeled_base(self):
+        git = lambda *a: subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=self.tmp, check=True, capture_output=True)
+        git("checkout", "-b", "arch/other")
+        (self.tmp / "lib").mkdir()
+        (self.tmp / "lib" / "only_other.py").write_text("x = 1\n")
+        git("add", "lib")
+        git("commit", "-m", "other")
+        git("push", "origin", "arch/other")
+        self.configure(allowed_bases=["main", "arch/other"])
+        self.job.fetch_issue = lambda n: {
+            "number": 7, "title": "Do a thing", "body": "Change `lib/only_other.py`.", "author": {"login": "ana"},
+            "labels": [{"name": "factory"}, {"name": "base:arch/other"}], "state": "OPEN",
+            "url": "https://x/7", "comments": []}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.job.main(["create", "7"])
+        self.assertEqual(self.job.load(out.getvalue().strip())["stage"], "intake")
+
+    def test_old_job_without_base_reads_as_base_branch(self):
+        j = self.make("build")
+        self.assertNotIn("base", j)
+        self.assertEqual(self.job.load(j["id"])["base"], "main")
+
+
 class PausedTest(JobBase):
     """A rate-limited agent pauses the job in its stage; `job resume` puts it back there."""
 

@@ -38,9 +38,9 @@ def git(worktree, *args):
     return res.stdout
 
 
-def protected_changes(worktree):
+def protected_changes(worktree, base):
     """Existing files under protected_paths that the branch modified or deleted."""
-    diff = git(worktree, "diff", "--name-status", f"origin/{CONFIG['base_branch']}...HEAD")
+    diff = git(worktree, "diff", "--name-status", f"origin/{base}...HEAD")
     hits = []
     for line in diff.splitlines():
         status, *paths = line.split("\t")
@@ -65,7 +65,7 @@ def gate(job_id, merge):
         die(f"{job_id} hasn't started a build round")
     round_dir = FACTORY / "jobs" / job_id / f"round-{job['round']}"
     commit = git(worktree, "rev-parse", "HEAD").strip()
-    protected = protected_changes(worktree)
+    protected = protected_changes(worktree, job.get("base", CONFIG["base_branch"]))
     code, log, seconds = run_checks(worktree)
     verdict = "PASS" if code == 0 and not protected else "FAIL"
     name = "merge-checks" if merge else "checks"
