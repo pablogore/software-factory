@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -25,7 +26,8 @@ const protocolVersion = 1
 const DefaultGrace = 5 * time.Second
 
 // Config is how an agent is launched: its command, its arguments and the
-// environment it gets on top of factoryd's, and how long its sessions last.
+// variables it gets on top of the few childenv.Base passes, and how long its
+// sessions last. Nothing else of factoryd's environment reaches it.
 type Config struct {
 	Command string
 	Args    []string
@@ -66,7 +68,7 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 	}
 	cmd := exec.Command(a.cfg.Command, a.cfg.Args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), a.cfg.Env...)
+	cmd.Env = append(childenv.Base(dir), a.cfg.Env...)
 	ownGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
