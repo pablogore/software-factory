@@ -36,7 +36,7 @@ spec-writer (opus) → MODE=slice: spec.md, at most 250 words / 30 lines. READY 
 specgate (script)  → rejects a malformed spec before any build (2 retries, then a human)
 intake + route     → rate this slice from its spec.md; reviewers + models via config.json
 builder            → commits; first round pushes + opens draft PR "Refs #<n>"
-gate (script)      → checks.sh; FAIL → builder gets the log, no reviewers spawned
+gate (script)      → checks.sh; FAIL → builder gets the log tail in the same round (gate_retries, default 2)
 reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → reviewers (max rounds)
 approver (opus)    → APPROVE: sync origin/main, gate, gh pr merge
                      ESCALATE: PR ready, decision as PR comment, label factory:needs-human
