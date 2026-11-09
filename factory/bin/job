@@ -34,7 +34,10 @@ Usage:
   job spec-ok <job>              a human accepts the spec's length exception → spec (spec-check passes)
   job direction <job>            collect [direction] comments on the merged PR as direction-<k>.md
   job replan <job>               apply replan.md: CONTINUE (checkpoint or next slice) | DONE | NEEDS-HUMAN
-  job next-slice <initiative>    create the job for the initiative's `next` slice
+  job next-slice <initiative>    create the job for the initiative's `next` slice, or one per slice of a
+                                 `parallel` group (a merged slice whose group is still open ends `merged`;
+                                 the group's last slice to close runs one replan for all of them)
+  job replan-jobs <job>          the jobs the replan reads: <job>, or every job of its `parallel` group
   job checkpoint-ok <initiative> a human OKs the next slice after a replan (checkpoint: every-slice)
   job set-checkpoint <initiative> every-slice|auto
   job pause <job>                an agent cut short by a rate limit or quota (its final reply on stdin) → paused,
@@ -203,10 +206,12 @@ def running(jobs):
     return [j for j in jobs if j["stage"] not in TERMINAL | WAITING]
 
 
-def require_slot(job_id):
+def require_slot(job_id, n=1):
+    """A slot for job_id, or for the n jobs of a `parallel` group, besides the running jobs."""
     busy = [j["id"] for j in running(all_jobs()) if j["id"] != job_id]
-    require(len(busy) < CONCURRENCY,
-            f"concurrency {CONCURRENCY} reached; running: {', '.join(busy)}")
+    require(len(busy) + n <= CONCURRENCY,
+            f"concurrency {CONCURRENCY} reached; running: {', '.join(busy)}" if n == 1 else
+            f"concurrency {CONCURRENCY}: {n} parallel slice jobs don't fit; running: {', '.join(busy)}")
 
 
 def resolve(arg):
@@ -782,6 +787,40 @@ def start_slice(job, row):
     save_initiative(init)
 
 
+def next_rows(initiative_id):
+    """The `next` slices: one, or a `parallel` group of 2 to 3 (specgate checks it)."""
+    return [r for r in read_slices(initiative_id) if r["state"] == "next"]
+
+
+def set_group(jobs):
+    """Mark the jobs of a `parallel` group; each one names every job of the group."""
+    ids = [j["id"] for j in jobs]
+    for j in jobs:
+        j["group"] = ids
+
+
+def group_open(job):
+    """The other jobs of job's `parallel` group still open: merged, done,
+    dropped and needs-human count as closed."""
+    return [g for g in job.get("group", []) if g != job["id"]
+            and load(g)["stage"] not in TERMINAL | {"needs-human"}]
+
+
+def close_group(job):
+    """job is the last of its group to close: no sibling waits for the replan
+    any more. Returns the finished siblings that were waiting, oldest first."""
+    waiting = [g for g in (load(i) for i in job.get("group", []) if i != job["id"]) if g.get("group_wait")]
+    for g in waiting:
+        g.pop("group_wait")
+        save(g)
+    return sorted(waiting, key=lambda g: g["replan_since"])
+
+
+def replan_jobs(job):
+    """The jobs the replan reads: job, or every job of its `parallel` group."""
+    return [job if i == job["id"] else load(i) for i in job.get("group", [job["id"]])]
+
+
 def abandon_slice(job):
     """A direction change replaced an unmerged slice: drop its row, close its PR
     (the remote branch stays, so it can be reopened) and discard the worktree.
@@ -884,7 +923,14 @@ def advance(job, stage):
         require(status_line(idir / "vision.md", {"READY"}), "vision.md doesn't start with STATUS: READY")
         errors = specgate("slices", idir / "slices.md")
         require(not errors, "slices.md fails specgate: " + "; ".join(errors))
-        start_slice(job, next(r for r in read_slices(job["initiative_id"]) if r["state"] == "next"))
+        rows = next_rows(job["initiative_id"])
+        require_slot(job["id"], len(rows))
+        start_slice(job, rows[0])
+        if len(rows) > 1:  # a `parallel` group: a job for every other slice too
+            others = [load(new_slice_job(job["initiative_id"], r)) for r in rows[1:]]
+            set_group([job, *others])
+            for o in others:
+                save(o)
 
     elif old == "needs-info" and stage in {"initiative", "spec"}:
         require_slot(job["id"])
@@ -939,6 +985,10 @@ def advance(job, stage):
         set_slice_state(job["initiative_id"], job["slice_id"], "done")
         drop_worktree(job)
         job["replan_since"] = now()
+        if group_open(job):
+            job["group_wait"], stage = True, "done"  # its `parallel` group replans after the last slice
+        else:
+            close_group(job)
 
     elif old in {"replan", "checkpoint"}:
         finish_slice_job(job, stage, old)
@@ -956,6 +1006,10 @@ def advance(job, stage):
         else:
             if not job.get("merged") and not job.get("replan_pending"):
                 abandon_slice(job)  # direction on a slice that never merged
+                if group_open(job):  # the last of its group to close runs the replan
+                    stage = "rejected"
+                else:
+                    close_group(job)
             job["replan_since"] = now()
 
     elif stage == "merged" and old not in {"replan", "checkpoint"}:
@@ -1145,8 +1199,22 @@ def advance(job, stage):
     if stage == "merged" and job["initiative_id"] and old not in {"replan", "checkpoint"}:
         set_slice_state(job["initiative_id"], job["slice_id"], "merged")
         job["merged"], job["merged_at"], job["replan_since"] = True, now(), now()
-        stage = "replan"  # the slice is merged; the initiative still has to be replanned
+        if group_open(job):
+            job["group_wait"] = True  # its `parallel` group replans once, after the last slice
+        else:
+            close_group(job)
+            stage = "replan"  # the slice is merged; the initiative still has to be replanned
         drop_worktree(job)
+
+    elif job.get("group") and stage == "needs-human" and not job.get("merged") \
+            and not job.get("replan_pending") and not group_open(job):
+        # The group's last open slice escalated: it counts as closed, so the
+        # newest finished slice waiting on it runs the replan.
+        waiting = close_group(job)
+        if waiting:
+            w = waiting[-1]
+            w["stage"], w["ended"], w["replan_since"] = "replan", None, now()
+            save(w)
 
     if stage in TERMINAL:
         drop_worktree(job)
@@ -1432,9 +1500,10 @@ def cmd_queue():
     """Rows in the order to start them. `resume` and `new` rows fit in the
     concurrency slots; the rest show as `hold` until a running job finishes."""
     cmd_cleanup()
-    jobs = {j["issue"]: j for j in all_jobs()}
+    every = all_jobs()
+    jobs = {j["issue"]: j for j in every}
     # A job is done once its PR is merged on GitHub, which also closes the issue.
-    for j in jobs.values():
+    for j in every:
         if j["stage"] not in TERMINAL and j["pr"] and not j.get("merged") and pr_state(j) == "MERGED":
             save(advance(sync(j), "merged"))
     issues = gh_json("issue", "list", "--label", LABELS["queue"], "--state", "open",
@@ -1483,6 +1552,13 @@ def cmd_queue():
             other_rows.append(("skip", n, j["id"], j["stage"], j["stage"]))
         else:
             running_rows.append(("resume", n, j["id"], j["stage"], f"round {j['round']}"))
+    # The other open jobs of a `parallel` group: the rows above show only an issue's newest job.
+    for j in every:
+        if j.get("group") and j["id"] != jobs[j["issue"]]["id"] and j["stage"] not in TERMINAL:
+            if j["stage"] in WAITING:
+                other_rows.append(("wait", j["issue"], j["id"], j["stage"], "parallel slice: `job status` says why"))
+            else:
+                running_rows.append(("resume", j["issue"], j["id"], j["stage"], f"round {j['round']}"))
     for n, j in sorted(jobs.items()):
         if n not in open_numbers and j["stage"] not in TERMINAL | WAITING:
             if j["stage"] in {"replan", "merging"}:
@@ -1555,11 +1631,25 @@ def next_job_id(title):
 
 
 def cmd_next_slice(initiative_id):
-    init = load_initiative(initiative_id)
+    """A job for the `next` slice, or one for every slice of a `parallel` group. Returns their ids."""
     errors = specgate("slices", initiative_dir(initiative_id) / "slices.md")
     require(not errors, "slices.md fails specgate: " + "; ".join(errors))
-    row = next(r for r in read_slices(initiative_id) if r["state"] == "next")
-    require_slot(None)
+    rows = next_rows(initiative_id)
+    require_slot(None, len(rows))
+    jobs = [load(new_slice_job(initiative_id, r)) for r in rows]
+    if len(jobs) > 1:
+        set_group(jobs)
+        for j in jobs:
+            save(j)
+    return [j["id"] for j in jobs]
+
+
+def slice_jobs(ids):
+    return f"next slice job{'s' if len(ids) > 1 else ''} {' '.join(ids)}"
+
+
+def new_slice_job(initiative_id, row):
+    init = load_initiative(initiative_id)
     first = load(init["jobs"][0])
     job_id = next_job_id(f"{row['id']} {row['value']}")
     job_dir(job_id).mkdir()
@@ -1577,15 +1667,20 @@ def cmd_next_slice(initiative_id):
 
 
 def cmd_direction(job):
-    """Before the replan: `[direction]` comments on the merged PR → direction-<k>.md."""
+    """Before the replan: `[direction]` comments on the merged PR → direction-<k>.md.
+    A `parallel` group's replan collects them from every merged PR of the group;
+    another job's files print as <job>/direction-<k>.md."""
     if job["stage"] != "replan":
         die(f"{job['id']} is in {job['stage']}, not replan")
-    if job.get("merged_at") and job["pr"]:
-        collect_direction(job)
-    names = sorted(p.name for p in job_dir(job["id"]).glob("direction-*.md"))
-    job["feedback_since"] = now() if names else job.get("feedback_since")
-    save(job)
-    print(" ".join(names))
+    out = []
+    for j in replan_jobs(job):
+        if j.get("merged_at") and j["pr"]:
+            collect_direction(j)
+        names = sorted(p.name for p in job_dir(j["id"]).glob("direction-*.md"))
+        j["feedback_since"] = now() if names else j.get("feedback_since")
+        save(j)
+        out += names if j is job else [f"{j['id']}/{n}" for n in names]
+    print(" ".join(out))
 
 
 def cmd_replan(job):
@@ -1617,9 +1712,9 @@ def cmd_replan(job):
         if first_issue_open(job):
             gh("issue", "close", str(job["issue"]), "--comment", f"{MARKER}\nFactory: initiative {init['id']} is done.")
         print(f"{job['id']}: initiative {init['id']} DONE")
-    elif init["checkpoint"] == "auto" and has_slot(job["id"]):
+    elif init["checkpoint"] == "auto" and has_slot(job["id"], len(next_rows(init["id"]))):
         save(advance(sync(job), final))
-        print(f"{job['id']}: replan CONTINUE (auto) → next slice job {cmd_next_slice(init['id'])}")
+        print(f"{job['id']}: replan CONTINUE (auto) → {slice_jobs(cmd_next_slice(init['id']))}")
     elif init["checkpoint"] == "auto":
         # No free slot for the next slice: park at the checkpoint; `job queue`
         # lists it as `resume` (auto) once a slot frees, and checkpoint-ok starts it.
@@ -1634,9 +1729,9 @@ def cmd_replan(job):
         print(f"{job['id']}: replan CONTINUE → checkpoint: `job checkpoint-ok {init['id']}` when you approve the next slice")
 
 
-def has_slot(job_id):
+def has_slot(job_id, n=1):
     try:
-        require_slot(job_id)
+        require_slot(job_id, n)
         return True
     except Refused:
         return False
@@ -1658,11 +1753,11 @@ def cmd_checkpoint_ok(arg):
     # leaves it waiting at the checkpoint instead of ending with no next job.
     errors = specgate("slices", initiative_dir(init["id"]) / "slices.md")
     require(not errors, "slices.md fails specgate: " + "; ".join(errors))
-    require_slot(job["id"])
+    require_slot(job["id"], len(next_rows(init["id"])))
     init["status"] = "active"
     save_initiative(init)
     save(advance(sync(job), final))
-    print(f"{job['id']}: checkpoint OK → next slice job {cmd_next_slice(init['id'])}")
+    print(f"{job['id']}: checkpoint OK → {slice_jobs(cmd_next_slice(init['id']))}")
 
 
 def cmd_merge(job):
@@ -1908,7 +2003,9 @@ def main(argv):
         elif cmd == "replan" and len(args) == 1:
             cmd_replan(resolve(args[0]))
         elif cmd == "next-slice" and len(args) == 1:
-            print(cmd_next_slice(args[0]))
+            print(" ".join(cmd_next_slice(args[0])))
+        elif cmd == "replan-jobs" and len(args) == 1:
+            print(" ".join(j["id"] for j in replan_jobs(resolve(args[0]))))
         elif cmd == "checkpoint-ok" and len(args) == 1:
             cmd_checkpoint_ok(args[0])
         elif cmd == "set-checkpoint" and len(args) == 2 and args[1] in {"every-slice", "auto"}:
