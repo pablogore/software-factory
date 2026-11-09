@@ -483,7 +483,7 @@ class TestDemoCreateSkipsIgnoredPaths(TestDemoCreateChecksIssuePaths):
 
 
 class TestDemoRepoGitignoreSkipsJobsAndWorktrees(TestDemoCreateChecksIssuePaths):
-    """With this repo's real `.gitignore` on the base, job and worktree files don't stop the issue."""
+    """With this repo's real `.gitignore` on the base, job, initiative and worktree files don't stop the issue."""
 
     def setUp(self):
         super().setUp()
@@ -500,12 +500,19 @@ class TestDemoRepoGitignoreSkipsJobsAndWorktrees(TestDemoCreateChecksIssuePaths)
         self.assertFalse((self.job.job_dir(j["id"]) / "intake.md").exists())
         self.assertEqual((self.labels, self.comments), ([], []))
 
+    def test_demo_initiative_paths_go_to_intake(self):
+        j = self.create("Read `factory/initiatives/123-x/context.md` and `factory/initiatives/123-x/plan.md`.")
+        self.assertEqual(j["stage"], "intake")
+        self.assertFalse((self.job.job_dir(j["id"]) / "intake.md").exists())
+        self.assertEqual((self.labels, self.comments), ([], []))
+
     def test_demo_missing_path_outside_them_still_stops_the_issue(self):
-        j = self.create("Read `factory/jobs/122-x/spec.md` and change `lib/gone.py`.")
+        j = self.create("Read `factory/jobs/122-x/spec.md`, `factory/initiatives/123-x/context.md` and change `lib/gone.py`.")
         self.assertEqual(j["stage"], "needs-info")
         question = self.job.section(self.job.job_dir(j["id"]) / "intake.md", "Questions")
         self.assertIn("`lib/gone.py` is not in", question)
         self.assertNotIn("factory/jobs", question)
+        self.assertNotIn("factory/initiatives", question)
         self.assertTrue(any(k.get("add") == "factory:needs-info" for _, k in self.labels))
 
 
