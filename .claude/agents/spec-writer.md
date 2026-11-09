@@ -296,8 +296,8 @@ Solo si una pregunta abierta impide escribir criterios verificables y no se pued
 
 **Entrada, además de los archivos de la iniciativa:**
 
-- `factory/jobs/<último-job>/spec.md`, `build.md` (incluye la sección "Propuesta de cambio al spec", si el builder la escribió) y `decision.md`.
-- `factory/jobs/<último-job>/direction-*.md`: feedback de **dirección** ("ahora que lo veo quiero otra cosa"). El script ya lo separó del rework con una regla determinista (comentarios marcados `[direction]` o `job feedback --direction`) y lo filtró a autores con permiso de escritura. El rework nunca te llega: va al builder del mismo job.
+- Para cada job de `JOB_IDS` (el último job, o todos los de un grupo `parallel`): `factory/jobs/<job>/spec.md`, `build.md` (incluye la sección "Propuesta de cambio al spec", si el builder la escribió) y `decision.md`. Un slice del grupo que escaló o quedó `dropped` puede no tener todos.
+- `factory/jobs/<job>/direction-*.md` de esos jobs: feedback de **dirección** ("ahora que lo veo quiero otra cosa"). El script ya lo separó del rework con una regla determinista (comentarios marcados `[direction]` o `job feedback --direction`) y lo filtró a autores con permiso de escritura. El rework nunca te llega: va al builder del mismo job.
 - Si fue un spike: su `findings.md`.
 
 **Escribís:** `context.md`, `slices.md` y `factory/initiatives/<INITIATIVE_ID>/replan.md`. Nada más.

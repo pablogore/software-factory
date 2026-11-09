@@ -186,9 +186,10 @@ returns, read its decision:
 Read `head -1 factory/initiatives/<id>/vision.md`:
 
 - `STATUS: READY`: `factory/bin/job advance <id> spec`. It checks `slices.md`
-  (exactly one `next`), marks that slice `in-progress` and creates the
+  (exactly one `next`, or a `parallel` group of 2 to 3), marks that slice `in-progress` and creates the
   worktree. If it refuses, resume the spec-writer once with the refusal. Go to
-  **spec**.
+  **spec**. With a `parallel` group it also creates a job for every other slice of
+  the group (`job status` lists them): go to **spec** for each one too.
 - `STATUS: NEEDS-INFO`: `factory/bin/job advance <id> needs-info` posts its
   questions on the issue.
 
@@ -272,20 +273,27 @@ finished:
 
 - `APPROVE`: `factory/bin/job merge <id>`. It syncs the branch with the base,
   runs the gate again, pushes, and merges the PR. The slice becomes `merged`
-  and the job goes to `replan` (an old job ends in `merged`). If any of that
+  and the job goes to `replan` (an old job ends in `merged`). A slice of a
+  `parallel` group whose other slices are still open ends in `merged` with no
+  replan: the group's last slice to close runs one replan for all of them (one
+  that escalates to needs-human counts as closed, and then `job queue` shows the
+  waiting slice as `resume` in `replan`). If any of that
   fails it moves the job to `needs-human` and says why.
 - `ESCALATE`: `factory/bin/job advance <id> needs-human`. It marks the PR ready,
   posts the decision on it and labels the issue `factory:needs-human`.
 
 **replan.** Run `factory/bin/job direction <id>` (it collects `[direction]`
-comments on the merged PR as `direction-<k>.md`), then spawn `spec-writer` with
-`<header> MODE: replan. INITIATIVE_ID: <i>.` Then `factory/bin/job replan <id>`:
+comments on the merged PR as `direction-<k>.md`, from every PR of a `parallel`
+group), then spawn `spec-writer` with
+`<header> MODE: replan. INITIATIVE_ID: <i>. JOB_IDS: <ids>.`, where `<ids>` is what
+`factory/bin/job replan-jobs <id>` prints (the job, or every job of its group). Then `factory/bin/job replan <id>`:
 
 - It refuses when `replan.md` or `slices.md` fail the checks (one `next`, none
   with DONE). Resume the spec-writer once with the refusal.
 - `CONTINUE`: with `checkpoint: every-slice` (the default) the job waits at
   `checkpoint`; report the replan's `## Resumen` to the user and wait for their OK:
-  `factory/bin/job checkpoint-ok <initiative>` creates the next slice job; go to **spec**.
+  `factory/bin/job checkpoint-ok <initiative>` creates the next slice job (one per
+  slice of a `parallel` group: it prints every id); go to **spec** for each.
   With `checkpoint: auto` the next slice job is created at once (same issue, so no pause). Change it per
   initiative with `factory/bin/job set-checkpoint <initiative> every-slice|auto`.
 - `DONE`: the initiative closes and so does its issue.
