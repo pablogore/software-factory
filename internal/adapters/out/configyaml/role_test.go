@@ -47,7 +47,7 @@ func TestLoadRole(t *testing.T) {
 					{DiffLines: ">= 200"},
 				}},
 				Mode:  domain.ModeShadow,
-				Tools: []string{"context_pack", "record_finding", "submit_result"},
+				Tools: []string{"submit_result", "progress"},
 			})
 		})
 
@@ -177,6 +177,18 @@ func TestLoadRole(t *testing.T) {
 					domain.ErrInvalidValue,
 					`role security-deep: invalid value: line 4: always_rerun is a map, want true or false`,
 				},
+				{
+					"names the role and a misspelt tool",
+					"name: builder\nkind: build\nmode: blocking\ntools: [submit_result, run_gat]\n",
+					domain.ErrInvalidValue,
+					`role builder: invalid value: unknown tool "run_gat", want one of submit_result, progress, run_gate, dev_server, ask_human`,
+				},
+				{
+					"names the role and a tool the worker does not serve",
+					"name: security-deep\nkind: review\nmode: shadow\ntools: [context_pack]\n",
+					domain.ErrInvalidValue,
+					`role security-deep: invalid value: unknown tool "context_pack", want one of submit_result, progress, run_gate, dev_server, ask_human`,
+				},
 			}
 			specs.Table(s, rows, func(r badRoleRow) string {
 				return r.name
@@ -209,6 +221,13 @@ func TestLoadRole(t *testing.T) {
 
 		s.It("loads a role without tools as one with no tool list", func(ctx *specs.Context) {
 			r, err := configyaml.LoadRole([]byte("name: builder\nkind: build\nmode: blocking\n"))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.Tools).To(specs.BeEmpty())
+		})
+
+		s.It("loads a role with an empty tools list as one with no tool list", func(ctx *specs.Context) {
+			r, err := configyaml.LoadRole([]byte("name: builder\nkind: build\nmode: blocking\ntools: []\n"))
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(r.Tools).To(specs.BeEmpty())
