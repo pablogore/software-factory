@@ -41,11 +41,12 @@ func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, t
 }
 
 // Retry is the prompt that asks an agent once more for its result, saying
-// why factoryd has none.
+// why factoryd has none. It names only the session's MCP tool: the session
+// gets no job token in its environment, so the CLI could not hand one in.
 func Retry(reason string) string {
 	return "factoryd has no result from your last turn: " + reason + ".\n\n" +
-		"Hand in your result now with submit_result: the MCP tool, or `factory worker submit-result` " +
-		"with the JSON on stdin. If a result was refused, fix what the error names. " +
+		"Hand in your result now with the submit_result tool of the " + MCPServerName + " MCP server. " +
+		"If a result was refused, fix what the error names. " +
 		"You are asked only this once more: without a valid result now, the attempt fails.\n"
 }
 

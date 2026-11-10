@@ -13,10 +13,11 @@ import (
 
 // scripted is an agent session whose turns each submit one result with its
 // token, or none when the turn's entry is empty, then end. A turn past the
-// script submits nothing; closed sessions refuse every prompt. Its stderr
-// is what Stderr reports.
+// script submits nothing; closed sessions refuse every prompt. With hang
+// set, a turn never ends. Its stderr is what Stderr reports.
 type scripted struct {
 	sub     *worker.Submitter
+	hang    bool
 	job     domain.JobID
 	token   string
 	turns   []string
@@ -31,6 +32,9 @@ func (s *scripted) Prompt(ctx context.Context, msg string) (<-chan domain.AgentP
 		return nil, ports.ErrSessionClosed
 	}
 	s.prompts = append(s.prompts, msg)
+	if s.hang {
+		return make(chan domain.AgentProgressed), nil
+	}
 	i := len(s.prompts) - 1
 	if i < len(s.turns) && s.turns[i] != "" {
 		_, err := s.sub.Submit(ctx, s.token, s.job, []byte(s.turns[i]))
@@ -194,6 +198,18 @@ func TestAttempt(t *testing.T) {
 
 		s.It("asks for the result again in words that say why and how", func(ctx *specs.Context) {
 			ctx.Snapshot("retry", worker.Retry(`your result was refused: worker: build result: invalid value: status "DONE"`))
+		})
+	})
+}
+
+func TestRetry(t *testing.T) {
+	specs.Describe(t, "the prompt asking an agent once more for its result", func(s *specs.Spec) {
+		s.It("offers only the session's MCP tool, not the CLI nor a job token the session never gets", func(ctx *specs.Context) {
+			msg := worker.Retry("no result submitted")
+			ctx.Expect(msg).To(specs.Contain("submit_result tool of the " + worker.MCPServerName + " MCP server"))
+			ctx.Expect(msg).To(specs.Not(specs.Contain("submit-result")))
+			ctx.Expect(msg).To(specs.Not(specs.Contain("factory worker")))
+			ctx.Expect(msg).To(specs.Not(specs.Contain("FACTORY_JOB_TOKEN")))
 		})
 	})
 }
