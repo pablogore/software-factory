@@ -650,8 +650,38 @@ def warn_unpriced(model):
               "prices_usd_per_mtok; its tokens aren't counted in cost_usd", file=sys.stderr)
 
 
-def cost_usd(job):
-    """API-equivalent cost of every subagent whose prompt names this job's folder.
+def transcript_cost(entries):
+    """API-equivalent cost of a transcript's assistant messages, each message id
+    counted once with its last usage."""
+    prices = CONFIG["prices_usd_per_mtok"]
+    usage_by_message = {}
+    for entry in entries:
+        msg = entry.get("message") if isinstance(entry, dict) else None
+        if isinstance(entry, dict) and entry.get("type") == "assistant" and isinstance(msg, dict) and msg.get("usage"):
+            usage_by_message[msg["id"]] = (msg["model"], msg["usage"])
+    total = 0.0
+    for model, u in usage_by_message.values():
+        tokens = (u.get("input_tokens", 0) + u.get("output_tokens", 0)
+                  + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0))
+        if tokens == 0:
+            continue
+        if model not in prices:
+            warn_unpriced(model)
+            continue
+        p = prices[model]
+        split = u.get("cache_creation") or {}
+        write_1h = split.get("ephemeral_1h_input_tokens", 0)
+        write_5m = u.get("cache_creation_input_tokens", 0) - write_1h
+        total += (u.get("input_tokens", 0) * p["input"]
+                  + u.get("output_tokens", 0) * p["output"]
+                  + write_5m * p["cache_write_5m"]
+                  + write_1h * p["cache_write_1h"]
+                  + u.get("cache_read_input_tokens", 0) * p["cache_read"]) / 1e6
+    return total
+
+
+def agent_transcripts(job):
+    """(path, cost) of every subagent transcript whose prompt names this job's folder.
 
     Claude Code writes each subagent's messages, with model and token usage, to
     <config>/projects/<project>/<session>/subagents/agent-<id>.jsonl. Every
@@ -659,35 +689,30 @@ def cost_usd(job):
     its job across sessions.
     """
     needle = f"Job folder: {job_dir(job['id'])}/"
-    prices = CONFIG["prices_usd_per_mtok"]
-    total = 0.0
+    found = []
     for path in transcripts_dir().glob("*/subagents/agent-*.jsonl"):
         with path.open() as f:
             entries = read_entries(f)
-            if needle not in first_prompt(entries):
-                continue
-            usage_by_message = {}
-            for entry in entries:
-                msg = entry.get("message") if isinstance(entry, dict) else None
-                if isinstance(entry, dict) and entry.get("type") == "assistant" and isinstance(msg, dict) and msg.get("usage"):
-                    usage_by_message[msg["id"]] = (msg["model"], msg["usage"])
-        for model, u in usage_by_message.values():
-            tokens = (u.get("input_tokens", 0) + u.get("output_tokens", 0)
-                      + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0))
-            if tokens == 0:
-                continue
-            if model not in prices:
-                warn_unpriced(model)
-                continue
-            p = prices[model]
-            split = u.get("cache_creation") or {}
-            write_1h = split.get("ephemeral_1h_input_tokens", 0)
-            write_5m = u.get("cache_creation_input_tokens", 0) - write_1h
-            total += (u.get("input_tokens", 0) * p["input"]
-                      + u.get("output_tokens", 0) * p["output"]
-                      + write_5m * p["cache_write_5m"]
-                      + write_1h * p["cache_write_1h"]
-                      + u.get("cache_read_input_tokens", 0) * p["cache_read"]) / 1e6
+            if needle in first_prompt(entries):
+                found.append((path, transcript_cost(entries)))
+    return found
+
+
+def cost_usd(job):
+    """API-equivalent cost of every subagent whose prompt names this job's folder."""
+    return round(sum(cost for _, cost in agent_transcripts(job)), 2)
+
+
+def orchestrator_cost(jobs):
+    """API-equivalent cost of every session that launched agents of `jobs`: the
+    <session>.jsonl next to <session>/subagents/, each session counted once."""
+    sessions = {path.parent.parent for j in jobs for path, _ in agent_transcripts(j)}
+    total = 0.0
+    for session in sessions:
+        path = session.with_name(session.name + ".jsonl")
+        if path.is_file():
+            with path.open() as f:
+                total += transcript_cost(read_entries(f))
     return round(total, 2)
 
 
@@ -2041,7 +2066,8 @@ def cmd_summary(args, show_pending=False):
         line = pending(j) if show_pending and j else None
         if line:
             print(f"  -> {line}")
-    print(f"total ${sum(j['cost_usd'] for j in jobs):.2f} (API-equivalent, factory agents only)")
+    print(f"total agents ${sum(j['cost_usd'] for j in jobs):.2f}, "
+          f"orchestrator ${orchestrator_cost(jobs):.2f} (API-equivalent)")
 
 
 def caps(run_jobs, max_jobs=None, max_usd=None):
