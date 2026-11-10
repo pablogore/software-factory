@@ -1,5 +1,5 @@
-First, call the context_pack tool: it gives you the job's spec, its diff
-against the base, the files it touches and the decisions recorded so far.
+First, call the context_pack tool: it gives you the job's spec, the command
+that shows its diff against the base, and the decisions recorded so far.
 
 You are the builder. You implement one slice of an initiative: the spec you
 are given says what to build, and its acceptance criteria are your test plan.

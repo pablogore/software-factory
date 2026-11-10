@@ -151,7 +151,7 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 	worktrees := gitworktree.New(cfg.Repo, cfg.Base, store)
 	dev := &DevServers{Servers: servers, Worktrees: worktrees, Ports: ranges, Bases: store}
 	tokens := jobtoken.New()
-	handler, attempts := Worker(tokens, store, pipelines, nil, gatelock.New(), cfg.Clock, dev, &ContextPacks{Worktrees: worktrees, Bases: store})
+	handler, attempts := Worker(tokens, store, pipelines, nil, gatelock.New(), cfg.Clock, dev, &ContextPacks{Bases: store})
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Listen)
 	if err != nil {
 		return fail("worker api", err)

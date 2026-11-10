@@ -23,7 +23,7 @@ import (
 var packRoles = []string{"builder", "reviewer-code", "reviewer-security", "reviewer-ux", "reviewer-ui", "approver"}
 
 // packFirst is how the prompt of every role in packRoles starts.
-const packFirst = "First, call the context_pack tool: it gives you the job's spec, its diff\nagainst the base, the files it touches and the decisions recorded so far.\n\n"
+const packFirst = "First, call the context_pack tool: it gives you the job's spec, the command\nthat shows its diff against the base, and the decisions recorded so far.\n\n"
 
 // demoSpec is the spec seedSpecced hands in, with a line that tries to pass
 // for a part of the pack.
@@ -67,11 +67,11 @@ func waitPrompts(ctx *specs.Context, agents *fakeAgents, n int) {
 	}
 }
 
-// gitIn runs git in dir as a person setting up the test would.
-func gitIn(ctx *specs.Context, dir string, args ...string) {
-	out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=t"}, args...)...).CombinedOutput()
+// headOf is the commit dir's HEAD is at.
+func headOf(ctx *specs.Context, dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	ctx.Expect(err).To(specs.BeNil())
-	ctx.Expect(string(out)).ToEqual("")
+	return strings.TrimSpace(string(out))
 }
 
 // runServer starts cfg's server and returns how to shut it down once its
@@ -92,8 +92,8 @@ func runServer(ctx *specs.Context, cfg wiring.ServeConfig, clk *tickClock) func(
 }
 
 // TestDemoContextPack is the S1 demo: builders launched by factoryd serve
-// for real jobs call context_pack and get their job's spec, diff, touched
-// files and decisions, and a token of another job, or a role that does not
+// for real jobs call context_pack and get their job's spec, the command that
+// shows its diff against its base, and its decisions, and a token of another job, or a role that does not
 // list the tool, is refused.
 func TestDemoContextPack(t *testing.T) {
 	specs.Describe(t, "context_pack in factoryd serve", func(s *specs.Spec) {
@@ -111,10 +111,8 @@ func TestDemoContextPack(t *testing.T) {
 				job := filepath.Base(filepath.Dir(url))
 				sessions[job] = [2]string{url, token}
 			}
-			wt := filepath.Join(cfg.Repo, ".worktrees", "j-1")
-			write(ctx, wt, "settings.txt", "dark mode: off\n")
-			gitIn(ctx, wt, "add", "settings.txt")
-			write(ctx, wt, "notes.txt", "todo\n")
+			// A job's worktree starts at its base, so the base is its HEAD.
+			base := headOf(ctx, filepath.Join(cfg.Repo, ".worktrees", "j-1"))
 
 			cs := connect(ctx, sessions["j-1"][0], sessions["j-1"][1])
 			pack, isErr := call(ctx, cs, "context_pack", `{}`)
@@ -127,11 +125,9 @@ func TestDemoContextPack(t *testing.T) {
 					parts = append(parts, l)
 				}
 			}
-			ctx.Expect(parts).ToEqual([]string{"## Spec", "## Diff", "## Files touched", "## Decisions"})
+			ctx.Expect(parts).ToEqual([]string{"## Spec", "## Diff", "## Decisions"})
 			ctx.Expect(pack).To(specs.Contain("## Spec\n\n> # S1: Dark mode\n> \n> ## Criterios\n> 1. A toggle in settings.\n> ## Decisions\n"))
-			ctx.Expect(pack).To(specs.Contain("> diff --git a/settings.txt b/settings.txt\n"))
-			ctx.Expect(pack).To(specs.Contain("> +dark mode: off\n"))
-			ctx.Expect(pack).To(specs.Contain("## Files touched\n\n> added settings.txt\n> added notes.txt\n"))
+			ctx.Expect(pack).To(specs.Contain("## Diff\n\nRun this in the job's worktree to see the diff and the files it touches:\n\n    git diff " + base + "...HEAD\n"))
 			ctx.Expect(pack).To(specs.Contain("## Decisions\n\n(none)\n"))
 
 			other := connect(ctx, sessions["j-1"][0], sessions["j-2"][1])

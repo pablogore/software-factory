@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
-	"github.com/pablogore/software-factory/internal/adapters/out/gitdiff"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -41,19 +40,18 @@ type GateChecks interface {
 	Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error)
 }
 
-// ContextPacks is what the worker's context_pack reads a job's diff with:
-// its worktree from Worktrees, against the base commit Bases recorded for
-// it.
+// ContextPacks is where the worker's context_pack reads a job's base from:
+// Bases, the commit recorded for it, which the pack's diff command is
+// against.
 type ContextPacks struct {
-	Worktrees ports.Workspace
-	Bases     ports.BaseLog
+	Bases ports.BaseLog
 }
 
 // WorkerAPI is the worker HTTP API over jobs, deciding results with the
 // tokens issued from tokens and running a builder's checks with gate under
 // the job's lock in locks, the one the job's real gate takes: a result
 // submitted cancels a run in progress. dev runs the sessions' dev servers;
-// without it dev_server is refused. packs reads the jobs' diffs for
+// without it dev_server is refused. packs tells the jobs' bases for
 // context_pack; without it context_pack is refused.
 func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock, dev *DevServers, packs *ContextPacks) http.Handler {
 	h, _ := Worker(tokens, jobs, p, gate, locks, clock, dev, packs)
@@ -70,7 +68,7 @@ func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChe
 		dev.sub = sub
 	}
 	if packs != nil {
-		sub.Worktrees, sub.Bases, sub.Diffs = packs.Worktrees, packs.Bases, gitdiff.Differ{}
+		sub.Bases = packs.Bases
 	}
 	return mcpworker.Handler(sub), &worker.Attempts{Results: sub, Jobs: jobs, Pipelines: p, Clock: clock}
 }
