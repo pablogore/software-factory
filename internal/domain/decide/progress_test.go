@@ -50,6 +50,59 @@ func TestAgentProgressed(t *testing.T) {
 			ctx.Expect(evs).To(specs.BeEmpty())
 		})
 
+		s.It("records the message in every stage of a sound job without moving it", func(ctx *specs.Context) {
+			stages := []string{"intake", "spec", domain.StageSpecgate, "build", domain.StageGate, "review", "approve", domain.StageMerge, domain.StageDone, domain.StageNeedsHuman}
+			for _, stage := range stages {
+				job := building(1)
+				job.Stage = stage
+
+				evs, err := decide.Decide(job, progressed("running the tests", 1), defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{progressed("running the tests", 1)})
+				ctx.Expect(decide.Apply(job, evs)).ToEqual(job)
+			}
+			asked := building(1)
+			asked.Stage, asked.InfoFrom = domain.StageNeedsInfo, "spec"
+			for _, job := range []domain.Job{asked, inTriage()} {
+				evs, err := decide.Decide(job, progressed("running the tests", 1), defaultPipeline())
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(evs).ToEqual([]domain.Event{progressed("running the tests", 1)})
+				ctx.Expect(decide.Apply(job, evs)).ToEqual(job)
+			}
+		})
+
+		s.It("is refused on a job in needs-info that records no asker", func(ctx *specs.Context) {
+			job := building(1)
+			job.Stage, job.InfoFrom = domain.StageNeedsInfo, ""
+
+			evs, err := decide.Decide(job, progressed("running the tests", 1), defaultPipeline())
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+			ctx.Expect(evs).To(specs.BeEmpty())
+		})
+
+		s.It("is refused on a job in triage that records no wall", func(ctx *specs.Context) {
+			job := inTriage()
+			job.Wall = ""
+
+			evs, err := decide.Decide(job, progressed("running the tests", 1), defaultPipeline())
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+			ctx.Expect(evs).To(specs.BeEmpty())
+		})
+
+		s.It("is refused on a job in triage with an unknown wall", func(ctx *specs.Context) {
+			job := inTriage()
+			job.Wall = "approved"
+
+			evs, err := decide.Decide(job, progressed("running the tests", 1), defaultPipeline())
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(evs).To(specs.BeEmpty())
+		})
+
 		rows := []progressRow{
 			{"without a message", func() domain.AgentProgressed { return progressed("", 1) }, domain.ErrMissingField},
 			{"with a blank message", func() domain.AgentProgressed { return progressed(" \n\t", 1) }, domain.ErrMissingField},
