@@ -32,13 +32,15 @@ type MCPServer struct {
 
 // SessionSpec is what a session is started with: the job and role it works
 // for, the role's kind, which says what the agent may do, the directory it
-// works in and the MCP servers it may call.
+// works in, the MCP servers it may call and the role's tools, the worker
+// tools of the job's MCP server it may call as domain.Role.Tools lists them.
 type SessionSpec struct {
 	Job        domain.JobID
 	Role       string
 	Kind       domain.Kind
 	Dir        string
 	MCPServers []MCPServer
+	Tools      []string
 }
 
 // Agent starts sessions of one configured agent. Implementations hide which

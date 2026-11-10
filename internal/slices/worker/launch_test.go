@@ -20,16 +20,18 @@ import (
 )
 
 // kindRoles reads a reviewer-* role as a review role and every other as a
-// build role, with a prompt naming it.
+// build role that lists run_gate in its tools, with a prompt naming it.
 type kindRoles struct{}
 
 func (kindRoles) Role(_ context.Context, name string) (domain.Role, string, error) {
-	kind := domain.KindBuild
 	if strings.HasPrefix(name, "reviewer-") {
-		kind = domain.KindReview
+		return domain.Role{Name: name, Kind: domain.KindReview}, "prompt of " + name, nil
 	}
-	return domain.Role{Name: name, Kind: kind}, "prompt of " + name, nil
+	return domain.Role{Name: name, Kind: domain.KindBuild, Tools: builderTools}, "prompt of " + name, nil
 }
+
+// builderTools are the tools kindRoles' build roles list.
+var builderTools = []string{"submit_result", "progress", "run_gate"}
 
 // launchedAgents starts scripted sessions that submit turns with the token
 // their MCP server was given, and records each session's spec; with fail
@@ -260,7 +262,7 @@ func lastEvents(ctx *specs.Context, w world, id domain.JobID, n int) []string {
 
 func TestLaunch(t *testing.T) {
 	specs.Describe(t, "worker.Launcher", func(s *specs.Spec) {
-		s.It("launches the stage's role with a new token for its job, role and stage entry, and the job's MCP server", func(ctx *specs.Context) {
+		s.It("launches the stage's role with a new token for its job, role and stage entry, the job's MCP server and the role's tools", func(ctx *specs.Context) {
 			w := newWorld(ctx)
 			build := enteredBuild(ctx, w, "j-1")
 			agents := &launchedAgents{sub: w.sub, turns: []string{ready}}
@@ -277,6 +279,7 @@ func TestLaunch(t *testing.T) {
 			ctx.Expect(spec.MCPServers).To(specs.HaveLen(1))
 			ctx.Expect(spec.MCPServers[0].Name).ToEqual(worker.MCPServerName)
 			ctx.Expect(spec.MCPServers[0].URL).ToEqual("http://factoryd/j-1")
+			ctx.Expect(spec.Tools).ToEqual(builderTools)
 			ctx.Expect(tokenOf(spec)).To(specs.Not(specs.Equal(w.j1)))
 			sess := agents.sessions[0]
 			ctx.Expect(sess.prompts).ToEqual([]string{"prompt of builder"})

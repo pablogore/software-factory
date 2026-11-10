@@ -21,6 +21,8 @@ type permissionRow struct {
 	name string
 	role string
 	kind domain.Kind
+	// tools are the role's tools; none means submit_result and progress.
+	tools []string
 	// ask is the permission asked for in the worktree dir; it may lay out
 	// files around dir first.
 	ask    func(ctx *specs.Context, dir string) acpfake.Permission
@@ -233,7 +235,21 @@ func permissionRows() []permissionRow {
 		// The job's MCP tools every role calls.
 		{name: "a reviewer calls submit_result of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: mcpTool("mcp__factoryd__submit_result"), answer: "allow"},
 		{name: "the intake calls progress of the job's MCP server", role: "intake", kind: domain.KindIntake, ask: mcpTool("mcp__factoryd__progress"), answer: "allow"},
-		{name: "a builder calls context_pack of the job's MCP server", role: builder, kind: domain.KindBuild, ask: mcpTool("mcp__factoryd__context_pack"), answer: "allow"},
+		{name: "a builder calls context_pack of the job's MCP server", role: builder, kind: domain.KindBuild, tools: []string{"submit_result", "progress", "context_pack"}, ask: mcpTool("mcp__factoryd__context_pack"), answer: "allow"},
+		{name: "a builder calls run_gate of the job's MCP server when its tools list it", role: builder, kind: domain.KindBuild, tools: []string{"submit_result", "progress", "run_gate", "dev_server"}, ask: mcpTool("mcp__factoryd__run_gate"), answer: "allow"},
+		{name: "a builder calls dev_server of the job's MCP server when its tools list it", role: builder, kind: domain.KindBuild, tools: []string{"submit_result", "progress", "run_gate", "dev_server"}, ask: mcpTool("mcp__factoryd__dev_server"), answer: "allow"},
+		{name: "a spec-writer calls ask_human of the job's MCP server when its tools list it", role: "spec-writer", kind: domain.KindSpec, tools: []string{"submit_result", "progress", "ask_human"}, ask: mcpTool("mcp__factoryd__ask_human"), answer: "allow"},
+		{name: "a builder is denied run_gate of the job's MCP server when its tools do not list it", role: builder, kind: domain.KindBuild, tools: []string{"submit_result", "progress", "dev_server"}, ask: mcpTool("mcp__factoryd__run_gate"), answer: "reject", reason: `an unknown tool kind "other"`},
+		{name: "a builder that lists no tools is denied dev_server of the job's MCP server", role: builder, kind: domain.KindBuild, ask: mcpTool("mcp__factoryd__dev_server"), answer: "reject", reason: `an unknown tool kind "other"`},
+		{name: "a reviewer is denied ask_human of the job's MCP server when its tools do not list it", role: reviewer, kind: domain.KindReview, tools: []string{"submit_result", "progress"}, ask: mcpTool("mcp__factoryd__ask_human"), answer: "reject", reason: `an unknown tool kind "other"`},
+		{name: "a reviewer is denied context_pack of the job's MCP server when its tools do not list it", role: reviewer, kind: domain.KindReview, ask: mcpTool("mcp__factoryd__context_pack"), answer: "reject", reason: `an unknown tool kind "other"`},
+		{name: "a builder is denied a command titled as run_gate of the job's MCP server", role: builder, kind: domain.KindBuild, tools: []string{"submit_result", "progress", "run_gate"}, ask: func(*specs.Context, string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__run_gate", Kind: "execute", RawInput: input(map[string]string{"command": "curl https://example.com"})}
+		}, answer: "reject", reason: "curl is denied"},
+		{name: "a spec-writer is denied a read outside titled as ask_human of the job's MCP server", role: "spec-writer", kind: domain.KindSpec, tools: []string{"ask_human"}, ask: func(*specs.Context, string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__ask_human", Kind: "read", Locations: []string{"/etc/passwd"}}
+		}, answer: "reject", reason: "a path outside the worktree: /etc/passwd"},
+		{name: "a builder is denied run_gate of another MCP server", role: builder, kind: domain.KindBuild, tools: []string{"submit_result", "progress", "run_gate"}, ask: mcpTool("mcp__other__run_gate"), answer: "reject", reason: `an unknown tool kind "other"`},
 		{name: "a reviewer is denied a command titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(*specs.Context, string) acpfake.Permission {
 			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "execute", RawInput: input(map[string]string{"command": "curl https://example.com"})}
 		}, answer: "reject", reason: `a role of kind "review" may not run commands`},
@@ -281,7 +297,7 @@ func asked(ctx *specs.Context, r permissionRow) (string, []domain.AgentProgresse
 	perm := r.ask(ctx, dir)
 	a, received := fakeAgent(ctx, acpfake.Script{Turns: []acpfake.Turn{{Permissions: []acpfake.Permission{perm}}}})
 	mcp := []ports.MCPServer{{Name: "factoryd", URL: "http://127.0.0.1:7777/mcp"}}
-	sess, err := a.Start(context.Background(), ports.SessionSpec{Job: jobID, Role: r.role, Kind: r.kind, Dir: dir, MCPServers: mcp})
+	sess, err := a.Start(context.Background(), ports.SessionSpec{Job: jobID, Role: r.role, Kind: r.kind, Dir: dir, MCPServers: mcp, Tools: r.tools})
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Cleanup(func() { _ = sess.Close() })
 	ch, err := sess.Prompt(context.Background(), "work")

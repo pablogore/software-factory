@@ -54,7 +54,7 @@ func (s *session) permission(params json.RawMessage) (any, *rpcError) {
 	}
 	reason := "the request is for another session"
 	if req.SessionID == s.id {
-		reason = judge(s.spec.Kind, s.dir, s.spec.MCPServers, req.ToolCall)
+		reason = judge(s.spec, s.dir, req.ToolCall)
 	}
 	option := ""
 	if reason == "" {
@@ -107,32 +107,38 @@ func (s *session) denied(call toolCall, reason string) {
 // on, as the agents' own tools call them.
 var pathKeys = []string{"path", "file_path", "filePath", "notebook_path", "abs_path"}
 
-// jobTools are the tools of the job's MCP server every role may call.
-var jobTools = []string{"submit_result", "progress", "context_pack"}
+// defaultTools are the tools of the job's MCP server a role that lists none
+// may call, as the worker allows them.
+var defaultTools = []string{"submit_result", "progress"}
 
-// jobTool tells whether call is one of jobTools on one of servers, the job's
-// MCP servers, by the name claude-code-acp gives it: "mcp__<server>__<tool>".
-// Only a call of kind other, the one claude-code-acp gives MCP tools, or of
-// no kind is one: any other kind is judged by its kind, whatever its title.
-func jobTool(servers []ports.MCPServer, call toolCall) bool {
+// jobTool tells whether call is one of tools, the role's, or defaultTools
+// when it lists none, on one of servers, the job's MCP servers, by the name
+// claude-code-acp gives it: "mcp__<server>__<tool>". Only a call of kind
+// other, the one claude-code-acp gives MCP tools, or of no kind is one: any
+// other kind is judged by its kind, whatever its title.
+func jobTool(servers []ports.MCPServer, tools []string, call toolCall) bool {
 	if call.Kind != "" && call.Kind != "other" {
 		return false
 	}
+	if len(tools) == 0 {
+		tools = defaultTools
+	}
 	for _, m := range servers {
-		if tool, ok := strings.CutPrefix(call.Title, "mcp__"+m.Name+"__"); ok && slices.Contains(jobTools, tool) {
+		if tool, ok := strings.CutPrefix(call.Title, "mcp__"+m.Name+"__"); ok && slices.Contains(tools, tool) {
 			return true
 		}
 	}
 	return false
 }
 
-// judge is why a session of a role of kind, in the worktree dir, with the
-// job's MCP servers, may not make call, or "" when it may. Every role reads,
-// searches and calls jobTools; only a build role edits files and runs
+// judge is why a session started with spec, in the worktree dir, may not
+// make call, or "" when it may. Every role reads, searches and calls the
+// job tools its role lists; only a build role edits files and runs
 // commands. No role reaches a path outside dir, and a call that cannot be
 // read is denied.
-func judge(kind domain.Kind, dir string, servers []ports.MCPServer, call toolCall) string {
-	if jobTool(servers, call) {
+func judge(spec ports.SessionSpec, dir string, call toolCall) string {
+	kind := spec.Kind
+	if jobTool(spec.MCPServers, spec.Tools, call) {
 		return ""
 	}
 	root, err := filepath.EvalSymlinks(dir)
