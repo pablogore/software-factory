@@ -1,6 +1,19 @@
 // Package acp runs any agent that speaks the Agent Client Protocol
 // (JSON-RPC over stdio), launched by its configured command, such as
 // `gemini --acp` or Claude Code's ACP adapter (01-diseno.md).
+//
+// It answers the agent's permission requests by the role's kind
+// (permission.go). The list of commands a builder is denied there is a
+// guard rail (baranda), not a sandbox: real security arrives with the
+// E04.2 sandbox. It reads a command's words as written, so it does not see
+// a command another one runs (bash -c, sh -c, python -c, eval, env -S), a
+// path in a variable, a wrapper missing from its list (ionice, setsid,
+// flock and the like) or a git alias that pushes. Its reading of the shell
+// can also be thrown off on purpose: a "\'" inside $'…' ends the quote for
+// it, an escaped backtick nested in backticks is text to it, and in the body
+// of a quoted here-document, the exemption Claude Code's commit messages
+// need, a line such as "EOF)" ends the document for bash and not for it.
+// Read it as a brake on an agent's mistakes, not as full coverage.
 package acp
 
 import (
@@ -109,7 +122,7 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 		_ = cmd.Wait()
 		close(sess.exited)
 	}()
-	sess.conn = newConn(stdin, sess.notified)
+	sess.conn = newConn(stdin, sess.notified, sess.requested)
 	go sess.conn.read(out)
 	if err := sess.open(ctx); err != nil {
 		_ = sess.Close()

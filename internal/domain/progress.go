@@ -18,6 +18,9 @@ const (
 	// ProgressEnded is the end of the turn: StopReason says why the agent
 	// stopped, or Error why the turn failed.
 	ProgressEnded ProgressKind = "ended"
+	// ProgressPermissionDenied is a permission the agent asked for and
+	// factoryd denied: ToolCall names the call, Text the tool and Reason why.
+	ProgressPermissionDenied ProgressKind = "permission_denied"
 )
 
 // MaxProgressText is the most characters a progress message an agent
@@ -48,6 +51,7 @@ type AgentProgressed struct {
 	OutputTokens int          `json:"output_tokens,omitempty"`
 	StopReason   string       `json:"stop_reason,omitempty"`
 	Error        string       `json:"error,omitempty"`
+	Reason       string       `json:"reason,omitempty"`
 	At           time.Time    `json:"at"`
 }
 

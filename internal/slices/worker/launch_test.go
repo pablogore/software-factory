@@ -272,6 +272,7 @@ func TestLaunch(t *testing.T) {
 			spec := started[0]
 			ctx.Expect(spec.Job).ToEqual(domain.JobID("j-1"))
 			ctx.Expect(spec.Role).ToEqual("builder")
+			ctx.Expect(spec.Kind).ToEqual(domain.KindBuild)
 			ctx.Expect(spec.Dir).ToEqual("/wt/j-1")
 			ctx.Expect(spec.MCPServers).To(specs.HaveLen(1))
 			ctx.Expect(spec.MCPServers[0].Name).ToEqual(worker.MCPServerName)

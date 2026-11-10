@@ -191,7 +191,7 @@ func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
 		return l.Attempts.fail(ctx, key.job, key.role, "the job's worktree could not be prepared: "+err.Error(), nil, nil)
 	}
 	mcp := ports.MCPServer{Name: MCPServerName, URL: l.MCP(key.job), Headers: map[string]string{"Authorization": "Bearer " + token}}
-	sess, err := l.Agents.Start(ctx, role, ports.SessionSpec{Job: key.job, Role: role.Name, Dir: wt.Path, MCPServers: []ports.MCPServer{mcp}})
+	sess, err := l.Agents.Start(ctx, role, ports.SessionSpec{Job: key.job, Role: role.Name, Kind: role.Kind, Dir: wt.Path, MCPServers: []ports.MCPServer{mcp}})
 	if err != nil {
 		return l.Attempts.fail(ctx, key.job, key.role, "the agent did not start: "+err.Error(), nil, nil)
 	}

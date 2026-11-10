@@ -56,6 +56,9 @@ type Turn struct {
 	// Stderr is written on stderr, a line each, before the updates.
 	Stderr  []string `json:"stderr,omitempty"`
 	Updates []Update `json:"updates,omitempty"`
+	// Permissions are asked for in order after the updates, each waiting
+	// for the client's answer.
+	Permissions []Permission `json:"permissions,omitempty"`
 	// Usage, when set, is reported in the prompt's answer.
 	Usage *Usage `json:"usage,omitempty"`
 	// StopReason defaults to end_turn.
@@ -79,6 +82,21 @@ type Update struct {
 	ToolCall string `json:"tool_call,omitempty"`
 	Title    string `json:"title,omitempty"`
 	Status   string `json:"status,omitempty"`
+}
+
+// Permission is one session/request_permission for a tool call, offering to
+// allow once (option "allow"), allow always ("allow-always") or reject once
+// ("reject").
+type Permission struct {
+	ToolCall string `json:"tool_call,omitempty"`
+	Title    string `json:"title,omitempty"`
+	// Kind is the ACP tool kind: read, edit, execute…
+	Kind      string          `json:"kind,omitempty"`
+	Locations []string        `json:"locations,omitempty"`
+	RawInput  json.RawMessage `json:"raw_input,omitempty"`
+	// Params, when set, is sent as the request's params as it is, in
+	// place of the rest, such as params the client cannot read.
+	Params json.RawMessage `json:"params,omitempty"`
 }
 
 // Usage is the tokens a turn reports.
@@ -121,6 +139,9 @@ type Received struct {
 	// Submitted holds what each Submit came to: the tool's text, or the
 	// error the call failed with.
 	Submitted []string `json:"submitted"`
+	// Permissions holds the client's answer to each Permission: the option
+	// it selected, "cancelled", or "error: " and the error it answered.
+	Permissions []string `json:"permissions"`
 }
 
 // sessionID is the id the fake gives its only session.
@@ -147,11 +168,10 @@ var errExit = errors.New("scripted exit")
 // out until in ends, and the turns' Stderr to errOut, and calls record with what it received after every
 // request or notification, before answering it.
 func Serve(in io.Reader, out, errOut io.Writer, sc Script, record func(Received) error) error {
-	f := &fake{sc: sc, out: json.NewEncoder(out), errOut: errOut, record: record, seen: map[string]bool{}}
-	dec := json.NewDecoder(in)
+	f := &fake{sc: sc, in: json.NewDecoder(in), out: json.NewEncoder(out), errOut: errOut, record: record, seen: map[string]bool{}}
 	for {
 		var m message
-		if err := dec.Decode(&m); err != nil {
+		if err := f.in.Decode(&m); err != nil {
 			if errors.Is(err, io.EOF) {
 				if sc.IgnoreCancel {
 					time.Sleep(time.Hour)
@@ -168,6 +188,7 @@ func Serve(in io.Reader, out, errOut io.Writer, sc Script, record func(Received)
 
 type fake struct {
 	sc     Script
+	in     *json.Decoder
 	out    *json.Encoder
 	errOut io.Writer
 	record func(Received) error
@@ -176,6 +197,8 @@ type fake struct {
 	seen   map[string]bool
 	// hanging is the prompt of a Hang turn, waiting for a cancel.
 	hanging *message
+	// asked counts the permission requests sent, for their ids.
+	asked int
 }
 
 func (f *fake) handle(m message) error {
@@ -288,6 +311,16 @@ func (f *fake) prompt(m message) error {
 			return err
 		}
 	}
+	for _, perm := range t.Permissions {
+		answer, err := f.ask(p.SessionID, perm)
+		if err != nil {
+			return err
+		}
+		f.got.Permissions = append(f.got.Permissions, answer)
+		if err := f.record(f.got); err != nil {
+			return err
+		}
+	}
 	if len(t.Submit) > 0 {
 		f.got.Submitted = append(f.got.Submitted, f.submit(t.Submit))
 		if err := f.record(f.got); err != nil {
@@ -334,6 +367,72 @@ func (f *fake) update(session string, u Update) error {
 		return fmt.Errorf("acpfake: update: %w", err)
 	}
 	return f.write(message{Method: "session/update", Params: params})
+}
+
+// ask sends perm as a session/request_permission and returns the client's
+// answer, handling what else the client sends meanwhile.
+func (f *fake) ask(session string, perm Permission) (string, error) {
+	params := perm.Params
+	if len(params) == 0 {
+		locations := make([]map[string]string, 0, len(perm.Locations))
+		for _, l := range perm.Locations {
+			locations = append(locations, map[string]string{"path": l})
+		}
+		call := map[string]any{"toolCallId": perm.ToolCall, "title": perm.Title, "kind": perm.Kind, "status": "pending", "locations": locations}
+		if len(perm.RawInput) > 0 {
+			call["rawInput"] = perm.RawInput
+		}
+		var err error
+		params, err = json.Marshal(map[string]any{
+			"sessionId": session,
+			"toolCall":  call,
+			"options": []map[string]string{
+				{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+				{"optionId": "allow-always", "name": "Always allow", "kind": "allow_always"},
+				{"optionId": "reject", "name": "Reject", "kind": "reject_once"},
+			},
+		})
+		if err != nil {
+			return "", fmt.Errorf("acpfake: permission: %w", err)
+		}
+	}
+	f.asked++
+	id, _ := json.Marshal(fmt.Sprintf("perm-%d", f.asked))
+	if err := f.write(message{ID: id, Method: "session/request_permission", Params: params}); err != nil {
+		return "", err
+	}
+	for {
+		var m message
+		if err := f.in.Decode(&m); err != nil {
+			return "", fmt.Errorf("acpfake: permission answer: %w", err)
+		}
+		if m.Method != "" || !bytes.Equal(m.ID, id) {
+			if err := f.handle(m); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if m.Error != nil {
+			return "error: " + m.Error.Message, nil
+		}
+		raw, err := json.Marshal(m.Result)
+		if err != nil {
+			return "", fmt.Errorf("acpfake: permission answer: %w", err)
+		}
+		var res struct {
+			Outcome struct {
+				Outcome  string `json:"outcome"`
+				OptionID string `json:"optionId"`
+			} `json:"outcome"`
+		}
+		if err := json.Unmarshal(raw, &res); err != nil {
+			return "", fmt.Errorf("acpfake: permission answer: %w", err)
+		}
+		if res.Outcome.Outcome == "selected" {
+			return res.Outcome.OptionID, nil
+		}
+		return res.Outcome.Outcome, nil
+	}
 }
 
 // submit calls submit_result with result on the session's first HTTP MCP
