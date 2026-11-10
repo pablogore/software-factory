@@ -395,6 +395,27 @@ func TestLaunch(t *testing.T) {
 			ctx.Expect(agents.started()).To(specs.BeEmpty())
 			ctx.Expect(w.history(ctx, "j-1")).ToEqual(before)
 		})
+
+		s.It("stops the job in needs-human once when the scheduler did not launch its reviewers for its spent budget", func(ctx *specs.Context) {
+			w := newWorld(ctx)
+			p := reviewPipeline()
+			w.apply(ctx, "j-1", domain.ResultSubmitted{Job: "j-1", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at})
+			review := decided[domain.StageEntered](ctx, w, p, "j-1", domain.GatePassed{Job: "j-1", Run: domain.ChecksRun{Command: "make check"}, At: at})
+			agents := &launchedAgents{sub: w.sub}
+			log := &lockedBuffer{}
+			spent := &scheduler.ExhaustedError{Job: "j-1", Spent: 5, Budget: 5}
+
+			launch(ctx, w.launcher(p, agents, &inline{refuse: spent}, log), review)
+
+			eventually(ctx, func() bool { return strings.Count(log.String(), "\n") == 2 })
+			ctx.Expect(agents.started()).To(specs.BeEmpty())
+			job, _, err := w.store.Load(context.Background(), "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Stage).ToEqual(domain.StageNeedsHuman)
+			ctx.Expect(job.Cause).ToEqual(domain.CauseBudget)
+			ctx.Expect(job.Paused).ToEqual(&domain.Paused{Stage: "review", Spent: 5})
+			ctx.Expect(lastEvents(ctx, w, "j-1", 2)).ToEqual([]string{"StageEntered", "NeedsHuman"})
+		})
 	})
 }
 

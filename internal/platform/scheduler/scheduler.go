@@ -46,6 +46,20 @@ var ErrBudget = errors.New("budget must be above 0, with a cost source")
 // records domain.BudgetExhausted for the job, which stops it in needs-human.
 var ErrBudgetExhausted = errors.New("budget exhausted")
 
+// ExhaustedError is the ErrBudgetExhausted of a job's work, with what the
+// job had spent and the budget it spent, which domain.BudgetExhausted
+// records.
+type ExhaustedError struct {
+	Job           domain.JobID
+	Spent, Budget float64
+}
+
+func (e *ExhaustedError) Error() string {
+	return fmt.Sprintf("scheduler: job %q spent USD %.2f of %.2f: %v", e.Job, e.Spent, e.Budget, ErrBudgetExhausted)
+}
+
+func (e *ExhaustedError) Unwrap() error { return ErrBudgetExhausted }
+
 // ErrInvalidCost means the cost source told a spend or a budget that is not
 // a finite number at or above 0, so the agent never ran: launching it could
 // let it run with no limit at all.
@@ -136,7 +150,7 @@ func New(concurrency int, budget float64, costs CostSource, github GitHub) (*Sch
 
 // Submit hands w, work for job, over to run with ctx. It never blocks: w
 // starts now if a slot is free, or waits in line behind earlier work. The
-// returned channel receives w's error once it has run, or ErrBudgetExhausted
+// returned channel receives w's error once it has run, or an ExhaustedError
 // or ErrInvalidCost when it never ran.
 func (s *Scheduler) Submit(ctx context.Context, job domain.JobID, w Work) <-chan error {
 	it := item{ctx: ctx, job: job, work: w, done: make(chan error, 1)}
@@ -256,7 +270,7 @@ func (s *Scheduler) launch(it item) (time.Duration, error) {
 		budget = s.budget
 	}
 	if spent >= budget {
-		return 0, fmt.Errorf("scheduler: job %q spent USD %.2f of %.2f: %w", it.job, spent, budget, ErrBudgetExhausted)
+		return 0, &ExhaustedError{Job: it.job, Spent: spent, Budget: budget}
 	}
 	wait, err := s.hold(it)
 	if err != nil || wait > 0 {

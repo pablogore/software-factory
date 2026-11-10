@@ -109,14 +109,24 @@ func (a *Attempts) failSession(ctx context.Context, job domain.JobID, role, toke
 // current set, nothing is recorded unless current says the job, as loaded,
 // is still where the attempt ran.
 func (a *Attempts) fail(ctx context.Context, job domain.JobID, role, reason string, stderr []string, current func(domain.Job, []ports.Record) bool) error {
+	ev := domain.AttemptFailed{Job: job, Role: role, Reason: reason, Stderr: stderr, At: a.Clock.Now()}
+	if err := a.record(ctx, job, ev, current); err != nil {
+		return fmt.Errorf("worker: failed attempt: %w", err)
+	}
+	return nil
+}
+
+// record decides ev on job as loaded. With current set, nothing is recorded
+// unless current says the job, as loaded, is still where ev happened.
+func (a *Attempts) record(ctx context.Context, job domain.JobID, ev domain.Event, current func(domain.Job, []ports.Record) bool) error {
 	j, v, err := a.Jobs.Load(ctx, job)
 	if err != nil {
-		return fmt.Errorf("worker: failed attempt: %w", err)
+		return err
 	}
 	if current != nil {
 		hist, err := a.Jobs.History(ctx, job)
 		if err != nil {
-			return fmt.Errorf("worker: failed attempt: %w", err)
+			return err
 		}
 		if !current(j, hist) {
 			return nil
@@ -124,11 +134,8 @@ func (a *Attempts) fail(ctx context.Context, job domain.JobID, role, reason stri
 	}
 	p, err := a.Pipelines.Pipeline(ctx, j.Pipeline)
 	if err != nil {
-		return fmt.Errorf("worker: failed attempt: %w", err)
+		return err
 	}
-	ev := domain.AttemptFailed{Job: job, Role: role, Reason: reason, Stderr: stderr, At: a.Clock.Now()}
-	if _, _, err := a.Jobs.Apply(ctx, job, v, p, ev); err != nil {
-		return fmt.Errorf("worker: failed attempt: %w", err)
-	}
-	return nil
+	_, _, err = a.Jobs.Apply(ctx, job, v, p, ev)
+	return err
 }

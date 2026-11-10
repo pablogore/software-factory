@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+	"github.com/pablogore/software-factory/internal/platform/scheduler"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -29,7 +31,8 @@ const MCPServerName = "factoryd"
 // Timeout after it started is cut, its token revoked and its agent stopped
 // at once, and its attempt fails, so a hung agent does not hold its slot
 // for ever. The attempts run through Scheduler, so it
-// decides whether and when each launches.
+// decides whether and when each launches; an attempt it never launched for
+// the job's spent budget stops the job in needs-human.
 type Launcher struct {
 	Tokens    issuer
 	Jobs      jobs
@@ -53,6 +56,9 @@ type Launcher struct {
 	// launched keeps the attempts already handed to Scheduler, since the bus
 	// may hand an event over again.
 	launched map[launchKey]bool
+	// stopping records one spent budget at a time, so the roles of one
+	// stage never race to stop their job.
+	stopping sync.Mutex
 }
 
 // launchKey is one attempt of a role: the job's round and stage entry, and
@@ -106,7 +112,7 @@ func (l *Launcher) Launch(ctx context.Context, ev domain.Event) error {
 			continue
 		}
 		done := l.Scheduler.Submit(ctx, job.ID, func(ctx context.Context) error { return l.attempt(ctx, key) })
-		go l.report(key, done)
+		go l.report(ctx, key, done)
 	}
 	return nil
 }
@@ -255,13 +261,34 @@ func (l *Launcher) timedOut(ctx context.Context, key launchKey, token string, st
 	return err
 }
 
-// report writes to Log why key's attempt did not run or did not finish.
-func (l *Launcher) report(key launchKey, done <-chan error) {
+// report writes to Log why key's attempt did not run or did not finish. An
+// attempt that never ran for the job's spent budget records it first.
+func (l *Launcher) report(ctx context.Context, key launchKey, done <-chan error) {
 	err := <-done
+	var ex *scheduler.ExhaustedError
+	if errors.As(err, &ex) {
+		err = errors.Join(err, l.exhausted(ctx, key, ex.Spent))
+	}
 	if err == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	_, _ = fmt.Fprintf(l.Log, "launch: job %s, role %s: %v\n", key.job, key.role, err)
+}
+
+// exhausted records that key's job had spent its budget when key's attempt
+// was about to launch, unless the job left key's round or stage entry, as
+// another role of the same stage stopping it first does.
+func (l *Launcher) exhausted(ctx context.Context, key launchKey, spent float64) error {
+	l.stopping.Lock()
+	defer l.stopping.Unlock()
+	ev := domain.BudgetExhausted{Job: key.job, Spent: spent, At: l.Attempts.Clock.Now()}
+	err := l.Attempts.record(ctx, key.job, ev, func(job domain.Job, hist []ports.Record) bool {
+		return job.Round == key.round && jobtoken.Entry(hist) == key.entry
+	})
+	if err != nil {
+		return fmt.Errorf("worker: budget exhausted: %w", err)
+	}
+	return nil
 }
