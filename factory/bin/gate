@@ -10,12 +10,20 @@ The gate runs the main checkout's factory/checks.sh inside the job's worktree,
 so a branch can't change the checks it is judged by. It also fails when the
 branch modifies or deletes a file matching config.json `protected_paths`
 (fnmatch patterns, where `*` also matches `/`). Adding new files is fine.
+
+`gate <job-id>` runs the checks on the branch merged with a freshly fetched
+origin/<base>, in a temporary worktree it removes afterwards: the merge is never
+pushed and the job's branch and worktree don't change. It fails without running
+the checks when the base can't be fetched or the merge conflicts.
 """
 
 import fnmatch
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -58,6 +66,37 @@ def run_checks(worktree):
     return res.returncode, res.stdout + res.stderr, int(time.monotonic() - start)
 
 
+def run_merged_checks(worktree, commit, base):
+    """checks.sh on `commit` merged with origin/<base> as fetched now, in a temporary
+    worktree of its own (its FETCH_HEAD and merge are private to this run).
+    Returns (code, log, seconds, base_sha, problem); with a problem the checks didn't run."""
+    tmp = tempfile.mkdtemp(prefix="gate-")
+    try:
+        git(worktree, "worktree", "add", "--detach", tmp, commit)
+        fetched = subprocess.run(["git", "fetch", "--no-tags", "--refmap=", "origin", f"refs/heads/{base}"],
+                                 cwd=tmp, capture_output=True, text=True,
+                                 env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+        if fetched.returncode != 0:
+            why = (fetched.stderr or fetched.stdout).strip()
+            return None, f"gate: couldn't fetch origin/{base}:\n{why}\n", 0, None, (
+                f"Couldn't fetch origin/{base}, so the checks didn't run.\n\n```\n{why}\n```")
+        base_sha = git(tmp, "rev-parse", "FETCH_HEAD").strip()
+        merged = subprocess.run(["git", "-c", "user.name=factory gate", "-c", "user.email=gate@factory.invalid",
+                                 "merge", "--no-edit", base_sha], cwd=tmp, capture_output=True, text=True)
+        if merged.returncode != 0:
+            files = git(tmp, "diff", "--name-only", "--diff-filter=U").split("\n")
+            out = (merged.stdout + merged.stderr).strip()
+            return None, f"gate: merging origin/{base} at {base_sha} conflicts:\n{out}\n", 0, base_sha, (
+                f"Merging origin/{base} at {base_sha[:7]} into the branch conflicts in:\n\n"
+                + "\n".join(f"- {f}" for f in filter(None, files))
+                + f"\n\nMerge origin/{base} into the branch, resolve the conflicts and commit; "
+                "the checks didn't run.\n\n```\n" + out + "\n```")
+        return (*run_checks(tmp), base_sha, None)
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", tmp], cwd=worktree, capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def gate(job_id, merge):
     job = json.loads((FACTORY / "jobs" / job_id / "job.json").read_text())
     worktree = job["worktree"]
@@ -65,25 +104,39 @@ def gate(job_id, merge):
         die(f"{job_id} hasn't started a build round")
     round_dir = FACTORY / "jobs" / job_id / f"round-{job['round']}"
     commit = git(worktree, "rev-parse", "HEAD").strip()
-    protected = protected_changes(worktree, job.get("base", CONFIG["base_branch"]))
-    code, log, seconds = run_checks(worktree)
+    base = job.get("base", CONFIG["base_branch"])
+    protected = protected_changes(worktree, base)
+    if merge:  # job merge has already merged the base into the branch
+        code, log, seconds = run_checks(worktree)
+        base_sha = problem = None
+    else:
+        code, log, seconds, base_sha, problem = run_merged_checks(worktree, commit, base)
     verdict = "PASS" if code == 0 and not protected else "FAIL"
     name = "merge-checks" if merge else "checks"
     (round_dir / f"{name}.log").write_text(log)
     tail = "\n".join(log.rstrip().splitlines()[-TAIL:])
+    headline = problem.split("\n", 1)[0].rstrip(":") if problem else None
     summary = [
+        f"checks.sh not run: {headline}" if problem else
         f"checks.sh {'passed' if code == 0 else f'failed with exit {code}'} in {seconds}s",
         f"Protected paths: {'changed: ' + ', '.join(protected) if protected else 'none changed'}",
-        f"Commit {commit[:7]}" + (", synced with the latest main before merging" if merge else ""),
+        f"Commit {commit[:7]}" + (", synced with the latest main before merging" if merge else
+                                  f", merged with origin/{base} at {base_sha[:7]} (not pushed)" if base_sha else ""),
     ]
+    tested = "" if merge else "## Base\n" + (problem or (
+        f"The checks ran on the branch merged with origin/{base} at {base_sha}. "
+        "The merge was not pushed; the branch and its worktree are unchanged.")) + "\n\n"
     (round_dir / f"{name}.md").write_text(
         f"GATE: {verdict}\nCOMMIT: {commit}\n\n"
         "## Summary\n" + "\n".join(f"- {s}" for s in summary) + "\n\n"
-        "## Protected paths\n"
+        + tested + "## Protected paths\n"
         + ("\n".join(f"- {p}" for p in protected) if protected else "None changed.")
-        + f"\n\n## checks.sh\nExit {code} in {seconds}s. Last {TAIL} lines of {name}.log:\n\n```\n{tail}\n```\n"
+        + (f"\n\n## checks.sh\nNot run. {name}.log:\n\n```\n{tail}\n```\n" if problem else
+           f"\n\n## checks.sh\nExit {code} in {seconds}s. Last {TAIL} lines of {name}.log:\n\n```\n{tail}\n```\n")
     )
-    print(f"GATE: {verdict} ({job_id} round {job['round']}, checks.sh exit {code} in {seconds}s"
+    print(f"GATE: {verdict} ({job_id} round {job['round']}, "
+          + (headline if problem else f"checks.sh exit {code} in {seconds}s")
+          + (f", origin/{base} at {base_sha[:7]}" if base_sha else "")
           + (f", protected paths changed: {', '.join(protected)}" if protected else "") + ")")
     sys.exit(0 if verdict == "PASS" else 1)
 
