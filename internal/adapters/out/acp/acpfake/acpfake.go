@@ -8,13 +8,17 @@
 package acpfake
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/acp"
@@ -61,6 +65,11 @@ type Turn struct {
 	// Hang makes the agent work on after its updates until it is cancelled,
 	// then answer with the cancelled stop reason.
 	Hang bool `json:"hang,omitempty"`
+	// Submit, when set, is a result the agent hands in after its updates
+	// with the MCP tool submit_result, on the first HTTP MCP server of its
+	// session and with that server's headers, as an agent's MCP client
+	// does.
+	Submit json.RawMessage `json:"submit,omitempty"`
 }
 
 // Update is one session/update: a message chunk, or a tool call when
@@ -109,6 +118,9 @@ type Received struct {
 	Loads []string `json:"loads"`
 	// Children holds the pid of each child process the agent launched.
 	Children []int `json:"children"`
+	// Submitted holds what each Submit came to: the tool's text, or the
+	// error the call failed with.
+	Submitted []string `json:"submitted"`
 }
 
 // sessionID is the id the fake gives its only session.
@@ -276,6 +288,12 @@ func (f *fake) prompt(m message) error {
 			return err
 		}
 	}
+	if len(t.Submit) > 0 {
+		f.got.Submitted = append(f.got.Submitted, f.submit(t.Submit))
+		if err := f.record(f.got); err != nil {
+			return err
+		}
+	}
 	if t.Exit {
 		return errExit
 	}
@@ -316,6 +334,54 @@ func (f *fake) update(session string, u Update) error {
 		return fmt.Errorf("acpfake: update: %w", err)
 	}
 	return f.write(message{Method: "session/update", Params: params})
+}
+
+// submit calls submit_result with result on the session's first HTTP MCP
+// server, in one JSON-RPC request, and returns the tool's text or why the
+// call failed.
+func (f *fake) submit(result json.RawMessage) string {
+	i := slices.IndexFunc(f.got.MCPServers, func(s MCPServer) bool { return s.Type == "http" })
+	if i < 0 {
+		return "no HTTP MCP server"
+	}
+	srv := f.got.MCPServers[i]
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "submit_result", "arguments": result}})
+	if err != nil {
+		return err.Error()
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	if err != nil {
+		return err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	for _, h := range srv.Headers {
+		req.Header.Set(h.Name, h.Value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err.Error()
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var rpc struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+		Error *rpcError `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rpc); err != nil {
+		return fmt.Sprintf("%s: %v", resp.Status, err)
+	}
+	if rpc.Error != nil {
+		return rpc.Error.Message
+	}
+	var texts []string
+	for _, c := range rpc.Result.Content {
+		texts = append(texts, c.Text)
+	}
+	return strings.Join(texts, "\n")
 }
 
 func (f *fake) answer(m message, result any) error {
