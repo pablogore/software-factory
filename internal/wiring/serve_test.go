@@ -14,6 +14,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/slices/worker"
 	"github.com/pablogore/software-factory/internal/wiring"
@@ -130,8 +131,8 @@ func serveConfig(ctx *specs.Context, clk *tickClock, dests map[string]ports.Dest
 	dir := ctx.Testing().TempDir()
 	return wiring.ServeConfig{
 		Config: "../..", Store: filepath.Join(dir, "factoryd.db"), Repo: dir, Base: "main",
-		DevState: filepath.Join(dir, "devservers"), Concurrency: 1, Budget: 5,
-		Tick: serveTick, Grace: serveGrace, Clock: clk, Destinations: dests, Log: io.Discard,
+		DevState: filepath.Join(dir, "devservers"), Concurrency: 1, Budget: 5, Listen: "127.0.0.1:0",
+		Agents: wiring.ACPAgents(childenv.Homes{Root: filepath.Join(dir, "homes")}, clk), Tick: serveTick, Grace: serveGrace, Clock: clk, Destinations: dests, Log: io.Discard,
 	}
 }
 
@@ -213,6 +214,8 @@ func TestServe(t *testing.T) {
 
 		fails := []failRow{
 			{"config", "a tick of 0", func(_ *specs.Context, cfg *wiring.ServeConfig) { cfg.Tick = 0 }, domain.ErrInvalidValue},
+			{"config", "no agents", func(_ *specs.Context, cfg *wiring.ServeConfig) { cfg.Agents = nil }, domain.ErrInvalidValue},
+			{"config", "no address to listen on", func(_ *specs.Context, cfg *wiring.ServeConfig) { cfg.Listen = "" }, domain.ErrInvalidValue},
 			{"pipeline", "a root with no roles", func(ctx *specs.Context, cfg *wiring.ServeConfig) { cfg.Config = ctx.Testing().TempDir() }, wiring.ErrNoRoles},
 			{"pipeline", "roles but no pipelines", func(ctx *specs.Context, cfg *wiring.ServeConfig) {
 				// The repo's roles, without its pipelines.
@@ -229,6 +232,8 @@ func TestServe(t *testing.T) {
 			}, nil},
 			{"scheduler", "a budget of 0", func(_ *specs.Context, cfg *wiring.ServeConfig) { cfg.Budget = 0 }, nil},
 			{"scheduler", "a concurrency of 0", func(_ *specs.Context, cfg *wiring.ServeConfig) { cfg.Concurrency = 0 }, nil},
+			{"scheduler", "an unknown cost source", func(_ *specs.Context, cfg *wiring.ServeConfig) { cfg.Costs = "metered" }, wiring.ErrUnknownCostSource},
+			{"worker api", "an address it cannot listen on", func(_ *specs.Context, cfg *wiring.ServeConfig) { cfg.Listen = "127.0.0.1:not-a-port" }, nil},
 			{"dev servers", "dev server records under a file", func(ctx *specs.Context, cfg *wiring.ServeConfig) {
 				file := filepath.Join(ctx.Testing().TempDir(), "a-file")
 				ctx.Expect(os.WriteFile(file, nil, 0o600)).To(specs.BeNil())

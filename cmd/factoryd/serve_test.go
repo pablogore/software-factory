@@ -38,7 +38,7 @@ func factoryd(dir string, args ...string) *exec.Cmd {
 func serveArgs(dir string, extra ...string) []string {
 	root, _ := filepath.Abs("../..")
 	return append([]string{"serve", "--config", root, "--store", filepath.Join(dir, "factoryd.db"), "--repo", dir,
-		"--dev-state", filepath.Join(dir, "devservers"), "--tick", "10ms", "--shutdown-grace", "5s"}, extra...)
+		"--dev-state", filepath.Join(dir, "devservers"), "--tick", "10ms", "--shutdown-grace", "5s", "--listen", "127.0.0.1:0"}, extra...)
 }
 
 // seedServeStore saves a job in build whose builder handed in a ready
