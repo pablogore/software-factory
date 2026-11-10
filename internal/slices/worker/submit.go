@@ -83,6 +83,17 @@ func (s *Submitter) Take(token string) Outcome {
 	return o
 }
 
+// Settle revokes token and calls fail with what its submissions came to
+// since the last Take, under job's lock: a submission that took token
+// before it was revoked is saved or refused first, and none can follow, so
+// fail sees the last word on token, and nothing else decides on job while
+// it runs. It forgets token's outcome, as Take does.
+func (s *Submitter) Settle(job domain.JobID, token string, fail func(Outcome) error) error {
+	s.Tokens.Revoke(token)
+	defer s.byJob.lock(job)()
+	return fail(s.Take(token))
+}
+
 // record keeps err as token's last refusal, or that its result was saved
 // when err is nil. Only tokens Authorize took are kept, so a caller with no
 // valid token adds nothing; a saved one is revoked, so nothing follows it.

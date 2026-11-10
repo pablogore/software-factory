@@ -29,6 +29,7 @@ func serve(ctx context.Context, args []string, out io.Writer) error {
 	budget := fs.Float64("budget", 0, "USD a job may spend unless a person raised its own; must be above 0")
 	costs := fs.String("costs", "", "where jobs' spend comes from: "+wiring.CostsSubscription+" counts 0 USD; with none, no agent is launched")
 	listen := fs.String("listen", "127.0.0.1:7317", "address the worker API and the jobs' MCP servers listen on for the agents")
+	timeout := fs.Duration("session-timeout", 2*time.Hour, "how long a role's session may run before it is cut and its attempt fails")
 	tick := fs.Duration("tick", time.Second, "how often due retries and the outbox are dispatched")
 	grace := fs.Duration("shutdown-grace", 30*time.Second, "how long a shutdown waits for what runs")
 	if err := fs.Parse(args); err != nil {
@@ -42,7 +43,7 @@ func serve(ctx context.Context, args []string, out io.Writer) error {
 	srv, err := wiring.StartServer(ctx, wiring.ServeConfig{
 		Config: *config, Store: *store, Repo: *repo, Base: *base, DevState: *state,
 		Concurrency: *concurrency, Budget: *budget, Costs: *costs, Listen: *listen, Agents: wiring.ACPAgents(homes, clock),
-		Tick: *tick, Grace: *grace, Clock: clock, Log: out,
+		SessionTimeout: *timeout, Tick: *tick, Grace: *grace, Clock: clock, Log: out,
 	})
 	if err != nil {
 		return err

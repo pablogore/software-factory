@@ -109,3 +109,32 @@ func TestDemoServe(t *testing.T) {
 		})
 	})
 }
+
+func TestServeListen(t *testing.T) {
+	specs.Describe(t, "factoryd serve on an address that is not loopback", func(s *specs.Spec) {
+		s.It("starts all the same and warns which address it listens on", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+			// The last --listen wins over serveArgs' loopback one.
+			cmd := factoryd(dir, serveArgs(dir, "--budget", "5", "--listen", "0.0.0.0:0")...)
+			stdout, err := cmd.StdoutPipe()
+			ctx.Expect(err).To(specs.BeNil())
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			ctx.Expect(cmd.Start()).To(specs.BeNil())
+			lines := bufio.NewReader(stdout)
+
+			warning, err := lines.ReadString('\n')
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(warning).To(specs.StartWith("warning: the worker API listens on 0.0.0.0:0 ("))
+			ctx.Expect(warning).To(specs.Contain("not a loopback address"))
+			serving, err := lines.ReadString('\n')
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(serving).To(specs.StartWith("factoryd serving "))
+			ctx.Expect(cmd.Process.Signal(syscall.SIGTERM)).To(specs.BeNil())
+			_, err = io.ReadAll(lines)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(cmd.Wait()).To(specs.BeNil())
+			ctx.Expect(stderr.String()).To(specs.BeEmpty())
+		})
+	})
+}

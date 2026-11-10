@@ -62,8 +62,12 @@ type ServeConfig struct {
 	// which launches no agent rather than run one without a limit.
 	Costs string
 	// Listen is the address the worker API, with each job's MCP server,
-	// listens on for the sessions' agents.
+	// listens on for the sessions' agents. One that is not a loopback
+	// address is served all the same, with a warning on Log.
 	Listen string
+	// SessionTimeout is how long a role's session may run before it is cut
+	// and its attempt fails, measured on Clock.
+	SessionTimeout time.Duration
 	// Agents gives the agent each role's sessions run on.
 	Agents Agents
 	// Tick is how often the bus's due retries and the outbox are
@@ -111,8 +115,8 @@ type Server struct {
 // An error names the piece that failed, and whatever opened before it is
 // closed again.
 func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
-	if cfg.Tick <= 0 || cfg.Grace <= 0 || cfg.Clock == nil || cfg.Log == nil || cfg.Agents == nil || cfg.Listen == "" {
-		return nil, fmt.Errorf("config: %w: tick %s and grace %s must be positive, with a clock, a log, agents and an address to listen on", domain.ErrInvalidValue, cfg.Tick, cfg.Grace)
+	if cfg.Tick <= 0 || cfg.Grace <= 0 || cfg.SessionTimeout <= 0 || cfg.Clock == nil || cfg.Log == nil || cfg.Agents == nil || cfg.Listen == "" {
+		return nil, fmt.Errorf("config: %w: tick %s, grace %s and session timeout %s must be positive, with a clock, a log, agents and an address to listen on", domain.ErrInvalidValue, cfg.Tick, cfg.Grace, cfg.SessionTimeout)
 	}
 	pipelines, err := servePipelines(cfg.Config)
 	if err != nil {
@@ -152,6 +156,9 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 	if err != nil {
 		return fail("worker api", err)
 	}
+	if ip := ln.Addr().(*net.TCPAddr).IP; !ip.IsLoopback() {
+		_, _ = fmt.Fprintf(cfg.Log, "warning: the worker API listens on %s (%s), not a loopback address: other machines may reach it and the jobs' MCP servers\n", cfg.Listen, ln.Addr())
+	}
 	addr := "http://" + ln.Addr().String()
 	api := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: handler}
 	go func() { _ = api.Serve(ln) }()
@@ -163,6 +170,7 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 		Tokens: tokens, Jobs: store, Pipelines: pipelines, Roles: roleAgents{dir: cfg.Config, agents: cfg.Agents},
 		Agents: roleAgents{dir: cfg.Config, agents: cfg.Agents}, Worktrees: worktrees, Scheduler: sched, Attempts: attempts,
 		MCP: func(job domain.JobID) string { return mcpURL(addr, job) }, Log: cfg.Log,
+		Timeout: cfg.SessionTimeout, Clock: cfg.Clock,
 	}
 	events := bus.New(store, cfg.Clock)
 	if err := dev.Subscribe(events); err != nil {

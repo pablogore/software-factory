@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -27,9 +28,11 @@ type session interface {
 	Stderr() []string
 }
 
-// results tells what a token's submissions came to.
+// results tells what a token's submissions came to, and settles a token's
+// session: once token is revoked and its submissions are in.
 type results interface {
 	Take(token string) Outcome
+	Settle(job domain.JobID, token string, fail func(Outcome) error) error
 }
 
 // pipelines finds the pipeline a job follows by its name.
@@ -94,4 +97,9 @@ type agents interface {
 // slots runs work for a job when a slot is free and the job may spend.
 type slots interface {
 	Submit(ctx context.Context, job domain.JobID, w scheduler.Work) <-chan error
+}
+
+// timer tells when a duration passed.
+type timer interface {
+	After(d time.Duration) <-chan time.Time
 }
