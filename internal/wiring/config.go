@@ -25,24 +25,11 @@ var ErrNoRoles = errors.New("no roles configured")
 // reviews with the same blind spots it built with, and an agent that gets
 // ANTHROPIC_API_KEY bills by API, not by the operator's subscription.
 func ValidateRoles(dir string) ([]string, error) {
-	files, err := filepath.Glob(filepath.Join(dir, "roles", "*.yaml"))
+	roles, err := loadRoles(dir)
 	if err != nil {
 		return nil, err
 	}
-	// A mistyped root has no roles to fail on, so it would pass as valid.
-	if len(files) == 0 {
-		return nil, fmt.Errorf("%w: no roles/*.yaml in %s", ErrNoRoles, dir)
-	}
-	sort.Strings(files)
-	var roles []domain.Role
-	for _, f := range files {
-		rs, err := LoadRoleSession(dir, strings.TrimSuffix(filepath.Base(f), ".yaml"))
-		if err != nil {
-			return nil, err
-		}
-		roles = append(roles, rs.Role)
-	}
-	if err := validatePipelines(dir, roles); err != nil {
+	if _, err := loadPipelines(dir, roles); err != nil {
 		return nil, err
 	}
 	warnings, err := apiBilled(dir)
@@ -87,22 +74,47 @@ func apiBilled(dir string) ([]string, error) {
 	return warnings, nil
 }
 
-// validatePipelines loads every pipelines/*.yaml in dir with roles, naming the
-// file of the pipeline that fails to load.
-func validatePipelines(dir string, roles []domain.Role) error {
-	files, err := filepath.Glob(filepath.Join(dir, "pipelines", "*.yaml"))
+// loadRoles loads every role in dir's roles/ as a session would.
+func loadRoles(dir string) ([]domain.Role, error) {
+	files, err := filepath.Glob(filepath.Join(dir, "roles", "*.yaml"))
 	if err != nil {
-		return err
+		return nil, err
+	}
+	// A mistyped root has no roles to fail on, so it would pass as valid.
+	if len(files) == 0 {
+		return nil, fmt.Errorf("%w: no roles/*.yaml in %s", ErrNoRoles, dir)
 	}
 	sort.Strings(files)
+	var roles []domain.Role
+	for _, f := range files {
+		rs, err := LoadRoleSession(dir, strings.TrimSuffix(filepath.Base(f), ".yaml"))
+		if err != nil {
+			return nil, err
+		}
+		roles = append(roles, rs.Role)
+	}
+	return roles, nil
+}
+
+// loadPipelines loads every pipelines/*.yaml in dir with roles, naming the
+// file of the pipeline that fails to load, and returns them in file order.
+func loadPipelines(dir string, roles []domain.Role) ([]domain.Pipeline, error) {
+	files, err := filepath.Glob(filepath.Join(dir, "pipelines", "*.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	var ps []domain.Pipeline
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
-			return fmt.Errorf("pipelines/%s: %w", filepath.Base(f), err)
+			return nil, fmt.Errorf("pipelines/%s: %w", filepath.Base(f), err)
 		}
-		if _, err := configyaml.LoadPipeline(data, roles); err != nil {
-			return fmt.Errorf("pipelines/%s: %w", filepath.Base(f), err)
+		p, err := configyaml.LoadPipeline(data, roles)
+		if err != nil {
+			return nil, fmt.Errorf("pipelines/%s: %w", filepath.Base(f), err)
 		}
+		ps = append(ps, p)
 	}
-	return nil
+	return ps, nil
 }

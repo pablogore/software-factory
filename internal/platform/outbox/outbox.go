@@ -15,7 +15,7 @@
 // retried: it is failed at once and, in the same step, the job that asked
 // for it goes to needs-human.
 //
-// Nothing runs Deliver on a schedule yet: the scheduler will call it.
+// factoryd serve runs Deliver on every tick.
 package outbox
 
 import (

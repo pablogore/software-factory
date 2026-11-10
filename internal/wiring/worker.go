@@ -24,6 +24,9 @@ type SystemClock struct{}
 // Now implements ports.Clock.
 func (SystemClock) Now() time.Time { return time.Now() }
 
+// After implements scheduler.Clock.
+func (SystemClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+
 // WorkerStore keeps jobs and reads back their history, which tells whether a
 // token's stage entry is still the job's.
 type WorkerStore interface {
