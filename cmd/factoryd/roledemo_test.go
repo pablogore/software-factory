@@ -14,10 +14,18 @@ import (
 	"github.com/pablogore/software-factory/internal/wiring"
 )
 
-// TestMain lets this test binary be the fake agent role-demo launches.
+// mainEnv has this test binary run factoryd's main with its arguments.
+const mainEnv = "FACTORYD_TEST_MAIN"
+
+// TestMain lets this test binary be the fake agent role-demo launches, and
+// factoryd itself for the tests that run it as a process.
 func TestMain(m *testing.M) {
 	if acpfake.Requested() {
 		os.Exit(acpfake.Run())
+	}
+	if os.Getenv(mainEnv) != "" {
+		main()
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }

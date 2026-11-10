@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/acp/acpfake"
 )
@@ -55,6 +56,16 @@ func main() {
 		stop()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "factoryd role-demo:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		err := serve(ctx, os.Args[2:], os.Stdout)
+		stop()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "factoryd serve:", err)
 			os.Exit(1)
 		}
 		return
