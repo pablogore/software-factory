@@ -5,6 +5,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+	"github.com/pablogore/software-factory/internal/platform/scheduler"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -72,4 +73,25 @@ type devPorts interface {
 // or none.
 type devCommands interface {
 	DevCommand(ctx context.Context, job domain.JobID, wt ports.Worktree) (ports.DevCommand, error)
+}
+
+// issuer issues a session's token and revokes it when the session ends.
+type issuer interface {
+	Issue(g jobtoken.Grant) (string, error)
+	Revoke(token string)
+}
+
+// roles reads a role and its prompt as its session starts.
+type roles interface {
+	Role(ctx context.Context, name string) (domain.Role, string, error)
+}
+
+// agents starts a session of the agent role names.
+type agents interface {
+	Start(ctx context.Context, role domain.Role, s ports.SessionSpec) (ports.Session, error)
+}
+
+// slots runs work for a job when a slot is free and the job may spend.
+type slots interface {
+	Submit(ctx context.Context, job domain.JobID, w scheduler.Work) <-chan error
 }
