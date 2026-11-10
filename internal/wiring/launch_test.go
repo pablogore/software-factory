@@ -136,7 +136,7 @@ func launchConfig(ctx *specs.Context, clk *tickClock, agents *fakeAgents, log *s
 		Config: "../..", Store: filepath.Join(dir, "factoryd.db"), Repo: launchRepo(ctx), Base: "main",
 		DevState: filepath.Join(dir, "devservers"), Concurrency: 2, Budget: 5, Costs: wiring.CostsSubscription,
 		Listen: "127.0.0.1:0", Agents: agents.agents(clk),
-		Tick: serveTick, Grace: serveGrace, Clock: clk, Log: log,
+		SessionTimeout: serveSessionTimeout, Tick: serveTick, Grace: serveGrace, Clock: clk, Log: log,
 	}
 }
 
@@ -183,6 +183,16 @@ func tickUntil(ctx *specs.Context, clk *tickClock, done func() bool) {
 		// Sessions run on real time, between ticks.
 		time.Sleep(20 * time.Millisecond)
 		clk.Advance(serveTick)
+	}
+}
+
+// serverWaitAsked is the next wait the server asks the clock for, past the
+// sessions' time limits, which each session asks for as it starts.
+func serverWaitAsked(ctx *specs.Context, c *tickClock) time.Duration {
+	for {
+		if d := waitAsked(ctx, c); d != serveSessionTimeout {
+			return d
+		}
 	}
 }
 
@@ -260,6 +270,108 @@ func TestDemoLaunch(t *testing.T) {
 	})
 }
 
+func TestDemoTimeoutRetryListen(t *testing.T) {
+	specs.Describe(t, "factoryd serve with a real agent's failures and an open address", func(s *specs.Spec) {
+		s.It("cuts a session past its time limit as a failed attempt and retries it in a new session, which hands in", func(ctx *specs.Context) {
+			clk := newTickClock()
+			agents := &fakeAgents{dir: ctx.Testing().TempDir(), scripts: []acpfake.Script{
+				{Turns: []acpfake.Turn{{Hang: true}}},
+				{Turns: []acpfake.Turn{{Submit: ready}}},
+			}}
+			cfg := launchConfig(ctx, clk, agents, &syncBuffer{})
+			seedBuild(ctx, cfg.Store, "j-1")
+			stop, done := running(ctx, cfg)
+
+			// The hung session asked for its time limit as it started; once
+			// it has its prompt, the fake clock runs past it at once.
+			asked := waitAsked(ctx, clk)
+			for asked != serveSessionTimeout {
+				asked = waitAsked(ctx, clk)
+			}
+			deadline := time.Now().Add(20 * time.Second)
+			for len(agents.received(ctx, 0).Prompts) == 0 {
+				if time.Now().After(deadline) {
+					ctx.Testing().Fatal("the session never got its prompt")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			clk.Advance(serveSessionTimeout)
+			tickUntil(ctx, clk, func() bool {
+				job, _, err := reopen(ctx, cfg.Store).Load(context.Background(), "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				return job.Stage == domain.StageGate
+			})
+
+			ctx.Expect(history(ctx, cfg.Store, "j-1")).ToEqual([]string{
+				"StageEntered(build)", "AttemptFailed", "AttemptRetried", "StageEntered(gate)",
+			})
+			hist, err := reopen(ctx, cfg.Store).History(context.Background(), "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(hist[1].Event.(domain.AttemptFailed).Reason).ToEqual("the session ran past its time limit of 1h0m0s and was cut")
+			ctx.Expect(agents.launched()).ToEqual([]string{"builder", "builder"})
+			prompt, err := os.ReadFile("../../roles/builder.md")
+			ctx.Expect(err).To(specs.BeNil())
+			// Cut, not asked again in the hung session: the retry is a new one.
+			ctx.Expect(agents.received(ctx, 0).Prompts).ToEqual([]string{string(prompt)})
+			second := agents.received(ctx, 1)
+			ctx.Expect(second.Prompts).ToEqual([]string{string(prompt)})
+			ctx.Expect(second.Submitted).ToEqual([]string{"result recorded for job j-1: StageEntered"})
+
+			stop()
+			ctx.Expect(<-done).To(specs.BeNil())
+		})
+
+		s.It("asks a session once more for its result naming only the MCP tool", func(ctx *specs.Context) {
+			clk := newTickClock()
+			agents := &fakeAgents{dir: ctx.Testing().TempDir(), scripts: []acpfake.Script{
+				{},
+				{Turns: []acpfake.Turn{{Submit: ready}}},
+			}}
+			cfg := launchConfig(ctx, clk, agents, &syncBuffer{})
+			seedBuild(ctx, cfg.Store, "j-1")
+			stop, done := running(ctx, cfg)
+
+			tickUntil(ctx, clk, func() bool {
+				job, _, err := reopen(ctx, cfg.Store).Load(context.Background(), "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				return job.Stage == domain.StageGate
+			})
+
+			first := agents.received(ctx, 0)
+			ctx.Expect(first.Prompts).To(specs.HaveLen(2))
+			retry := first.Prompts[1]
+			ctx.Expect(retry).To(specs.Contain("submit_result tool of the factoryd MCP server"))
+			ctx.Expect(retry).To(specs.Not(specs.Contain("submit-result")))
+			ctx.Expect(retry).To(specs.Not(specs.Contain("FACTORY_JOB_TOKEN")))
+			stop()
+			ctx.Expect(<-done).To(specs.BeNil())
+		})
+
+		s.It("serves on an address that is not loopback all the same, warning which one", func(ctx *specs.Context) {
+			clk := newTickClock()
+			log := &syncBuffer{}
+			cfg := launchConfig(ctx, clk, &fakeAgents{dir: ctx.Testing().TempDir()}, log)
+			cfg.Listen = "0.0.0.0:0"
+			stop, done := running(ctx, cfg)
+
+			ctx.Expect(log.String()).To(specs.Contain("warning: the worker API listens on 0.0.0.0:0 ("))
+			ctx.Expect(log.String()).To(specs.Contain("not a loopback address"))
+			stop()
+			ctx.Expect(<-done).To(specs.BeNil())
+		})
+
+		s.It("warns nothing on a loopback address", func(ctx *specs.Context) {
+			clk := newTickClock()
+			log := &syncBuffer{}
+			cfg := launchConfig(ctx, clk, &fakeAgents{dir: ctx.Testing().TempDir()}, log)
+			stop, done := running(ctx, cfg)
+			stop()
+			ctx.Expect(<-done).To(specs.BeNil())
+			ctx.Expect(log.String()).To(specs.Not(specs.Contain("warning")))
+		})
+	})
+}
+
 func TestLaunch(t *testing.T) {
 	specs.Describe(t, "factoryd serve's session tokens", func(s *specs.Spec) {
 		s.It("refuses a session's token on another job, and a result of another role's kind", func(ctx *specs.Context) {
@@ -301,8 +413,8 @@ func TestLaunch(t *testing.T) {
 
 			stop()
 			// The first tick's wait comes first; no tick ran, so no other does.
-			ctx.Expect(waitAsked(ctx, clk)).ToEqual(serveTick)
-			ctx.Expect(waitAsked(ctx, clk)).ToEqual(serveGrace)
+			ctx.Expect(serverWaitAsked(ctx, clk)).ToEqual(serveTick)
+			ctx.Expect(serverWaitAsked(ctx, clk)).ToEqual(serveGrace)
 			clk.Advance(serveGrace)
 			ctx.Expect(<-done).To(specs.MatchError(wiring.ErrShutdownGrace))
 		})
