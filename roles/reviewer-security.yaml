@@ -5,3 +5,4 @@ prompt: roles/reviewer-security.md
 agent: claude
 model: opus
 mode: blocking
+tools: [submit_result, progress, context_pack]
