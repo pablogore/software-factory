@@ -1,6 +1,7 @@
 package runmode
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -60,11 +61,14 @@ func RunCapped(issues int, usd float64, l Limits) (RunStop, bool) {
 // NewAuto returns the auto mode: it does not brake when an issue ends, only
 // when a job or an initiative stops for a person, as the default mode, or
 // when the run reaches one of l's caps. The other arguments are New's.
-func NewAuto(brake *Brake, q Queue, order queue.Order, reports Reports, outbox Outbox, inbox Inbox, l Limits) (*Mode, error) {
+func NewAuto(ctx context.Context, brake *Brake, q Queue, order queue.Order, reports Reports, outbox Outbox, inbox Inbox, log BrakeLog, l Limits) (*Mode, error) {
 	if err := l.Validate(); err != nil {
 		return nil, err
 	}
-	m := New(brake, q, order, reports, outbox, inbox)
+	m, err := New(ctx, brake, q, order, reports, outbox, inbox, log)
+	if err != nil {
+		return nil, err
+	}
 	m.auto = &tally{limits: l, ended: map[int]bool{}, spent: map[int]float64{}}
 	return m, nil
 }

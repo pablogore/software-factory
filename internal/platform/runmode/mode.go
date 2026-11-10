@@ -18,6 +18,10 @@
 // another slice, and tells why the same way; the other issues go on. Only an
 // allowed person's raise of the cap it stopped at starts it again.
 //
+// The brake is saved in factoryd's store (BrakeLog), so after a restart it is
+// on again if it was, until a person releases it, and no summary is
+// published again for it.
+//
 // Nothing calls it yet: the daemon will subscribe Mode.Handle to the bus.
 package runmode
 
@@ -60,6 +64,14 @@ type Inbox interface {
 	Put(ctx context.Context, key string, s Summary) error
 }
 
+// BrakeLog keeps whether the brake is on across restarts of factoryd.
+type BrakeLog interface {
+	// SaveBrake saves whether the brake is on, replacing what was saved.
+	SaveBrake(ctx context.Context, on bool) error
+	// BrakeOn is what SaveBrake saved last; false when it never ran.
+	BrakeOn(ctx context.Context) (bool, error)
+}
+
 // Queue is what the mode needs from internal/platform/queue.
 type Queue interface {
 	Add(ctx context.Context, issues ...queue.Issue)
@@ -75,6 +87,7 @@ type Mode struct {
 	reports Reports
 	outbox  Outbox
 	inbox   Inbox
+	log     BrakeLog
 
 	// auto is nil in the default mode; mu guards it, so the bus may hand
 	// events over from several goroutines.
@@ -84,9 +97,17 @@ type Mode struct {
 
 // New returns the default mode: it puts brake on, which must be the
 // scheduler q was built on, and recommends the next issue by order, the
-// one q takes issues in.
-func New(brake *Brake, q Queue, order queue.Order, reports Reports, outbox Outbox, inbox Inbox) *Mode {
-	return &Mode{brake: brake, queue: q, order: order, reports: reports, outbox: outbox, inbox: inbox}
+// one q takes issues in. It saves the brake to log and, when log has it on,
+// puts it on before q hands anything over.
+func New(ctx context.Context, brake *Brake, q Queue, order queue.Order, reports Reports, outbox Outbox, inbox Inbox, log BrakeLog) (*Mode, error) {
+	on, err := log.BrakeOn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("runmode: saved brake: %w", err)
+	}
+	if on {
+		brake.Engage()
+	}
+	return &Mode{brake: brake, queue: q, order: order, reports: reports, outbox: outbox, inbox: inbox, log: log}, nil
 }
 
 // Brakes tells whether ev, saved for job, ends job's issue or stops job for
@@ -131,7 +152,12 @@ func (m *Mode) Handle(ctx context.Context, ev domain.Event) error {
 	} else if !Brakes(ev, job) {
 		return nil
 	}
+	// On in memory first, so no issue starts while it is being saved; a
+	// failed save is retried with the event.
 	m.brake.Engage()
+	if err := m.log.SaveBrake(ctx, true); err != nil {
+		return fmt.Errorf("runmode: save brake for issue #%d: %w", r.Issue.Number, err)
+	}
 
 	s := Summarize(r, job.ID, m.queue.Waiting(), m.queue.Held(), m.order)
 	s.RunStop = stop
@@ -152,10 +178,16 @@ func (m *Mode) Handle(ctx context.Context, ev domain.Event) error {
 }
 
 // Release is the operator's continue: the brake comes off, the issue it
-// held back starts and the queue hands the next ones over.
-func (m *Mode) Release(ctx context.Context) {
+// held back starts and the queue hands the next ones over. It is saved off
+// first: when that fails the brake stays on, so a restart cannot find it on
+// after work went on.
+func (m *Mode) Release(ctx context.Context) error {
+	if err := m.log.SaveBrake(ctx, false); err != nil {
+		return fmt.Errorf("runmode: release brake: %w", err)
+	}
 	m.brake.Release()
 	m.queue.Add(ctx)
+	return nil
 }
 
 // at is when ev, one of Events, happened.
