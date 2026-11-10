@@ -22,9 +22,21 @@ No se exporta: estado de jobs, tokens, sesiones, costos (eso es otro export: `fa
 
 **Credenciales y HOME del agente.** El agente y el gate no heredan el entorno de factoryd: reciben solo una lista blanca (`PATH`, locale, `TMPDIR`, cachés de Go). Cada agente de `roles.yaml` puede declarar `env_passthrough`, una lista de *nombres* de variables (p. ej. `OPENAI_API_KEY`) que se copian tal cual del entorno de factoryd; la config nunca lleva valores, y `factoryd config-validate` rechaza ahí `GITHUB_TOKEN`, `GH_TOKEN` y los tokens de canales. El agente y el gate usan un HOME propio por job, en el directorio de datos de factoryd, fuera del worktree y separado del de los otros jobs. Un agente con `home: user` corre en cambio con el HOME del usuario, para los que inician sesión con su cuenta (como Claude Code con suscripción): hasta que exista el sandbox (E04.2), eso le da al agente acceso a la carpeta del usuario.
 
-**Opciones de `factoryd serve`: `--listen` y `--costs`.**
+**Opciones de `factoryd serve`.**
+- `--config <carpeta>` (por defecto `.`): la raíz de la configuración, con `roles.yaml`, `roles/` y `pipelines/`.
+- `--store <archivo>` (obligatorio, sin valor por defecto): el archivo SQLite donde se guardan los jobs y sus eventos. Sin él, `serve` no arranca.
+- `--repo <carpeta>` (por defecto `.`): el repo git donde se crean los worktrees de los jobs.
+- `--base <rama>` (por defecto `main`): la rama de la que parten los worktrees de los jobs.
+- `--dev-state <carpeta>` (por defecto `factoryd/devservers` dentro de la caché del usuario): dónde se anotan los dev servers que corren, para que el próximo arranque mate los que dejó una caída.
+- `--concurrency <n>` (por defecto `1`): cuántos agentes corren a la vez; debe ser al menos 1.
+- `--budget <USD>` (por defecto `0`): cuánto puede gastar un job, salvo que una persona le haya subido el suyo. Debe ser mayor que 0: con el valor por defecto `serve` no arranca, así que hay que pasarlo siempre.
+- `--costs <fuente>` (por defecto ninguna): de dónde sale lo que gasta un job. `subscription` cuenta 0 USD (agentes pagados por suscripción, no por uso), así que el presupuesto nunca corta un job. Sin fuente declarada, `serve` no lanza ningún agente, en vez de correr uno sin límite de gasto. Cualquier otra fuente hace que `serve` no arranque.
 - `--listen <dirección>` (por defecto `127.0.0.1:7317`): dónde escuchan la API del trabajador y el MCP de cada job, a los que se conectan las sesiones de los agentes. Si la dirección no es local (loopback), `serve` arranca igual pero muestra un aviso que la nombra: otras máquinas podrían llegar a la API y a los MCP de los jobs.
-- `--costs <fuente>`: de dónde sale lo que gasta un job. `subscription` cuenta 0 USD (agentes pagados por suscripción, no por uso), así que el presupuesto nunca corta un job. Sin fuente declarada, `serve` no lanza ningún agente, en vez de correr uno sin límite de gasto.
+- `--session-timeout <duración>` (por defecto `2h`): cuánto puede correr la sesión de un rol antes de que se corte y su intento falle.
+- `--tick <duración>` (por defecto `1s`): cada cuánto se despachan los reintentos que vencieron y el outbox.
+- `--shutdown-grace <duración>` (por defecto `30s`): cuánto espera un apagado a lo que está corriendo antes de cancelarlo.
+
+Las tres duraciones deben ser mayores que 0.
 
 ## Capas y precedencia
 1. Valores por defecto del binario.
