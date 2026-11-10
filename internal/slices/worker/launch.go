@@ -6,6 +6,7 @@ import (
 	"io"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -24,8 +25,10 @@ const MCPServerName = "factoryd"
 // the job enters a pipeline stage, for every role that runs in it, and each
 // time a failed attempt runs again, for that role. Every session gets a new
 // token for its job, role and stage entry, and the job's MCP server with it;
-// the token is revoked when the session ends. The attempts run through
-// Scheduler, so it decides whether and when each launches.
+// the token is revoked when the session ends. A session still running
+// Timeout after it started is cut and its attempt fails, so a hung agent
+// does not hold its slot for ever. The attempts run through Scheduler, so it
+// decides whether and when each launches.
 type Launcher struct {
 	Tokens    issuer
 	Jobs      jobs
@@ -40,6 +43,9 @@ type Launcher struct {
 	// Log is where an attempt that could not run or failed to record is
 	// written, since no one waits for it.
 	Log io.Writer
+	// Timeout is how long a session may run, measured on Clock.
+	Timeout time.Duration
+	Clock   timer
 
 	// mu guards launched and Log.
 	mu sync.Mutex
@@ -189,8 +195,53 @@ func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
 		return l.Attempts.fail(ctx, key.job, key.role, "the agent did not start: "+err.Error(), nil)
 	}
 	defer func() { _ = sess.Close() }()
-	_, err = l.Attempts.Run(ctx, sess, key.job, role.Name, token, prompt)
-	return err
+	run, cancel, expired := l.deadline(ctx)
+	defer cancel()
+	if _, err = l.Attempts.Run(run, sess, key.job, role.Name, token, prompt); err == nil || !expired() {
+		return err
+	}
+	return l.timedOut(ctx, key, sess.Stderr())
+}
+
+// deadline is the context a session runs with, which ends with ctx or once
+// the session ran past Timeout, and tells whether Timeout ran out.
+func (l *Launcher) deadline(ctx context.Context) (context.Context, context.CancelFunc, func() bool) {
+	run, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
+	expired := false
+	after := l.Clock.After(l.Timeout)
+	go func() {
+		select {
+		case <-after:
+			mu.Lock()
+			expired = true
+			mu.Unlock()
+			cancel()
+		case <-run.Done():
+		}
+	}()
+	return run, cancel, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return expired
+	}
+}
+
+// timedOut records key's attempt as failed for running past Timeout, with
+// the session's last stderr lines, unless a result moved the job on first.
+func (l *Launcher) timedOut(ctx context.Context, key launchKey, stderr []string) error {
+	job, _, err := l.Jobs.Load(ctx, key.job)
+	if err != nil {
+		return err
+	}
+	hist, err := l.Jobs.History(ctx, key.job)
+	if err != nil {
+		return err
+	}
+	if job.Round != key.round || jobtoken.Entry(hist) != key.entry {
+		return nil
+	}
+	return l.Attempts.fail(ctx, key.job, key.role, fmt.Sprintf("the session ran past its time limit of %s and was cut", l.Timeout), stderr)
 }
 
 // report writes to Log why key's attempt did not run or did not finish.

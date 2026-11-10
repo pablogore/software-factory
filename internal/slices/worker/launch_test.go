@@ -32,11 +32,12 @@ func (kindRoles) Role(_ context.Context, name string) (domain.Role, string, erro
 
 // launchedAgents starts scripted sessions that submit turns with the token
 // their MCP server was given, and records each session's spec; with fail
-// set, no session starts.
+// set, no session starts, and with hang set, every turn hangs.
 type launchedAgents struct {
 	sub   *worker.Submitter
 	turns []string
 	fail  error
+	hang  bool
 
 	mu       sync.Mutex
 	specs    []ports.SessionSpec
@@ -51,7 +52,7 @@ func (a *launchedAgents) Start(_ context.Context, _ domain.Role, s ports.Session
 		return nil, a.fail
 	}
 	token := strings.TrimPrefix(s.MCPServers[0].Headers["Authorization"], "Bearer ")
-	sess := &scripted{sub: a.sub, job: s.Job, token: token, turns: a.turns}
+	sess := &scripted{sub: a.sub, job: s.Job, token: token, turns: a.turns, hang: a.hang, stderr: []string{"still thinking"}}
 	a.sessions = append(a.sessions, sess)
 	return closable{sess}, nil
 }
@@ -91,6 +92,25 @@ func (s *inline) Submit(ctx context.Context, _ domain.JobID, w scheduler.Work) <
 	return done
 }
 
+// sessionTimeout is how long the launcher's sessions may run.
+const sessionTimeout = time.Hour
+
+// handTimer is a timer whose durations run out only when the test closes
+// fire; every duration it is asked for is sent on asked.
+type handTimer struct {
+	fire  chan time.Time
+	asked chan time.Duration
+}
+
+func newHandTimer() *handTimer {
+	return &handTimer{fire: make(chan time.Time), asked: make(chan time.Duration, 8)}
+}
+
+func (t *handTimer) After(d time.Duration) <-chan time.Time {
+	t.asked <- d
+	return t.fire
+}
+
 // lockedBuffer is a log written from the launcher's goroutines.
 type lockedBuffer struct {
 	mu  sync.Mutex
@@ -123,6 +143,7 @@ func (w world) launcher(p domain.Pipeline, agents *launchedAgents, sched *inline
 		Tokens: w.tokens, Jobs: w.store, Pipelines: ps, Roles: kindRoles{}, Agents: agents, Worktrees: sameDir{},
 		Scheduler: sched, Attempts: &worker.Attempts{Results: w.sub, Jobs: w.store, Pipelines: ps, Clock: stopped{}},
 		MCP: func(job domain.JobID) string { return "http://factoryd/" + string(job) }, Log: log,
+		Timeout: sessionTimeout, Clock: newHandTimer(),
 	}
 }
 
@@ -316,6 +337,41 @@ func TestLaunch(t *testing.T) {
 			ctx.Expect(log.String()).ToEqual("launch: job j-1, role builder: no cost source configured\n")
 			ctx.Expect(agents.started()).To(specs.BeEmpty())
 			ctx.Expect(w.history(ctx, "j-1")).ToEqual(before)
+		})
+	})
+}
+
+func TestLaunchTimeout(t *testing.T) {
+	specs.Describe(t, "worker.Launcher's session time limit", func(s *specs.Spec) {
+		s.It("cuts a session that runs past its time limit and records it as a failed attempt, so it is retried", func(ctx *specs.Context) {
+			w := newWorld(ctx)
+			build := enteredBuild(ctx, w, "j-1")
+			agents := &launchedAgents{sub: w.sub, hang: true}
+			l := w.launcher(pipeline(), agents, &inline{}, &lockedBuffer{})
+			timer := newHandTimer()
+			l.Clock = timer
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				launch(ctx, l, build)
+			}()
+
+			ctx.Expect(<-timer.asked).ToEqual(sessionTimeout)
+			eventually(ctx, func() bool { return len(agents.started()) == 1 })
+			ctx.Expect(lastEvents(ctx, w, "j-1", 1)).ToEqual([]string{"StageEntered"})
+			close(timer.fire)
+			<-done
+
+			ctx.Expect(lastEvents(ctx, w, "j-1", 2)).ToEqual([]string{"AttemptFailed", "AttemptRetried"})
+			failed := w.failed(ctx)
+			ctx.Expect(failed.Reason).ToEqual("the session ran past its time limit of 1h0m0s and was cut")
+			ctx.Expect(failed.Stderr).ToEqual([]string{"still thinking"})
+			sess := agents.sessions[0]
+			// Cut, not asked again: the retry runs in a new session.
+			ctx.Expect(sess.prompts).ToEqual([]string{"prompt of builder"})
+			ctx.Expect(sess.closed).To(specs.BeTrue())
+			_, err := w.tokens.Authorize(tokenOf(agents.started()[0]), jobtoken.OpProgress, "j-1")
+			ctx.Expect(err).To(specs.MatchError(jobtoken.ErrUnknownToken))
 		})
 	})
 }

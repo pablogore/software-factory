@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -94,4 +95,9 @@ type agents interface {
 // slots runs work for a job when a slot is free and the job may spend.
 type slots interface {
 	Submit(ctx context.Context, job domain.JobID, w scheduler.Work) <-chan error
+}
+
+// timer tells when a duration passed.
+type timer interface {
+	After(d time.Duration) <-chan time.Time
 }
