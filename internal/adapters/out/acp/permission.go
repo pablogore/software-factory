@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/ports"
 )
 
 // requested answers the agent's requests: the client serves only
@@ -53,11 +54,11 @@ func (s *session) permission(params json.RawMessage) (any, *rpcError) {
 	}
 	reason := "the request is for another session"
 	if req.SessionID == s.id {
-		reason = judge(s.spec.Kind, s.dir, req.ToolCall)
+		reason = judge(s.spec.Kind, s.dir, s.spec.MCPServers, req.ToolCall)
 	}
 	option := ""
 	if reason == "" {
-		if option = choose(req.Options, "allow_once", "allow_always"); option == "" {
+		if option = choose(req.Options, "allow_once"); option == "" {
 			reason = "the agent offers no option to allow it"
 		}
 	}
@@ -106,11 +107,29 @@ func (s *session) denied(call toolCall, reason string) {
 // on, as the agents' own tools call them.
 var pathKeys = []string{"path", "file_path", "filePath", "notebook_path", "abs_path"}
 
-// judge is why a session of a role of kind, in the worktree dir, may not
-// make call, or "" when it may. Every role reads and searches; only a build
-// role edits files and runs commands. No role reaches a path outside dir,
-// and a call that cannot be read is denied.
-func judge(kind domain.Kind, dir string, call toolCall) string {
+// jobTools are the tools of the job's MCP server every role may call.
+var jobTools = []string{"submit_result", "progress", "context_pack"}
+
+// jobTool tells whether call is one of jobTools on one of servers, the job's
+// MCP servers, by the name claude-code-acp gives it: "mcp__<server>__<tool>".
+func jobTool(servers []ports.MCPServer, call toolCall) bool {
+	for _, m := range servers {
+		if tool, ok := strings.CutPrefix(call.Title, "mcp__"+m.Name+"__"); ok && slices.Contains(jobTools, tool) {
+			return true
+		}
+	}
+	return false
+}
+
+// judge is why a session of a role of kind, in the worktree dir, with the
+// job's MCP servers, may not make call, or "" when it may. Every role reads,
+// searches and calls jobTools; only a build role edits files and runs
+// commands. No role reaches a path outside dir, and a call that cannot be
+// read is denied.
+func judge(kind domain.Kind, dir string, servers []ports.MCPServer, call toolCall) string {
+	if jobTool(servers, call) {
+		return ""
+	}
 	root, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return "the worktree cannot be resolved: " + err.Error()
@@ -170,10 +189,16 @@ func text(raw json.RawMessage) (string, bool) {
 	return s, true
 }
 
+// maxDirs is how many directories a command line may have changed to, as
+// far as the policy follows it, before it is denied.
+const maxDirs = 64
+
 // judgeCommand is why the command raw, a command line or its words, run in
 // cwd may not run, or "". It sees what the words say, not what a shell
 // would expand: a command inside `bash -c` or a path in a variable is the
-// gate's to catch.
+// gate's to catch. A relative path is judged against cwd and against every
+// directory a cd before it may have moved to, since a cd in a subshell or a
+// pipe does not last.
 func judgeCommand(root, cwd string, raw json.RawMessage) string {
 	var cmds [][]string
 	var words []string
@@ -188,20 +213,91 @@ func judgeCommand(root, cwd string, raw json.RawMessage) string {
 	if len(cmds) == 0 {
 		return "a command without a command line"
 	}
+	dirs := []string{cwd}
 	for _, words := range cmds {
-		if reason := judgeWords(root, cwd, words); reason != "" {
+		reason, to := judgeWords(root, dirs, words)
+		if reason != "" {
 			return reason
+		}
+		if to == "" {
+			continue
+		}
+		for _, d := range dirs {
+			next := to
+			if !filepath.IsAbs(next) {
+				next = d + string(filepath.Separator) + to
+			}
+			if !slices.Contains(dirs, next) {
+				dirs = append(dirs, next)
+			}
+		}
+		if len(dirs) > maxDirs {
+			return "a command that changes directory too many times"
 		}
 	}
 	return ""
 }
 
-// wrappers run the command that follows them.
-var wrappers = []string{"env", "command", "exec", "time", "nohup", "nice", "xargs"}
+// wrapper is a command that runs the command after its options: short
+// holds its short options that take the next word as their value, long its
+// long ones, and args is how many words it reads after its options before
+// the command.
+type wrapper struct {
+	short string
+	long  []string
+	args  int
+}
 
-// deniedCommands are the commands no builder runs: they reach outside the worktree
-// (the network, GitHub, other users).
-var deniedCommands = []string{"sudo", "su", "doas", "curl", "wget", "gh"}
+// wrappers run the command that follows them.
+var wrappers = map[string]wrapper{
+	"env":     {short: "uCS", long: []string{"--unset", "--chdir", "--split-string"}},
+	"nice":    {short: "n", long: []string{"--adjustment"}},
+	"timeout": {short: "sk", long: []string{"--signal", "--kill-after"}, args: 1},
+	"nohup":   {},
+	"time":    {short: "fo", long: []string{"--format", "--output"}},
+	"command": {},
+	"exec":    {short: "a"},
+	"xargs":   {short: "adEILnPs", long: []string{"--arg-file", "--delimiter", "--eof", "--replace", "--max-lines", "--max-args", "--max-procs", "--max-chars", "--process-slot-var"}},
+	"stdbuf":  {short: "ioe", long: []string{"--input", "--output", "--error"}},
+}
+
+// skip splits words, what follows the wrapper's name, into its options with
+// their values and the rest, which starts with the command it runs.
+func (w wrapper) skip(words []string) (opts, rest []string) {
+	i := 0
+	for i < len(words) {
+		a := words[i]
+		if a == "--" {
+			i++
+			break
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			break
+		}
+		i++
+		if strings.HasPrefix(a, "--") {
+			if slices.Contains(w.long, a) && i < len(words) {
+				i++
+			}
+			continue
+		}
+		for j, r := range a[1:] {
+			if strings.ContainsRune(w.short, r) {
+				if j+2 == len(a) && i < len(words) {
+					i++
+				}
+				break
+			}
+		}
+	}
+	n := min(i+w.args, len(words))
+	return words[:n], words[n:]
+}
+
+// deniedCommands are the commands no builder runs: they reach outside the
+// worktree (the network, GitHub, other users), or move along a directory
+// stack the policy does not follow.
+var deniedCommands = []string{"sudo", "su", "doas", "curl", "wget", "gh", "pushd", "popd"}
 
 // installers are the package managers and the subcommands of theirs that
 // install packages.
@@ -225,35 +321,91 @@ var installers = map[string][]string{
 	"apk":     {"add"},
 }
 
-// judgeWords is why the simple command words, run in cwd, may not run, or "".
-func judgeWords(root, cwd string, words []string) string {
+// gitOptions are git's own options that take the next word as their value.
+var gitOptions = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
+
+// judgeWords is why the simple command words, whose relative paths may be
+// relative to any of dirs, may not run, or "". For a cd that may run, to is
+// the directory it changes to.
+func judgeWords(root string, dirs, words []string) (reason, to string) {
+	var opts []string
 	for len(words) > 0 {
-		w := words[0]
-		switch {
-		case isAssignment(w), slices.Contains(wrappers, filepath.Base(w)), strings.HasPrefix(w, "-") && w != "-":
+		if isAssignment(words[0]) {
 			words = words[1:]
 			continue
 		}
-		break
+		w, ok := wrappers[filepath.Base(words[0])]
+		if !ok {
+			break
+		}
+		o, rest := w.skip(words[1:])
+		opts, words = append(opts, o...), rest
 	}
 	if len(words) == 0 {
-		return ""
+		return outside(root, dirs, opts), ""
 	}
 	name, args := filepath.Base(words[0]), words[1:]
 	if slices.Contains(deniedCommands, name) {
-		return name + " is denied"
+		return name + " is denied", ""
 	}
-	if name == "git" && slices.Contains(args, "push") {
-		return "git push is denied"
+	if name == "git" && gitCommand(args) == "push" {
+		return "git push is denied", ""
 	}
 	if subs, ok := installers[name]; ok {
 		if i := slices.IndexFunc(args, func(a string) bool { return !strings.HasPrefix(a, "-") }); i >= 0 && slices.Contains(subs, args[i]) {
-			return "installing packages is denied: " + name + " " + args[i]
+			return "installing packages is denied: " + name + " " + args[i], ""
 		}
 	}
-	for _, a := range args {
-		if p, ok := pathArg(a); ok && !within(root, cwd, p) {
-			return "a path outside the worktree: " + a
+	if reason := outside(root, dirs, append(opts, args...)); reason != "" {
+		return reason, ""
+	}
+	if name == "cd" {
+		return cd(root, dirs, args)
+	}
+	return "", ""
+}
+
+// cd is why a cd with args may not run, or the directory it changes to. It
+// must name one in the worktree: a bare cd, "cd -" or a directory in a
+// variable go where the policy cannot follow.
+func cd(root string, dirs, args []string) (reason, to string) {
+	i := slices.IndexFunc(args, func(a string) bool { return a == "-" || !strings.HasPrefix(a, "-") })
+	if i < 0 || args[i] == "-" || strings.ContainsRune(args[i], '$') {
+		return "cd is denied without a directory of the worktree", ""
+	}
+	for _, d := range dirs {
+		if !within(root, d, args[i]) {
+			return "a path outside the worktree: " + args[i], ""
+		}
+	}
+	return "", args[i]
+}
+
+// gitCommand is the subcommand git's args run, past git's own options.
+func gitCommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case slices.Contains(gitOptions, a):
+			i++
+		case !strings.HasPrefix(a, "-"):
+			return a
+		}
+	}
+	return ""
+}
+
+// outside is why words may not run: the first one with the shape of a path
+// outside the worktree from any of dirs. It is "" when there is none.
+func outside(root string, dirs, words []string) string {
+	for _, a := range words {
+		p, ok := pathArg(a)
+		if !ok {
+			continue
+		}
+		for _, d := range dirs {
+			if !within(root, d, p) {
+				return "a path outside the worktree: " + a
+			}
 		}
 	}
 	return ""
@@ -337,14 +489,50 @@ func resolve(p string) (string, error) {
 }
 
 // splitCommands is line's simple commands, each as its words, read as a
-// shell reads quotes and escapes. Operators, pipes, subshells and command
-// substitutions end a command; redirections end a word, so their target is
-// a word of its own.
+// shell reads quotes, escapes, command substitutions and here-documents.
+// Operators, pipes and subshells end a command; redirections end a word, so
+// their target is a word of its own. The commands of a substitution, in
+// double quotes or not, are commands of their own, and the substitution
+// stands in its word as "$", as a variable does.
 func splitCommands(line string) ([][]string, error) {
-	var cmds [][]string
+	l := &lexer{rs: []rune(line)}
+	if err := l.commands(0); err != nil {
+		return nil, err
+	}
+	return l.cmds, nil
+}
+
+// lexer reads a command line from rs, at i, into cmds.
+type lexer struct {
+	rs   []rune
+	i    int
+	cmds [][]string
+	// docs are the here-documents whose bodies start at the next line.
+	docs []heredoc
+}
+
+// heredoc is a here-document: the line that ends it, whether its body is
+// quoted text, with no substitutions, and whether "<<-" strips the leading
+// tabs of its lines.
+type heredoc struct {
+	delim  string
+	quoted bool
+	tabs   bool
+}
+
+// at tells whether the rune at i is r.
+func (l *lexer) at(i int, r rune) bool {
+	return i < len(l.rs) && l.rs[i] == r
+}
+
+// commands reads simple commands up to end: the ")" of a "$(", the "`" of a
+// backtick substitution, or the end of the line when end is 0. It leaves
+// l.i on end.
+func (l *lexer) commands(end rune) error {
 	var words []string
 	var w strings.Builder
 	inWord := false
+	depth := 0
 	endWord := func() {
 		if inWord {
 			words = append(words, w.String())
@@ -355,60 +543,202 @@ func splitCommands(line string) ([][]string, error) {
 	endCmd := func() {
 		endWord()
 		if len(words) > 0 {
-			cmds = append(cmds, words)
+			l.cmds = append(l.cmds, words)
 			words = nil
 		}
 	}
-	rs := []rune(line)
-	for i := 0; i < len(rs); i++ {
-		r := rs[i]
+	for ; l.i < len(l.rs); l.i++ {
+		r := l.rs[l.i]
 		switch {
+		case end != 0 && r == end && depth == 0:
+			endCmd()
+			return nil
 		case r == '\'':
-			j := slices.Index(rs[i+1:], '\'')
+			j := slices.Index(l.rs[l.i+1:], '\'')
 			if j < 0 {
-				return nil, errors.New("unclosed single quote")
+				return errors.New("unclosed single quote")
 			}
-			w.WriteString(string(rs[i+1 : i+1+j]))
+			w.WriteString(string(l.rs[l.i+1 : l.i+1+j]))
 			inWord = true
-			i += j + 1
+			l.i += j + 1
 		case r == '"':
-			j := i + 1
-			for ; j < len(rs) && rs[j] != '"'; j++ {
-				if rs[j] == '\\' && j+1 < len(rs) {
-					j++
-				}
-				w.WriteRune(rs[j])
-			}
-			if j >= len(rs) {
-				return nil, errors.New("unclosed double quote")
+			l.i++
+			if err := l.quoted(&w, '"'); err != nil {
+				return err
 			}
 			inWord = true
-			i = j
 		case r == '\\':
-			if i+1 < len(rs) {
-				i++
-				w.WriteRune(rs[i])
+			if l.i+1 < len(l.rs) {
+				l.i++
+				w.WriteRune(l.rs[l.i])
 				inWord = true
 			}
+		case r == '$' && l.at(l.i+1, '('), r == '`':
+			if err := l.substitution(); err != nil {
+				return err
+			}
+			w.WriteRune('$')
+			inWord = true
 		case r == ' ' || r == '\t':
 			endWord()
-		case strings.ContainsRune(";&|\n()`", r):
+		case r == '\n':
 			endCmd()
+			if err := l.heredocs(); err != nil {
+				return err
+			}
+		case r == '(':
+			depth++
+			endCmd()
+		case r == ')':
+			depth = max(depth-1, 0)
+			endCmd()
+		case strings.ContainsRune(";&|", r):
+			endCmd()
+		case r == '<' && l.at(l.i+1, '<') && !l.at(l.i+2, '<'):
+			endWord()
+			l.i += 2
+			if err := l.heredoc(); err != nil {
+				return err
+			}
 		case r == '<' || r == '>':
 			endWord()
-			if i+1 < len(rs) && rs[i+1] == '&' {
-				i++
+			if l.at(l.i+1, '&') {
+				l.i++
 			}
 		case r == '#' && !inWord:
-			for i < len(rs) && rs[i] != '\n' {
-				i++
+			for l.i+1 < len(l.rs) && l.rs[l.i+1] != '\n' {
+				l.i++
 			}
-			endCmd()
 		default:
 			w.WriteRune(r)
 			inWord = true
 		}
 	}
+	if end != 0 {
+		return errors.New("unclosed command substitution")
+	}
 	endCmd()
-	return cmds, nil
+	if len(l.docs) > 0 {
+		return errors.New("unclosed here-document")
+	}
+	return nil
+}
+
+// substitution reads the commands of the command substitution that starts
+// at l.i, "$(" or "`", and leaves l.i on its end.
+func (l *lexer) substitution() error {
+	if l.rs[l.i] == '`' {
+		l.i++
+		return l.commands('`')
+	}
+	l.i += 2
+	return l.commands(')')
+}
+
+// quoted reads double-quoted text from l.i into w up to end, the closing
+// '"', or to the end of the line when end is 0, and leaves l.i on end. Its
+// command substitutions are read as commands.
+func (l *lexer) quoted(w *strings.Builder, end rune) error {
+	for ; l.i < len(l.rs); l.i++ {
+		r := l.rs[l.i]
+		switch {
+		case end != 0 && r == end:
+			return nil
+		case r == '\\' && l.i+1 < len(l.rs) && strings.ContainsRune("$`\"\\\n", l.rs[l.i+1]):
+			l.i++
+			w.WriteRune(l.rs[l.i])
+		case r == '$' && l.at(l.i+1, '('), r == '`':
+			if err := l.substitution(); err != nil {
+				return err
+			}
+			w.WriteRune('$')
+		default:
+			w.WriteRune(r)
+		}
+	}
+	if end != 0 {
+		return errors.New("unclosed double quote")
+	}
+	return nil
+}
+
+// heredoc reads the delimiter of a here-document from l.i, after its "<<",
+// and leaves l.i on its last rune; its body is read at the next line.
+func (l *lexer) heredoc() error {
+	var d heredoc
+	if l.at(l.i, '-') {
+		d.tabs = true
+		l.i++
+	}
+	for l.at(l.i, ' ') || l.at(l.i, '\t') {
+		l.i++
+	}
+	var w strings.Builder
+	for ; l.i < len(l.rs) && !strings.ContainsRune(" \t\n;&|<>()", l.rs[l.i]); l.i++ {
+		switch r := l.rs[l.i]; r {
+		case '\'', '"':
+			j := slices.Index(l.rs[l.i+1:], r)
+			if j < 0 {
+				return errors.New("unclosed quote in a here-document's delimiter")
+			}
+			w.WriteString(string(l.rs[l.i+1 : l.i+1+j]))
+			l.i += j + 1
+			d.quoted = true
+		case '\\':
+			d.quoted = true
+			if l.i+1 < len(l.rs) {
+				l.i++
+				w.WriteRune(l.rs[l.i])
+			}
+		default:
+			w.WriteRune(r)
+		}
+	}
+	if w.Len() == 0 {
+		return errors.New("a here-document without a delimiter")
+	}
+	d.delim = w.String()
+	l.docs = append(l.docs, d)
+	l.i--
+	return nil
+}
+
+// heredocs reads the bodies of the pending here-documents from the line
+// after l.i, a newline, and leaves l.i on the newline that ends the last
+// delimiter. A body whose delimiter is not quoted is read as double-quoted
+// text, so its command substitutions are read as commands.
+func (l *lexer) heredocs() error {
+	docs := l.docs
+	l.docs = nil
+	for _, d := range docs {
+		start := l.i + 1
+		line := start
+		for {
+			end := len(l.rs)
+			if j := slices.Index(l.rs[line:], '\n'); j >= 0 {
+				end = line + j
+			}
+			got := string(l.rs[line:end])
+			if d.tabs {
+				got = strings.TrimLeft(got, "\t")
+			}
+			if got == d.delim {
+				if !d.quoted {
+					body := &lexer{rs: l.rs[start:line]}
+					var w strings.Builder
+					if err := body.quoted(&w, 0); err != nil {
+						return err
+					}
+					l.cmds = append(l.cmds, body.cmds...)
+				}
+				l.i = end
+				break
+			}
+			if end == len(l.rs) {
+				return errors.New("unclosed here-document")
+			}
+			line = end + 1
+		}
+	}
+	return nil
 }
