@@ -10,6 +10,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/acp"
 	"github.com/pablogore/software-factory/internal/adapters/out/acp/acpfake"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -42,7 +43,7 @@ func TestAgentContract(t *testing.T) {
 func TestAgentLaunch(t *testing.T) {
 	specs.Describe(t, "acp.Agent", func(s *specs.Spec) {
 		s.It("fails to start a session when its command cannot be launched", func(ctx *specs.Context) {
-			a := acp.New(acp.Config{Command: "/nonexistent/acp-agent", Args: []string{"--acp"}}, stopped{})
+			a := acp.New(acp.Config{Command: "/nonexistent/acp-agent", Args: []string{"--acp"}, Homes: childenv.Homes{Root: ctx.Testing().TempDir()}}, stopped{})
 
 			_, err := a.Start(context.Background(), ports.SessionSpec{Job: jobID, Role: role, Dir: ctx.Testing().TempDir()})
 

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -33,12 +32,15 @@ const (
 	poll     = 10 * time.Millisecond
 )
 
-// Runner runs commands with childenv.Base, HOME in their directory, as their
-// whole environment, so no credential of factoryd's reaches the checks of a
-// job's branch. A zero Runner keeps the whole output and has no time limit
-// of its own, as the gate runs the checks; Timeout and MaxOutput bound a run
-// a builder asks for.
+// Runner runs commands with childenv.Base, HOME the job's own in Homes, and
+// GOTELEMETRY=off as their whole environment, so no credential of
+// factoryd's, nor anything in the operator's home, reaches the checks of a
+// job's branch. A Runner without a time limit or MaxOutput keeps the whole
+// output and runs as long as it takes, as the gate runs the checks; Timeout
+// and MaxOutput bound a run a builder asks for.
 type Runner struct {
+	// Homes holds each job's HOME, outside its worktree.
+	Homes childenv.Homes
 	// Timeout, when positive, is how long a run may take: then the command
 	// is stopped with its whole process group and the run, failed, says so
 	// in its notes.
@@ -48,7 +50,7 @@ type Runner struct {
 	MaxOutput int
 }
 
-// Run runs command in dir without a shell, as the leader of its own process
+// Run runs command in dir, for job, without a shell, as the leader of its own process
 // group, and returns its exit code, how long it took and its stdout and
 // stderr as one output, in the order they were written. A non-zero exit is
 // a run, not an error, and so is one past Timeout; the error is for a
@@ -57,7 +59,7 @@ type Runner struct {
 // and SIGKILL after grace. However the command ends, what is left of its
 // group, such as a child it left in the background, is killed, and Run
 // returns only once no process of the group is left.
-func (r Runner) Run(ctx context.Context, dir string, command []string) (domain.ChecksRun, error) {
+func (r Runner) Run(ctx context.Context, job domain.JobID, dir string, command []string) (domain.ChecksRun, error) {
 	if len(command) == 0 {
 		return domain.ChecksRun{}, fmt.Errorf("checkrun: %w: command", domain.ErrMissingField)
 	}
@@ -71,13 +73,13 @@ func (r Runner) Run(ctx context.Context, dir string, command []string) (domain.C
 		runCtx, cancel = context.WithTimeout(ctx, r.Timeout)
 		defer cancel()
 	}
-	// The command writes to a pipe of the run's own, not one exec copies
-	// from, so Wait returns once the command exits even while a child in
-	// the background holds the pipe.
-	home, err := filepath.Abs(dir)
+	home, err := r.Homes.For(job)
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("checkrun: %q in %s: %w", name, dir, err)
 	}
+	// The command writes to a pipe of the run's own, not one exec copies
+	// from, so Wait returns once the command exits even while a child in
+	// the background holds the pipe.
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("checkrun: %q in %s: %w", name, dir, err)
@@ -85,7 +87,7 @@ func (r Runner) Run(ctx context.Context, dir string, command []string) (domain.C
 	defer func() { _ = pr.Close() }()
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir, cmd.Stdout, cmd.Stderr = dir, pw, pw
-	cmd.Env = childenv.Base(home)
+	cmd.Env = append(childenv.Base(home), "GOTELEMETRY=off")
 	ownGroup(cmd)
 	start := time.Now()
 	err = cmd.Start()

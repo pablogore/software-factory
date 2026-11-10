@@ -18,6 +18,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/bus"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/platform/portrange"
@@ -148,8 +149,12 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	if *timeout <= 0 || *maxOutput <= 0 {
 		return fmt.Errorf("%w: -gate-timeout and -gate-max-output must be positive", domain.ErrInvalidValue)
 	}
+	homes, err := childenv.DefaultHomes()
+	if err != nil {
+		return err
+	}
 	locks := gatelock.New()
-	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, locks, strings.Fields(*command), nil, *timeout, *maxOutput)
+	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, locks, homes, strings.Fields(*command), nil, *timeout, *maxOutput)
 	servers, err := wiring.StartDevServers(ctx, *state)
 	if err != nil {
 		return err

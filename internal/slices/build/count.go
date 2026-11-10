@@ -100,13 +100,13 @@ func TestsDropped(base, head map[string]int) []string {
 	return reasons
 }
 
-// testCount runs command, the count command, in the worktree at dir and in a copy of
-// base apart from it, which the builder can't touch, and is the reasons the
-// head fails the rule: a package with fewer tests, or a count that failed.
-// It runs with the same runner and ctx as the checks, so with the same
-// environment and timeout.
-func (g *Gate) testCount(ctx context.Context, command []string, dir, base string) ([]string, error) {
-	head, reason, err := g.count(ctx, command, dir, "the job's head")
+// testCount runs command, the count command, for job in the worktree at dir
+// and in a copy of base apart from it, which the builder can't touch, and is
+// the reasons the head fails the rule: a package with fewer tests, or a count
+// that failed. It runs with the same runner and ctx as the checks, so with
+// the same environment and timeout.
+func (g *Gate) testCount(ctx context.Context, job domain.JobID, command []string, dir, base string) ([]string, error) {
+	head, reason, err := g.count(ctx, job, command, dir, "the job's head")
 	if err != nil || reason != "" {
 		return nonEmpty(reason), err
 	}
@@ -114,7 +114,7 @@ func (g *Gate) testCount(ctx context.Context, command []string, dir, base string
 	if err != nil {
 		return nil, fmt.Errorf("copy of base %s: %w", base, err)
 	}
-	before, reason, err := g.count(ctx, command, snap, "the base commit "+base)
+	before, reason, err := g.count(ctx, job, command, snap, "the base commit "+base)
 	if rmErr := g.Snapshots.Remove(ctx, dir, snap); err == nil && rmErr != nil {
 		err = fmt.Errorf("copy of base %s: %w", base, rmErr)
 	}
@@ -128,8 +128,8 @@ func (g *Gate) testCount(ctx context.Context, command []string, dir, base string
 // the reason it failed there, at where: a non-zero exit, an output the
 // runner cut or one it can't read. The error is for a command that could not
 // be run at all.
-func (g *Gate) count(ctx context.Context, command []string, dir, where string) (map[string]int, string, error) {
-	run, err := g.Checks.Run(ctx, dir, command)
+func (g *Gate) count(ctx context.Context, job domain.JobID, command []string, dir, where string) (map[string]int, string, error) {
+	run, err := g.Checks.Run(ctx, job, dir, command)
 	if err != nil {
 		return nil, "", err
 	}

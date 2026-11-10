@@ -14,9 +14,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/acp"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 )
 
 const (
@@ -379,8 +381,8 @@ func Run() int {
 }
 
 // Config launches this test binary as the fake agent playing sc, recording
-// to the file record; the test package's TestMain must call Run when
-// Requested.
+// to the file record, with the jobs' HOMEs beside it; the test package's
+// TestMain must call Run when Requested.
 func Config(sc Script, record string) (acp.Config, error) {
 	self, err := os.Executable()
 	if err != nil {
@@ -390,7 +392,8 @@ func Config(sc Script, record string) (acp.Config, error) {
 	if err != nil {
 		return acp.Config{}, fmt.Errorf("acpfake: script: %w", err)
 	}
-	return acp.Config{Command: self, Env: []string{envScript + "=" + string(b), envRecord + "=" + record}}, nil
+	homes := childenv.Homes{Root: filepath.Join(filepath.Dir(record), "homes")}
+	return acp.Config{Command: self, Env: []string{envScript + "=" + string(b), envRecord + "=" + record}, Homes: homes}, nil
 }
 
 // Load reads what the fake agent recorded in the file record; before it

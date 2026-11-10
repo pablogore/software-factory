@@ -27,6 +27,20 @@ func TestValidateRoles(t *testing.T) {
 			ctx.Expect(warnings).ToEqual([]string{"reviewer-security uses the same agent and model as builder: claude opus"})
 		})
 
+		s.It("warns that an agent getting ANTHROPIC_API_KEY bills by API, passed or set", func(ctx *specs.Context) {
+			dir := configRoot(ctx, "claude", "opus")
+			setReviewer(ctx, dir, "claude", "sonnet")
+			write(ctx, dir, "roles.yaml", "agents:\n  claude:\n    command: claude-code-acp\n    env_passthrough: [ANTHROPIC_API_KEY]\n    env:\n      ANTHROPIC_MODEL: \"{model}\"\n  other:\n    command: other-acp\n    env:\n      ANTHROPIC_API_KEY: sk-ant\n      MODEL: \"{model}\"\n  gemini:\n    command: gemini\n    args: [\"{model}\"]\n")
+
+			warnings, err := wiring.ValidateRoles(dir)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(warnings).ToEqual([]string{
+				"agent claude gets ANTHROPIC_API_KEY: it will bill by API, not by your subscription",
+				"agent other gets ANTHROPIC_API_KEY: it will bill by API, not by your subscription",
+			})
+		})
+
 		s.It("has no warnings when the reviewer runs on another model", func(ctx *specs.Context) {
 			dir := configRoot(ctx, "claude", "opus")
 			setReviewer(ctx, dir, "claude", "sonnet")

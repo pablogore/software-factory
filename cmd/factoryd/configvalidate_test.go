@@ -123,3 +123,54 @@ func TestDemoConfigValidatePipelines(t *testing.T) {
 		})
 	})
 }
+
+type withheldPassRow struct{ name string }
+
+// TestDemoConfigValidateAgentEnv is the S2 demo: an agent's env_passthrough
+// may not name factoryd's tokens, and an agent getting ANTHROPIC_API_KEY is
+// warned about, as it bills by API.
+func TestDemoConfigValidateAgentEnv(t *testing.T) {
+	specs.Describe(t, "factoryd config-validate on the agents' environment", func(s *specs.Spec) {
+		rows := []withheldPassRow{{"GITHUB_TOKEN"}, {"GH_TOKEN"}, {"DISCORD_BOT_TOKEN"}}
+		specs.Table(s, rows, func(r withheldPassRow) string { return "fails naming " + r.name + " in an agent's env_passthrough" }, func(ctx *specs.Context, r withheldPassRow) {
+			dir := configValidateRoot(ctx, "agent: claude\nmodel: sonnet\n")
+			agents := "agents:\n  claude:\n    command: claude-code-acp\n    env_passthrough: [" + r.name + "]\n    env:\n      ANTHROPIC_MODEL: \"{model}\"\n"
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "roles.yaml"), []byte(agents), 0o600)).To(specs.BeNil())
+			var out bytes.Buffer
+
+			err := configValidate([]string{"--config", dir}, &out)
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).To(specs.Contain("agent claude"))
+			ctx.Expect(err.Error()).To(specs.Contain("env_passthrough names " + r.name))
+			ctx.Expect(out.String()).To(specs.BeEmpty())
+		})
+
+		s.It("warns that claude bills by API when it gets ANTHROPIC_API_KEY, and succeeds", func(ctx *specs.Context) {
+			dir := configValidateRoot(ctx, "agent: claude\nmodel: sonnet\n")
+			agents := "agents:\n  claude:\n    command: claude-code-acp\n    env_passthrough: [ANTHROPIC_API_KEY]\n    env:\n      ANTHROPIC_MODEL: \"{model}\"\n"
+			ctx.Expect(os.WriteFile(filepath.Join(dir, "roles.yaml"), []byte(agents), 0o600)).To(specs.BeNil())
+			var out bytes.Buffer
+
+			err := configValidate([]string{"--config", dir}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).ToEqual("warning: agent claude gets ANTHROPIC_API_KEY: it will bill by API, not by your subscription\nconfiguration in " + dir + " is valid, with warnings\n")
+		})
+
+		s.It("has the repo's claude log in with the operator's home and no API key", func(ctx *specs.Context) {
+			data, err := os.ReadFile("../../roles.yaml")
+			ctx.Expect(err).To(specs.BeNil())
+			agents, err := configyaml.LoadAgents(data)
+			ctx.Expect(err).To(specs.BeNil())
+			var out bytes.Buffer
+
+			err = configValidate([]string{"--config", "../.."}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(agents["claude"].UserHome).To(specs.BeTrue())
+			ctx.Expect(agents["claude"].PassEnv).To(specs.BeEmpty())
+			ctx.Expect(out.String()).To(specs.Not(specs.Contain("bill by API")))
+		})
+	})
+}

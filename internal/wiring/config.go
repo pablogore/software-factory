@@ -3,8 +3,10 @@ package wiring
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -20,7 +22,8 @@ var ErrNoRoles = errors.New("no roles configured")
 // pipeline in dir's pipelines/ against those roles, so a pipeline naming a role
 // with no file fails before a job reaches that stage. What loads but is worth
 // a look comes back as warnings: a reviewer on the builder's agent and model
-// reviews with the same blind spots it built with.
+// reviews with the same blind spots it built with, and an agent that gets
+// ANTHROPIC_API_KEY bills by API, not by the operator's subscription.
 func ValidateRoles(dir string) ([]string, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "roles", "*.yaml"))
 	if err != nil {
@@ -42,7 +45,10 @@ func ValidateRoles(dir string) ([]string, error) {
 	if err := validatePipelines(dir, roles); err != nil {
 		return nil, err
 	}
-	var warnings []string
+	warnings, err := apiBilled(dir)
+	if err != nil {
+		return nil, err
+	}
 	for _, b := range roles {
 		if b.Kind != domain.KindBuild {
 			continue
@@ -51,6 +57,31 @@ func ValidateRoles(dir string) ([]string, error) {
 			if r.Kind == domain.KindReview && r.Agent == b.Agent && r.Model == b.Model {
 				warnings = append(warnings, fmt.Sprintf("%s uses the same agent and model as %s: %s %s", r.Name, b.Name, r.Agent, r.Model))
 			}
+		}
+	}
+	return warnings, nil
+}
+
+// apiKey is the variable that has an agent on Anthropic's models bill by
+// API instead of by the operator's subscription.
+const apiKey = "ANTHROPIC_API_KEY"
+
+// apiBilled is a warning for each agent in dir's roles.yaml that gets
+// apiKey, passed from factoryd's environment or set in its env.
+func apiBilled(dir string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "roles.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	agents, err := configyaml.LoadAgents(data)
+	if err != nil {
+		return nil, err
+	}
+	var warnings []string
+	for _, name := range slices.Sorted(maps.Keys(agents)) {
+		a := agents[name]
+		if slices.Contains(a.PassEnv, apiKey) || slices.ContainsFunc(a.Env, func(kv string) bool { return strings.HasPrefix(kv, apiKey+"=") }) {
+			warnings = append(warnings, fmt.Sprintf("agent %s gets %s: it will bill by API, not by your subscription", name, apiKey))
 		}
 	}
 	return warnings, nil

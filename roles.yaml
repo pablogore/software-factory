@@ -1,7 +1,22 @@
 # The agents a role can name in its `agent`, each with the command that
 # launches it over ACP. {model} in args or env becomes the role's `model`.
+#
+# An agent gets no variable of factoryd's environment beyond PATH, the
+# locale, TMPDIR and the Go caches, plus those it names, as they are, in
+# `env_passthrough` (an API key such as OPENAI_API_KEY, declared on purpose).
+# GITHUB_TOKEN, GH_TOKEN and the channels' tokens are refused there.
+#
+# Its HOME is its job's own, in factoryd's data directory, apart from the
+# worktree and from every other job. `home: user` launches it with your HOME
+# instead, for an agent that logs in with your account, such as Claude Code
+# on a subscription: until the sandbox exists (E04.2), that gives the agent
+# access to your home folder.
+#
+# claude logs in with your subscription. Don't pass it ANTHROPIC_API_KEY:
+# with the key it bills by API.
 agents:
   claude:
     command: claude-code-acp
+    home: user
     env:
       ANTHROPIC_MODEL: "{model}"

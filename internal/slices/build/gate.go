@@ -150,7 +150,7 @@ func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (d
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("gate: test count command of %q: %w", id, err)
 	}
-	run, err := g.Checks.Run(ctx, wt.Path, g.Command)
+	run, err := g.Checks.Run(ctx, id, wt.Path, g.Command)
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("gate: checks of %q: %w", id, err)
 	}
@@ -161,7 +161,7 @@ func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (d
 	case base == "":
 		run.Notes = append(run.Notes, NoCountBase)
 	default:
-		dropped, err := g.testCount(ctx, count, wt.Path, base)
+		dropped, err := g.testCount(ctx, id, count, wt.Path, base)
 		if err != nil {
 			return domain.ChecksRun{}, fmt.Errorf("gate: test count of %q: %w", id, err)
 		}

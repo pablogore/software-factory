@@ -26,7 +26,7 @@ type counter struct {
 	dirs   []string
 }
 
-func (c *counter) Run(_ context.Context, dir string, command []string) (domain.ChecksRun, error) {
+func (c *counter) Run(_ context.Context, _ domain.JobID, dir string, command []string) (domain.ChecksRun, error) {
 	if !slices.Equal(command, countCommand) {
 		return c.checks, nil
 	}

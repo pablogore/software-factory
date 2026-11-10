@@ -8,6 +8,7 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
+	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/childenv"
 )
 
@@ -71,6 +72,56 @@ func TestBase(t *testing.T) {
 				"GOPATH="+filepath.Join("/Users/operator", "go"),
 				"GOLANGCI_LINT_CACHE="+filepath.Join(cache, "golangci-lint"),
 			))
+		})
+	})
+}
+
+func TestHomes(t *testing.T) {
+	specs.Describe(t, "childenv.Homes", func(s *specs.Spec) {
+		s.It("makes one HOME per job under its root, the same on every call", func(ctx *specs.Context) {
+			root := ctx.Testing().TempDir()
+			homes := childenv.Homes{Root: root}
+
+			first, err := homes.For("j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			again, err := homes.For("j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			other, err := homes.For("j-2")
+			ctx.Expect(err).To(specs.BeNil())
+
+			ctx.Expect(first).ToEqual(filepath.Join(root, "j-1"))
+			ctx.Expect(again).ToEqual(first)
+			ctx.Expect(other).ToEqual(filepath.Join(root, "j-2"))
+			info, err := os.Stat(first)
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(info.IsDir()).To(specs.BeTrue())
+		})
+
+		s.It("keeps them in factoryd's data directory by default", func(ctx *specs.Context) {
+			cache, err := os.UserCacheDir()
+			ctx.Expect(err).To(specs.BeNil())
+
+			homes, err := childenv.DefaultHomes()
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(homes.Root).ToEqual(filepath.Join(cache, "factoryd", "homes"))
+		})
+
+		s.It("refuses a job id that would land outside its root", func(ctx *specs.Context) {
+			homes := childenv.Homes{Root: ctx.Testing().TempDir()}
+			for _, id := range []domain.JobID{"..", ".", "../x", `a\b`} {
+				_, err := homes.For(id)
+
+				ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			}
+		})
+
+		s.It("is an error without a root or a job id", func(ctx *specs.Context) {
+			_, err := childenv.Homes{}.For("j-1")
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
+
+			_, err = childenv.Homes{Root: ctx.Testing().TempDir()}.For("")
+			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 		})
 	})
 }

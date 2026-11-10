@@ -40,7 +40,7 @@ func TestRunnerGroup(t *testing.T) {
 			pidFile := filepath.Join(dir, "child.pid")
 
 			start := time.Now()
-			run, err := checkrun.Runner{}.Run(bg, dir, []string{"sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; echo done"})
+			run, err := checkrun.Runner{Homes: homesIn(t)}.Run(bg, job, dir, []string{"sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; echo done"})
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(run.Passed()).To(specs.BeTrue())
@@ -51,7 +51,7 @@ func TestRunnerGroup(t *testing.T) {
 
 		s.It("does not wait for a child in the background that still holds the output", func(ctx *specs.Context) {
 			start := time.Now()
-			run, err := checkrun.Runner{}.Run(bg, t.TempDir(), []string{"sh", "-c", "sleep 30 & echo done"})
+			run, err := checkrun.Runner{Homes: homesIn(t)}.Run(bg, job, t.TempDir(), []string{"sh", "-c", "sleep 30 & echo done"})
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(run.Output).ToEqual("done\n")
@@ -73,7 +73,7 @@ func TestRunnerGroup(t *testing.T) {
 					}
 				}()
 
-				_, err := checkrun.Runner{}.Run(cancelled, dir, []string{"sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; wait"})
+				_, err := checkrun.Runner{Homes: homesIn(t)}.Run(cancelled, job, dir, []string{"sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; wait"})
 
 				ctx.Expect(err).To(specs.MatchError(context.Canceled))
 				ctx.Expect(alive(pidIn(ctx, pidFile))).To(specs.BeFalse())
@@ -94,7 +94,7 @@ func TestRunnerGroup(t *testing.T) {
 				}()
 				start := time.Now()
 
-				_, err := checkrun.Runner{}.Run(cancelled, dir, []string{"sh", "-c", "trap '' TERM; sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; wait"})
+				_, err := checkrun.Runner{Homes: homesIn(t)}.Run(cancelled, job, dir, []string{"sh", "-c", "trap '' TERM; sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; wait"})
 
 				ctx.Expect(err).To(specs.MatchError(context.Canceled))
 				ctx.Expect(time.Since(start) < 10*time.Second).To(specs.BeTrue())
@@ -117,7 +117,7 @@ func TestRunnerLimits(t *testing.T) {
 				script := "sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; echo started; wait"
 
 				start := time.Now()
-				run, err := checkrun.Runner{Timeout: 300 * time.Millisecond}.Run(bg, dir, []string{"sh", "-c", script})
+				run, err := checkrun.Runner{Homes: homesIn(t), Timeout: 300 * time.Millisecond}.Run(bg, job, dir, []string{"sh", "-c", script})
 
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(time.Since(start) < 10*time.Second).To(specs.BeTrue())
@@ -130,7 +130,7 @@ func TestRunnerLimits(t *testing.T) {
 		})
 
 		s.It("keeps a run within its timeout as it is", func(ctx *specs.Context) {
-			run, err := checkrun.Runner{Timeout: time.Minute}.Run(bg, t.TempDir(), []string{"sh", "-c", "echo ok"})
+			run, err := checkrun.Runner{Homes: homesIn(t), Timeout: time.Minute}.Run(bg, job, t.TempDir(), []string{"sh", "-c", "echo ok"})
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(run.Passed()).To(specs.BeTrue())
 			ctx.Expect(run.Notes).To(specs.BeEmpty())
@@ -139,13 +139,13 @@ func TestRunnerLimits(t *testing.T) {
 		s.It("is still an error, not a timed out run, when ctx ends first", func(ctx *specs.Context) {
 			short, cancel := context.WithTimeout(bg, 200*time.Millisecond)
 			defer cancel()
-			_, err := checkrun.Runner{Timeout: time.Minute}.Run(short, t.TempDir(), []string{"sleep", "30"})
+			_, err := checkrun.Runner{Homes: homesIn(t), Timeout: time.Minute}.Run(short, job, t.TempDir(), []string{"sleep", "30"})
 			ctx.Expect(err).To(specs.MatchError(context.DeadlineExceeded))
 		})
 
 		s.When("the output is longer than its limit", func(s *specs.Spec) {
 			s.It("keeps only the first bytes and says how many it dropped", func(ctx *specs.Context) {
-				run, err := checkrun.Runner{MaxOutput: 10}.Run(bg, t.TempDir(), []string{"sh", "-c", "printf 0123456789abcdef; echo err >&2"})
+				run, err := checkrun.Runner{Homes: homesIn(t), MaxOutput: 10}.Run(bg, job, t.TempDir(), []string{"sh", "-c", "printf 0123456789abcdef; echo err >&2"})
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(run.Output).ToEqual("0123456789")
 				ctx.Expect(run.Passed()).To(specs.BeTrue())
@@ -153,7 +153,7 @@ func TestRunnerLimits(t *testing.T) {
 			})
 
 			s.It("drops it as it comes, so a long output never fills memory", func(ctx *specs.Context) {
-				run, err := checkrun.Runner{MaxOutput: 1024}.Run(bg, t.TempDir(), []string{"sh", "-c", "head -c 20000000 /dev/zero"})
+				run, err := checkrun.Runner{Homes: homesIn(t), MaxOutput: 1024}.Run(bg, job, t.TempDir(), []string{"sh", "-c", "head -c 20000000 /dev/zero"})
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(len(run.Output)).ToEqual(1024)
 				ctx.Expect(run.Notes).ToEqual([]string{"output truncated: kept the first 1024 bytes, dropped the other 19998976"})
@@ -161,7 +161,7 @@ func TestRunnerLimits(t *testing.T) {
 		})
 
 		s.It("keeps an output within its limit whole, with no note", func(ctx *specs.Context) {
-			run, err := checkrun.Runner{MaxOutput: 10}.Run(bg, t.TempDir(), []string{"sh", "-c", "printf 0123456789"})
+			run, err := checkrun.Runner{Homes: homesIn(t), MaxOutput: 10}.Run(bg, job, t.TempDir(), []string{"sh", "-c", "printf 0123456789"})
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(run.Output).ToEqual("0123456789")
 			ctx.Expect(run.Notes).To(specs.BeEmpty())
