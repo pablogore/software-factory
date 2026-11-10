@@ -211,7 +211,7 @@ const maxDirs = 64
 // directory a cd before it may have moved to, since a cd in a subshell or a
 // pipe does not last.
 func judgeCommand(root, cwd string, raw json.RawMessage) string {
-	var cmds [][]string
+	var cmds []command
 	var words []string
 	if line, ok := text(raw); ok {
 		var err error
@@ -219,14 +219,14 @@ func judgeCommand(root, cwd string, raw json.RawMessage) string {
 			return "an unreadable command: " + err.Error()
 		}
 	} else if json.Unmarshal(raw, &words) == nil && len(words) > 0 {
-		cmds = [][]string{words}
+		cmds = []command{{words: words}}
 	}
 	if len(cmds) == 0 {
 		return "a command without a command line"
 	}
 	dirs := []string{cwd}
-	for _, words := range cmds {
-		reason, to := judgeWords(root, dirs, words)
+	for _, c := range cmds {
+		reason, to := judgeWords(root, dirs, c)
 		if reason != "" {
 			return reason
 		}
@@ -344,10 +344,11 @@ var compoundWords = []string{"{", "if", "while", "until", "case", "for", "select
 // gitOptions are git's own options that take the next word as their value.
 var gitOptions = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
 
-// judgeWords is why the simple command words, whose relative paths may be
+// judgeWords is why the simple command c, whose relative paths may be
 // relative to any of dirs, may not run, or "". For a cd that may run, to is
 // the directory it changes to.
-func judgeWords(root string, dirs, words []string) (reason, to string) {
+func judgeWords(root string, dirs []string, c command) (reason, to string) {
+	words := c.words
 	var opts []string
 	for len(words) > 0 {
 		// In "function NAME" and "coproc NAME" before a compound command,
@@ -368,7 +369,7 @@ func judgeWords(root string, dirs, words []string) (reason, to string) {
 		opts, words = append(opts, o...), rest
 	}
 	if len(words) == 0 {
-		return outside(root, dirs, opts), ""
+		return outside(root, dirs, append(opts, c.redirs...)), ""
 	}
 	name, args := filepath.Base(words[0]), words[1:]
 	if slices.Contains(deniedCommands, name) {
@@ -382,7 +383,7 @@ func judgeWords(root string, dirs, words []string) (reason, to string) {
 			return "installing packages is denied: " + name + " " + args[i], ""
 		}
 	}
-	if reason := outside(root, dirs, append(opts, args...)); reason != "" {
+	if reason := outside(root, dirs, slices.Concat(opts, args, c.redirs)); reason != "" {
 		return reason, ""
 	}
 	if name == "cd" {
@@ -451,6 +452,16 @@ func isAssignment(w string) bool {
 	return true
 }
 
+// fd tells whether w, right before a redirection, names the descriptor it
+// redirects: a number, or a {name} the shell sets to a new one.
+func fd(w string) bool {
+	if name, ok := strings.CutPrefix(w, "{"); ok {
+		name, ok = strings.CutSuffix(name, "}")
+		return ok && isAssignment(name+"=")
+	}
+	return w != "" && strings.Trim(w, "0123456789") == ""
+}
+
 // pathArg is the path an argument names, if it looks like one: a flag's
 // value after "=", or a word with a slash, a leading dot or a leading tilde.
 func pathArg(a string) (string, bool) {
@@ -514,13 +525,21 @@ func resolve(p string) (string, error) {
 	}
 }
 
-// splitCommands is line's simple commands, each as its words, read as a
-// shell reads quotes, escapes, command substitutions and here-documents.
-// Operators, pipes and subshells end a command; redirections end a word, so
-// their target is a word of its own. The commands of a substitution, in
-// double quotes or not, are commands of their own, and the substitution
-// stands in its word as "$", as a variable does.
-func splitCommands(line string) ([][]string, error) {
+// command is a simple command: its words, and the words its redirections
+// take, their targets and descriptors, which are none of its words.
+type command struct {
+	words  []string
+	redirs []string
+}
+
+// splitCommands is line's simple commands read as a shell reads quotes,
+// escapes, redirections, command substitutions and here-documents.
+// Operators, pipes and subshells end a command; redirections end a word,
+// and the word after one is its target, wherever it stands in the command.
+// The commands of a substitution, in double quotes or not, are commands of
+// their own, and the substitution stands in its word as "$", as a variable
+// does.
+func splitCommands(line string) ([]command, error) {
 	l := &lexer{rs: []rune(line)}
 	if err := l.commands(0); err != nil {
 		return nil, err
@@ -532,7 +551,7 @@ func splitCommands(line string) ([][]string, error) {
 type lexer struct {
 	rs   []rune
 	i    int
-	cmds [][]string
+	cmds []command
 	// docs are the here-documents whose bodies start at the next line.
 	docs []heredoc
 }
@@ -555,22 +574,40 @@ func (l *lexer) at(i int, r rune) bool {
 // backtick substitution, or the end of the line when end is 0. It leaves
 // l.i on end.
 func (l *lexer) commands(end rune) error {
-	var words []string
+	var words, redirs []string
 	var w strings.Builder
 	inWord := false
+	// target is whether the next word is a redirection's target.
+	target := false
 	depth := 0
 	endWord := func() {
 		if inWord {
-			words = append(words, w.String())
+			if target {
+				redirs = append(redirs, w.String())
+			} else {
+				words = append(words, w.String())
+			}
+			w.Reset()
+			inWord = false
+			target = false
+		}
+	}
+	// redirect starts a redirection at l.i: a number or a {name} right
+	// before it is the descriptor it redirects, not a word.
+	redirect := func() {
+		if inWord && fd(w.String()) {
+			redirs = append(redirs, w.String())
 			w.Reset()
 			inWord = false
 		}
+		endWord()
 	}
 	endCmd := func() {
 		endWord()
-		if len(words) > 0 {
-			l.cmds = append(l.cmds, words)
-			words = nil
+		target = false
+		if len(words) > 0 || len(redirs) > 0 {
+			l.cmds = append(l.cmds, command{words: words, redirs: redirs})
+			words, redirs = nil, nil
 		}
 	}
 	for ; l.i < len(l.rs); l.i++ {
@@ -621,18 +658,20 @@ func (l *lexer) commands(end rune) error {
 		case strings.ContainsRune(";&|", r):
 			endCmd()
 		case r == '<' && l.at(l.i+1, '<') && l.at(l.i+2, '<'):
-			// A here-string: its word is read as any other.
-			endWord()
+			// A here-string: its word is its target.
+			redirect()
+			target = true
 			l.i += 2
 		case r == '<' && l.at(l.i+1, '<'):
-			endWord()
+			redirect()
 			l.i += 2
 			if err := l.heredoc(); err != nil {
 				return err
 			}
 		case r == '<' || r == '>':
-			endWord()
-			if l.at(l.i+1, '&') {
+			redirect()
+			target = true
+			if l.at(l.i+1, '&') || (r == '>' && l.at(l.i+1, '|')) {
 				l.i++
 			}
 		case r == '#' && !inWord:
