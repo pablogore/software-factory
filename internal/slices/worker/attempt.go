@@ -25,9 +25,11 @@ type Attempts struct {
 // the answer and the stage runs again with it. When the turn
 // ends without one, it prompts s once more with Retry and the reason, so the
 // same token submits it: a refused result does not spend it. When that turn
-// misses too, it records a domain.AttemptFailed from role on job with the
-// reason and the last lines s wrote on stderr, and reports false; no third prompt is sent. A session that ended
-// counts as a turn without a result.
+// misses too, it revokes token and records a domain.AttemptFailed from role
+// on job with the reason and the last lines s wrote on stderr, and reports
+// false; no third prompt is sent. A result saved with token before it was
+// revoked still counts. A session that ended counts as a turn without a
+// result.
 func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, token, prompt string) (bool, error) {
 	missed, err := a.turn(ctx, s, token, prompt)
 	if err != nil || missed == "" {
@@ -37,7 +39,7 @@ func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, t
 	if err != nil || missed == "" {
 		return err == nil, err
 	}
-	return false, a.fail(ctx, job, role, missed, s.Stderr())
+	return a.failSession(ctx, job, role, token, missed, s.Stderr(), nil)
 }
 
 // Retry is the prompt that asks an agent once more for its result, saying
@@ -69,6 +71,11 @@ func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (stri
 			return "", fmt.Errorf("worker: attempt: %w", ctx.Err())
 		}
 	}
+	// A turn cut by ctx is not a missed turn, even when the session's end
+	// reached ch first.
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("worker: attempt: %w", err)
+	}
 	o := a.Results.Take(token)
 	switch {
 	case o.Saved, o.Asked:
@@ -81,10 +88,39 @@ func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (stri
 	return "no result submitted", nil
 }
 
-func (a *Attempts) fail(ctx context.Context, job domain.JobID, role, reason string, stderr []string) error {
+// failSession revokes token, the session's token, and once every submission
+// it made is in records role's attempt at job as failed for reason, unless
+// one of them saved a result or asked a question. It reports whether one
+// did.
+func (a *Attempts) failSession(ctx context.Context, job domain.JobID, role, token, reason string, stderr []string, current func(domain.Job, []ports.Record) bool) (bool, error) {
+	handed := false
+	err := a.Results.Settle(job, token, func(o Outcome) error {
+		if o.Saved || o.Asked {
+			handed = true
+			return nil
+		}
+		return a.fail(ctx, job, role, reason, stderr, current)
+	})
+	return handed, err
+}
+
+// fail records role's attempt at job as failed for reason, on the job as
+// loaded, so a decision saved meanwhile makes it fail on the version. With
+// current set, nothing is recorded unless current says the job, as loaded,
+// is still where the attempt ran.
+func (a *Attempts) fail(ctx context.Context, job domain.JobID, role, reason string, stderr []string, current func(domain.Job, []ports.Record) bool) error {
 	j, v, err := a.Jobs.Load(ctx, job)
 	if err != nil {
 		return fmt.Errorf("worker: failed attempt: %w", err)
+	}
+	if current != nil {
+		hist, err := a.Jobs.History(ctx, job)
+		if err != nil {
+			return fmt.Errorf("worker: failed attempt: %w", err)
+		}
+		if !current(j, hist) {
+			return nil
+		}
 	}
 	p, err := a.Pipelines.Pipeline(ctx, j.Pipeline)
 	if err != nil {

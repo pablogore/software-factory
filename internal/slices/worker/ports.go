@@ -28,9 +28,11 @@ type session interface {
 	Stderr() []string
 }
 
-// results tells what a token's submissions came to.
+// results tells what a token's submissions came to, and settles a token's
+// session: once token is revoked and its submissions are in.
 type results interface {
 	Take(token string) Outcome
+	Settle(job domain.JobID, token string, fail func(Outcome) error) error
 }
 
 // pipelines finds the pipeline a job follows by its name.

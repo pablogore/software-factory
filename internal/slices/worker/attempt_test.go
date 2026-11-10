@@ -7,6 +7,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/slices/worker"
 )
@@ -187,12 +188,13 @@ func TestAttempt(t *testing.T) {
 				ctx.Expect(w.failed(ctx).Reason).To(specs.Contain("no result submitted, and the turn ended with: agent session closed"))
 			})
 
-			s.It("keeps the token after refused results, so the job can still take one", func(ctx *specs.Context) {
+			s.It("revokes the token with the failure, so no result follows it", func(ctx *specs.Context) {
 				w := newWorld(ctx)
 				_, err := w.attempts().Run(context.Background(), w.session(invalid, invalid), "j-1", "builder", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				_, err = w.sub.Submit(context.Background(), w.j1, "j-1", []byte(ready))
-				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrUnknownToken))
+				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AttemptFailed", "AttemptRetried"})
 			})
 		})
 
