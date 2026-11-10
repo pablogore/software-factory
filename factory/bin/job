@@ -14,7 +14,9 @@ Usage:
                                  ignored by its .gitignore, goes straight to needs-info
   job advance <job> <stage>      move a job to <stage>, or refuse
   job merge <job>                APPROVE → sync with the base branch, gate, merge the PR
-  job feedback <job> [--direction]  needs-human → spec (old jobs) | build (rework) | replan (direction); stdin and PR comments
+  job feedback <job> [--direction]  needs-human → spec (old jobs) | build (rework) | replan (direction); stdin and PR comments;
+                                 a slice in approve with APPROVE, not merged: rework → build (PR back to draft), or
+                                 needs-human when no round is left
   job reviewers <job>            the reviewers to spawn this round, as lens=model
   job plan-check                 fetch origin/<base>; issues the tech-lead hasn't planned yet (factory/jobs/plan.md)
   job reject <job>               needs-info or needs-human → rejected, with your reason (stdin) as rejection.md
@@ -88,7 +90,7 @@ TRANSITIONS = {
     "build": {"gate", "needs-human", "replan"},
     "gate": {"review", "build", "needs-human"},
     "review": {"approve", "build", "needs-human"},
-    "approve": {"merging", "needs-human"},
+    "approve": {"merging", "build", "needs-human"},
     "merging": {"needs-human"},
     "needs-human": {"spec", "build", "replan", "rejected"},
     "triage": {"build", "needs-human"},
@@ -1167,6 +1169,18 @@ def advance(job, stage, triage=True):
                 # changes, and code, which sees every fix.
                 next_round(job, only=sorted(set(changes) | ({"code"} & set(reviewers(job)))))
 
+    elif old == "approve" and stage == "build":  # a human's rework after APPROVE, before the merge
+        require(job["initiative_id"], "only a slice goes approve → build")
+        require(first_line(d / "decision.md") == "APPROVE", "decision.md doesn't start with APPROVE")
+        feedback = sorted(d.glob("feedback-*.md"), key=lambda p: int(p.stem.split("-")[1]))
+        require(feedback and feedback[-1].stat().st_mtime > (d / "decision.md").stat().st_mtime,
+                "use `job feedback` to send an approved job back")
+        require(job["round"] < job["round_limit"],
+                f"round {job['round']} of {job['round_limit']}: no round left, go to needs-human")
+        if not gh_json("pr", "view", str(job["pr"]), "--json", "isDraft")["isDraft"]:
+            gh("pr", "ready", str(job["pr"]), "--undo")
+        next_round(job)
+
     elif old == "approve":
         want = "APPROVE" if stage == "merging" else "ESCALATE"
         line = first_line(d / "decision.md")
@@ -1881,7 +1895,34 @@ def cmd_feedback_initiative(job, text, direction):
     print(f"{job['id']}: {', '.join(made)} → {target}")
 
 
+def cmd_feedback_approved(job, text, direction):
+    """Rework on an approved slice before its merge: back to build in the next
+    round, or needs-human with the feedback saved when no round is left."""
+    if direction:
+        die(f"{job['id']} is in approve: `--direction` from approve isn't supported")
+    if job["pr"] and pr_state(job) == "MERGED":
+        die(f"{job['id']}: PR #{job['pr']} is already merged; feedback can't reach it")
+    items = [i for i in pr_feedback(job) if not is_direction(i)]
+    if not text.strip() and not items:
+        die("no feedback: nothing on stdin and no new comments on the PR")
+    name = write_feedback(job, "feedback", text, items)
+    job["feedback_since"] = now()
+    if job["round"] < job["round_limit"]:
+        save(advance(sync(job), "build"))
+        print(f"{job['id']}: {name} → build (round {job['round']}, PR #{job['pr']} in draft)")
+    else:
+        escalate(job, f"A human sent {name} after APPROVE, but round {job['round']} of "
+                      f"{job['round_limit']} was the last one. Read {name}.")
+        save(advance(sync(job), "needs-human"))
+        print(f"{job['id']}: {name} → needs-human (no round left)")
+
+
 def cmd_feedback(job, text, direction=False):
+    if job["stage"] == "merged" or (job.get("merged") and job["stage"] != "needs-human"):
+        die(f"{job['id']}: PR #{job['pr']} is already merged; feedback can't reach it")
+    if (job["stage"] == "approve" and with_defaults(job)["initiative_id"]
+            and first_line(job_dir(job["id"]) / "decision.md") == "APPROVE"):
+        return cmd_feedback_approved(job, text, direction)
     if job["stage"] != "needs-human":
         die(f"{job['id']} is in {job['stage']}, not needs-human")
     try:

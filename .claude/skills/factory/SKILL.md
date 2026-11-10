@@ -284,6 +284,13 @@ finished:
   fails it moves the job to `needs-human` and says why.
 - `ESCALATE`: `factory/bin/job advance <id> needs-human`. It marks the PR ready,
   posts the decision on it and labels the issue `factory:needs-human`.
+- Feedback after `APPROVE`, before the merge: if the user sees a problem in the
+  approved PR, don't merge: pass their words to `factory/bin/job feedback <n>`
+  (as in **Feedback on a `needs-human` job**, without `--direction`). It saves
+  `feedback-<k>.md`, puts the PR back in draft and moves the job to `build` in
+  the next round (resume the builder with the feedback line from **build**);
+  with no round left it goes to `needs-human` with the feedback saved. A merged
+  job refuses it.
 
 **replan.** Run `factory/bin/job direction <id>` (it collects `[direction]`
 comments on the merged PR as `direction-<k>.md`, from every PR of a `parallel`
