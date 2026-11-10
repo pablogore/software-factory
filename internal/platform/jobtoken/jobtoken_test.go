@@ -1,6 +1,7 @@
 package jobtoken_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -293,5 +294,43 @@ func TestTokens(t *testing.T) {
 				ctx.Expect(g.Current(job, history(entered("build"), entered("build")))).To(specs.MatchError(jobtoken.ErrStale))
 			})
 		})
+	})
+}
+
+// defaultRoleNames are the roles the factory ships, which the tools limited
+// by role name.
+var defaultRoleNames = []string{"intake", "spec-writer", "builder", "reviewer-code", "reviewer-security", "reviewer-ux", "reviewer-ui", "approver", "tech-lead", "product-owner"}
+
+func TestDefaultTools(t *testing.T) {
+	specs.Describe(t, "job tokens of a role that lists no tools", func(s *specs.Spec) {
+		s.It("serve one operation for each worker tool a role may list, so the check below sees every tool", func(ctx *specs.Context) {
+			var named []string
+			for _, op := range jobtoken.Ops() {
+				tool, ok := strings.CutPrefix(string(op), "worker.")
+				ctx.Expect(ok).To(specs.BeTrue())
+				named = append(named, tool)
+			}
+			ctx.Expect(named).ToEqual(slices.Sorted(slices.Values(domain.WorkerTools)))
+		})
+
+		lists := map[string][]string{"no tools key": nil, "tools: []": {}}
+		for _, name := range []string{"no tools key", "tools: []"} {
+			s.It("authorize exactly submit_result and progress, for every kind and role, with "+name, func(ctx *specs.Context) {
+				tokens := jobtoken.New()
+				for _, kind := range domain.Kinds {
+					for _, role := range defaultRoleNames {
+						token := issue(ctx, tokens, jobtoken.Grant{Job: "j-1", Role: role, Kind: kind, Tools: lists[name], Round: 1})
+						var allowed []jobtoken.Op
+						for _, op := range jobtoken.Ops() {
+							if _, err := tokens.Authorize(token, op, "j-1"); err == nil {
+								allowed = append(allowed, op)
+							}
+						}
+						// A new tool reaching these roles must be decided here.
+						ctx.Expect(allowed).ToEqual([]jobtoken.Op{jobtoken.OpProgress, jobtoken.OpSubmitResult})
+					}
+				}
+			})
+		}
 	})
 }

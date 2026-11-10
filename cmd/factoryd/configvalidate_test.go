@@ -78,6 +78,17 @@ func TestConfigValidate(t *testing.T) {
 			ctx.Expect(err.Error()).ToEqual(demoErr.Error())
 			ctx.Expect(out.String()).To(specs.BeEmpty())
 		})
+
+		s.It("fails naming the role and the tool when a role lists a misspelt tool", func(ctx *specs.Context) {
+			dir := roleDemoConfig(ctx, "agent: claude\nmodel: opus\ntools: [run_gat]\n")
+			var out bytes.Buffer
+
+			err := configValidate([]string{"--config", dir}, &out)
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).To(specs.Contain(`role builder: invalid value: unknown tool "run_gat"`))
+			ctx.Expect(out.String()).To(specs.BeEmpty())
+		})
 	})
 }
 
