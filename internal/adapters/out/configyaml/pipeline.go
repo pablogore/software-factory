@@ -158,6 +158,8 @@ func parseLimits(n *yaml.Node) (domain.Limits, error) {
 			l.TriageRetries = &x
 		case "max_rounds":
 			l.MaxRounds = &x
+		case "attempt_retries":
+			l.AttemptRetries = &x
 		}
 	}
 	return l, nil

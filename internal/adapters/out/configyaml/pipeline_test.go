@@ -78,13 +78,20 @@ func TestLoadPipeline(t *testing.T) {
 		})
 
 		s.It("loads every limit at its cap", func(ctx *specs.Context) {
-			data := shortFlow + "limits:\n  spec_rejections: 10\n  human_reworks: 10\n  triage_retries: 3\n  max_rounds: 10\n"
+			data := shortFlow + "limits:\n  spec_rejections: 10\n  human_reworks: 10\n  triage_retries: 3\n  max_rounds: 10\n  attempt_retries: 3\n"
 
 			p, err := configyaml.LoadPipeline([]byte(data), loadedRoles(ctx))
 
 			ctx.Expect(err).To(specs.BeNil())
 			ten, three := 10, 3
-			ctx.Expect(p.Limits).ToEqual(domain.Limits{SpecRejections: &ten, HumanReworks: &ten, TriageRetries: &three, MaxRounds: &ten})
+			ctx.Expect(p.Limits).ToEqual(domain.Limits{SpecRejections: &ten, HumanReworks: &ten, TriageRetries: &three, MaxRounds: &ten, AttemptRetries: &three})
+		})
+
+		s.It("loads attempt_retries", func(ctx *specs.Context) {
+			p, err := configyaml.LoadPipeline([]byte(shortFlow+"limits:\n  attempt_retries: 2\n"), loadedRoles(ctx))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(p.AttemptRetries()).ToEqual(2)
 		})
 
 		s.When("a copy of pipelines/default.yaml sets the review stage's max_rounds", func(s *specs.Spec) {

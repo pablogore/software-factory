@@ -21,7 +21,7 @@ func TestAttemptDemo(t *testing.T) {
 			ctx.Expect(demo1).To(specs.Contain("result recorded: true; job demo-1: stage gate"))
 			ctx.Expect(strings.Count(demo2, "-> prompt")).ToEqual(2)
 			ctx.Expect(demo2).To(specs.Contain("last turn: no result submitted."))
-			ctx.Expect(demo2).To(specs.Contain(`result recorded: false; job demo-2: stage build, events [AttemptFailed(role builder, reason "no result submitted")]`))
+			ctx.Expect(demo2).To(specs.Contain(`result recorded: false; job demo-2: stage build, events [AttemptFailed(role builder, reason "no result submitted"), AttemptRetried]`))
 			ctx.Expect(demo3).To(specs.Contain(`<- the agent reports progress "reading the spec": progress recorded for job demo-3: AgentProgressed`))
 			ctx.Expect(demo3).To(specs.Contain(`result recorded: true; job demo-3: stage gate, events [AgentProgressed(role builder, "reading the spec"), AgentProgressed(role builder, "running the tests"), StageEntered]`))
 		})

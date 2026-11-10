@@ -157,7 +157,7 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	case domain.ActionFailed:
 		return actionFailed(job, e)
 	case domain.AttemptFailed:
-		return attemptFailed(e)
+		return attemptFailed(job, e, p)
 	case domain.AgentProgressed:
 		return agentProgressed(e)
 	case domain.HumanAsked:
@@ -192,7 +192,10 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 // the job it receives.
 func Apply(job domain.Job, evs []domain.Event) domain.Job {
 	for _, ev := range evs {
+		stage, round := job.Stage, job.Round
 		switch e := ev.(type) {
+		case domain.AttemptFailed:
+			job.AttemptsFailed++
 		case domain.StageEntered:
 			job.Stage, job.InfoFrom, job.Passed, job.Changes = e.Stage, "", nil, nil
 			job = leftNeedsHuman(job)
@@ -251,6 +254,11 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", nil, nil, nil
 			job = leftNeedsHuman(job)
 			job.Reason = e.Reason
+		}
+		// attempt_retries bounds the attempts of one stage and round, so a
+		// new stage or round starts with every retry.
+		if job.Stage != stage || job.Round != round {
+			job.AttemptsFailed = 0
 		}
 	}
 	return job
@@ -426,6 +434,8 @@ func overrideLimit(job domain.Job, e domain.LimitOverridden) domain.Job {
 		job.Limits.TriageRetries = &n
 	case "max_rounds":
 		job.Limits.MaxRounds = &n
+	case "attempt_retries":
+		job.Limits.AttemptRetries = &n
 	}
 	return job
 }
@@ -466,6 +476,15 @@ func triageRetries(job domain.Job, p domain.Pipeline) int {
 		return *job.Limits.TriageRetries
 	}
 	return p.TriageRetries()
+}
+
+// attemptRetries is the job's own attempt_retries when a person overrode it,
+// else the pipeline's.
+func attemptRetries(job domain.Job, p domain.Pipeline) int {
+	if job.Limits.AttemptRetries != nil {
+		return *job.Limits.AttemptRetries
+	}
+	return p.AttemptRetries()
 }
 
 // specRejections is the job's own spec_rejections when a person overrode it,
@@ -521,7 +540,7 @@ func feedback(job domain.Job, e domain.MessageReceived, p domain.Pipeline) ([]do
 		return respecified(job, e, p, false)
 	case domain.CauseAsked:
 		return answered(job, e, p)
-	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated, domain.CauseActionFailed, domain.CauseMergeFailed:
+	case domain.CauseBlocked, domain.CauseGateFailed, domain.CauseChanges, domain.CauseEscalated, domain.CauseActionFailed, domain.CauseMergeFailed, domain.CauseAttemptFailed:
 		if limit, ok := humanReworks(job, p); ok && job.HumanReworks >= limit {
 			return nil, fmt.Errorf("%w: %d of human_reworks %d used", ErrReworkRefused, job.HumanReworks, limit)
 		}
@@ -749,16 +768,39 @@ func actionFailed(job domain.Job, e domain.ActionFailed) ([]domain.Event, error)
 	return []domain.Event{domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseActionFailed, At: e.At}}, nil
 }
 
-// attemptFailed only records the failed attempt in the job's history: what
-// the job does after one is not decided yet, so it stays where it is.
-func attemptFailed(e domain.AttemptFailed) ([]domain.Event, error) {
+// attemptFailed records a role's failed attempt and counts it in the job's
+// stage and round. While the job's attempt_retries (a person's override for
+// this job, else the pipeline's) allows it, the role runs again in a new
+// session and the job stays where it is; the next failure is a wall with the
+// attempt's reason. A failure in triage goes straight to a person, since a
+// wall there would only send the job back to the triage that failed. Only a
+// pipeline stage or triage runs agents, so an attempt anywhere else is illegal.
+func attemptFailed(job domain.Job, e domain.AttemptFailed, p domain.Pipeline) ([]domain.Event, error) {
+	if job.Stage != domain.StageTriage && !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage }) {
+		return nil, illegal(job, e)
+	}
 	if err := domain.ValidateRoleName(e.Role); err != nil {
 		return nil, fmt.Errorf("decide: failed attempt: %w", err)
 	}
 	if domain.Blank(e.Reason) {
 		return nil, fmt.Errorf("decide: failed attempt without a reason: %w", domain.ErrMissingField)
 	}
-	return []domain.Event{e}, nil
+	// As for triage's own result, a job in triage that records no valid wall
+	// fails closed.
+	if job.Stage == domain.StageTriage {
+		if err := job.Wall.Validate(); err != nil {
+			return nil, fmt.Errorf("decide: failed attempt in triage: wall: %w", err)
+		}
+	}
+	n := job.AttemptsFailed + 1
+	if n <= attemptRetries(job, p) {
+		return []domain.Event{e, domain.AttemptRetried{Job: job.ID, Role: e.Role, Retry: n, At: e.At}}, nil
+	}
+	reason := fmt.Sprintf("%s failed %d attempts in stage %s: %s", e.Role, n, job.Stage, strings.TrimSpace(e.Reason))
+	if job.Stage == domain.StageTriage {
+		return []domain.Event{e, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseAttemptFailed, At: e.At}}, nil
+	}
+	return append([]domain.Event{e}, wall(job, p, domain.CauseAttemptFailed, reason, e.At)...), nil
 }
 
 // agentProgressed records a message an agent reported while it works, in
