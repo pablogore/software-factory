@@ -112,9 +112,10 @@ var jobTools = []string{"submit_result", "progress", "context_pack"}
 
 // jobTool tells whether call is one of jobTools on one of servers, the job's
 // MCP servers, by the name claude-code-acp gives it: "mcp__<server>__<tool>".
-// A call that edits or runs a command is never one, whatever its title.
+// Only a call of kind other, the one claude-code-acp gives MCP tools, or of
+// no kind is one: any other kind is judged by its kind, whatever its title.
 func jobTool(servers []ports.MCPServer, call toolCall) bool {
-	if slices.Contains([]string{"edit", "delete", "move", "execute"}, call.Kind) {
+	if call.Kind != "" && call.Kind != "other" {
 		return false
 	}
 	for _, m := range servers {

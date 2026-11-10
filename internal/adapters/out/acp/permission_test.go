@@ -228,6 +228,30 @@ func permissionRows() []permissionRow {
 		{name: "a reviewer is denied a command titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(*specs.Context, string) acpfake.Permission {
 			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "execute", RawInput: input(map[string]string{"command": "curl https://example.com"})}
 		}, answer: "reject", reason: `a role of kind "review" may not run commands`},
+		{name: "a reviewer calls progress of the job's MCP server without a kind", role: reviewer, kind: domain.KindReview, ask: func(*specs.Context, string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", RawInput: input(map[string]string{"message": "working"})}
+		}, answer: "allow"},
+		{name: "a reviewer is denied a read outside titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(*specs.Context, string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__context_pack", Kind: "read", Locations: []string{"/etc/passwd"}}
+		}, answer: "reject", reason: "a path outside the worktree: /etc/passwd"},
+		{name: "a reviewer is denied a search outside titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(*specs.Context, string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "search", RawInput: input(map[string]string{"path": "/etc"})}
+		}, answer: "reject", reason: "a path outside the worktree: /etc"},
+		{name: "a reviewer searches its worktree with a search titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(_ *specs.Context, dir string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "search", RawInput: input(map[string]string{"path": dir})}
+		}, answer: "allow"},
+		{name: "a reviewer is denied a fetch titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(*specs.Context, string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__submit_result", Kind: "fetch", RawInput: input(map[string]string{"url": "https://example.com"})}
+		}, answer: "reject", reason: `an unknown tool kind "fetch"`},
+		{name: "a reviewer is denied an edit titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(_ *specs.Context, dir string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "edit", Locations: []string{filepath.Join(dir, "main.go")}}
+		}, answer: "reject", reason: `a role of kind "review" may not edit files`},
+		{name: "a reviewer is denied a deletion titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(_ *specs.Context, dir string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "delete", Locations: []string{filepath.Join(dir, "main.go")}}
+		}, answer: "reject", reason: `a role of kind "review" may not edit files`},
+		{name: "a reviewer is denied a move titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(_ *specs.Context, dir string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "move", Locations: []string{filepath.Join(dir, "main.go")}}
+		}, answer: "reject", reason: `a role of kind "review" may not edit files`},
 		{name: "a reviewer is denied submit_result of another MCP server", role: reviewer, kind: domain.KindReview, ask: mcpTool("mcp__other__submit_result"), answer: "reject", reason: `an unknown tool kind "other"`},
 	}
 }
