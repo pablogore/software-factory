@@ -8,8 +8,12 @@
 // E04.2 sandbox. It reads a command's words as written, so it does not see
 // a command another one runs (bash -c, sh -c, python -c, eval, env -S), a
 // path in a variable, a wrapper missing from its list (ionice, setsid,
-// flock and the like) or a git alias that pushes. Read it as a brake on an
-// agent's mistakes, not as full coverage.
+// flock and the like) or a git alias that pushes. Its reading of the shell
+// can also be thrown off on purpose: a "\'" inside $'…' ends the quote for
+// it, an escaped backtick nested in backticks is text to it, and in the body
+// of a quoted here-document, the exemption Claude Code's commit messages
+// need, a line such as "EOF)" ends the document for bash and not for it.
+// Read it as a brake on an agent's mistakes, not as full coverage.
 package acp
 
 import (
