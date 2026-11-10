@@ -93,27 +93,6 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 	return changes, nil
 }
 
-// Patch is the diff of the worktree at dir, committed or not, against base,
-// the full object name of the commit its branch was made from, as Changes
-// takes it, as text with no color. Untracked files are not in it; Changes
-// lists them, and a submodule shows only the commit the index has for it.
-// No external diff driver, textconv or clean or process filter is ever
-// run: the attributes and the config, which the builder writes, could name
-// a command for factoryd to run. So git diffs base against a snapshot of the
-// worktree, and never reads the worktree itself.
-func (Differ) Patch(ctx context.Context, dir, base string) (string, error) {
-	if !objectName(base) {
-		return "", fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
-	}
-	scratch, index, err := snapshot(ctx, dir)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.RemoveAll(scratch) }()
-	return runEnv(ctx, dir, "", []string{"GIT_INDEX_FILE=" + index},
-		"diff", "--cached", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", base+"^{commit}", "--")
-}
-
 // gitlink is the mode git keeps a submodule's commit with.
 const gitlink = "160000"
 
@@ -318,20 +297,10 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 // refs/replace/ refs are shared with the worktree, so a builder could make
 // the base commit stand for one of its own and hide what it changed. No
 // fsmonitor: it is set in the config the worktree shares, and one that
-// reports no changes makes git trust the index over the files. No hooks:
-// core.hooksPath and the hooks directory are shared with the worktree too,
-// and git runs post-index-change on every index it writes. No lazy fetch:
-// a promisor remote in that config would make git run a transport.
+// reports no changes makes git trust the index over the files.
 func run(ctx context.Context, dir, stdin string, args ...string) (string, error) {
-	return runEnv(ctx, dir, stdin, nil, args...)
-}
-
-// runEnv is run with env added to factoryd's environment.
-func runEnv(ctx context.Context, dir, stdin string, env []string, args ...string) (string, error) {
-	fixed := []string{"--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}
-	cmd := exec.CommandContext(ctx, "git", append(fixed, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), "GIT_NO_LAZY_FETCH=1"), env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
