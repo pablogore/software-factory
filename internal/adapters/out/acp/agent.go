@@ -15,7 +15,11 @@
 // $'…' ends the quote for it, an escaped backtick nested in backticks is
 // text to it, and in the body of a quoted here-document, the exemption
 // Claude Code's commit messages need, a line such as "EOF)" ends the
-// document for bash and not for it.
+// document for bash and not for it. A backslash before a newline joins two
+// lines for bash and not for it, so "cu\<newline>rl" is not curl to it. A
+// redirection's target that starts with "-" is read as a flag and its path
+// is not checked, so ">-/../../x" escapes the worktree once a directory
+// named "-" exists.
 // Read it as a brake on an agent's mistakes, not as full coverage.
 package acp
 
