@@ -17,6 +17,7 @@ import (
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
+	"github.com/pablogore/software-factory/internal/platform/stderrtail"
 	"github.com/pablogore/software-factory/internal/wiring"
 	"github.com/pablogore/software-factory/pkg/worker"
 )
@@ -24,16 +25,18 @@ import (
 // attemptDemoAgents are the test agents of attempt-demo: each turn submits
 // its JSON through the worker API, as `factory worker submit-result` does,
 // or nothing when it is empty. Before its first submission an agent reports
-// each of its progress messages with the MCP tool progress.
+// each of its progress messages with the MCP tool progress. Each turn the
+// agent writes its stderr lines on stderr.
 var attemptDemoAgents = []struct {
 	job      domain.JobID
 	about    string
 	progress []string
 	turns    []string
+	stderr   []string
 }{
-	{"demo-1", "an agent that hands in an invalid JSON, then a valid one", nil, []string{`{"status":"DONE"}`, `{"status":"READY","summary":"built"}`}},
-	{"demo-2", "an agent that never hands in a result", nil, nil},
-	{"demo-3", "an agent that reports its progress twice, then hands in its result", []string{"reading the spec", "running the tests"}, []string{`{"status":"READY","summary":"built"}`}},
+	{"demo-1", "an agent that hands in an invalid JSON, then a valid one", nil, []string{`{"status":"DONE"}`, `{"status":"READY","summary":"built"}`}, nil},
+	{"demo-2", "an agent that never hands in a result and complains on stderr", nil, nil, []string{"error: model overloaded"}},
+	{"demo-3", "an agent that reports its progress twice, then hands in its result", []string{"reading the spec", "running the tests"}, []string{`{"status":"READY","summary":"built"}`}, nil},
 }
 
 // attemptDemo runs one attempt of each of attemptDemoAgents at its own job
@@ -65,7 +68,7 @@ func attemptDemo(ctx context.Context, out io.Writer) error {
 		}
 		_, _ = fmt.Fprintf(out, "== job %s: %s\n", a.job, a.about)
 		url := "http://" + ln.Addr().String()
-		agent := &demoAgent{out: out, job: a.job, progress: a.progress, turns: a.turns, mcp: mcpURL(url, a.job), client: worker.Client{URL: url, Token: token}}
+		agent := &demoAgent{out: out, job: a.job, progress: a.progress, turns: a.turns, stderr: a.stderr, mcp: mcpURL(url, a.job), client: worker.Client{URL: url, Token: token}}
 		saved, err := attempts.Run(ctx, agent, a.job, "builder", token, "Build the demo job and hand in your result with submit_result.")
 		if err != nil {
 			return err
@@ -78,13 +81,16 @@ func attemptDemo(ctx context.Context, out io.Writer) error {
 }
 
 // demoAgent is a test agent session: it prints every prompt it gets,
-// reports its progress messages in its first turn and answers turn i by
-// submitting turns[i].
+// reports its progress messages in its first turn, writes its stderr lines
+// in every turn and answers turn i by submitting turns[i]. What it writes on
+// stderr is kept as the ACP adapter keeps an agent's.
 type demoAgent struct {
 	out      io.Writer
 	job      domain.JobID
 	progress []string
 	turns    []string
+	stderr   []string
+	tail     stderrtail.Tail
 	mcp      string
 	client   worker.Client
 	n        int
@@ -100,6 +106,10 @@ func (a *demoAgent) Prompt(ctx context.Context, msg string) (<-chan domain.Agent
 			}
 			_, _ = fmt.Fprintf(a.out, "<- the agent reports progress %q: %s\n", p, text)
 		}
+	}
+	for _, line := range a.stderr {
+		_, _ = fmt.Fprintf(&a.tail, "%s (turn %d)\n", line, a.n+1)
+		_, _ = fmt.Fprintf(a.out, "<- the agent writes on stderr: %s (turn %d)\n", line, a.n+1)
 	}
 	if a.n < len(a.turns) && a.turns[a.n] != "" {
 		acc, err := a.client.SubmitResult(ctx, string(a.job), []byte(a.turns[a.n]))
@@ -122,6 +132,8 @@ func (a *demoAgent) Prompt(ctx context.Context, msg string) (<-chan domain.Agent
 	return ch, nil
 }
 
+func (a *demoAgent) Stderr() []string { return a.tail.Lines() }
+
 func printJob(ctx context.Context, out io.Writer, store *memstore.Store, id domain.JobID, saved bool) error {
 	job, _, err := store.Load(ctx, id)
 	if err != nil {
@@ -139,11 +151,14 @@ func printJob(ctx context.Context, out io.Writer, store *memstore.Store, id doma
 	return nil
 }
 
-// eventLabel is ev's name, with the role and reason of a failed attempt and
-// the role and text of an agent's progress.
+// eventLabel is ev's name, with the role, reason and stderr of a failed
+// attempt and the role and text of an agent's progress.
 func eventLabel(ev domain.Event) string {
 	switch e := ev.(type) {
 	case domain.AttemptFailed:
+		if len(e.Stderr) > 0 {
+			return fmt.Sprintf("%s(role %s, reason %q, stderr %q)", e.EventName(), e.Role, e.Reason, e.Stderr)
+		}
 		return fmt.Sprintf("%s(role %s, reason %q)", e.EventName(), e.Role, e.Reason)
 	case domain.AgentProgressed:
 		return fmt.Sprintf("%s(role %s, %q)", e.EventName(), e.Role, e.Text)

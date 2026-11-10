@@ -11,7 +11,7 @@ import (
 
 func TestAttemptDemo(t *testing.T) {
 	specs.Describe(t, "factoryd attempt-demo", func(s *specs.Spec) {
-		s.It("shows a retry with the error and the result recorded, then a retry and a failed attempt, then two progress messages as job events", func(ctx *specs.Context) {
+		s.It("shows a retry with the error and the result recorded, then a retry and a failed attempt with the agent's stderr, then two progress messages as job events", func(ctx *specs.Context) {
 			var out bytes.Buffer
 			ctx.Expect(attemptDemo(context.Background(), &out)).To(specs.BeNil())
 			demo1, demo2, _ := strings.Cut(out.String(), "== job demo-2")
@@ -21,7 +21,7 @@ func TestAttemptDemo(t *testing.T) {
 			ctx.Expect(demo1).To(specs.Contain("result recorded: true; job demo-1: stage gate"))
 			ctx.Expect(strings.Count(demo2, "-> prompt")).ToEqual(2)
 			ctx.Expect(demo2).To(specs.Contain("last turn: no result submitted."))
-			ctx.Expect(demo2).To(specs.Contain(`result recorded: false; job demo-2: stage build, events [AttemptFailed(role builder, reason "no result submitted"), AttemptRetried]`))
+			ctx.Expect(demo2).To(specs.Contain(`result recorded: false; job demo-2: stage build, events [AttemptFailed(role builder, reason "no result submitted", stderr ["error: model overloaded (turn 1)" "error: model overloaded (turn 2)"]), AttemptRetried]`))
 			ctx.Expect(demo3).To(specs.Contain(`<- the agent reports progress "reading the spec": progress recorded for job demo-3: AgentProgressed`))
 			ctx.Expect(demo3).To(specs.Contain(`result recorded: true; job demo-3: stage gate, events [AgentProgressed(role builder, "reading the spec"), AgentProgressed(role builder, "running the tests"), StageEntered]`))
 		})
