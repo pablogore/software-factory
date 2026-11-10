@@ -11,6 +11,6 @@ when:
     - deps_changed: true
     - diff_lines: ">= 200"
 mode: shadow
-tools: [context_pack, record_finding, submit_result]
+tools: [submit_result, progress]
 permissions: read-only
 budget: { attempts: 1, minutes: 15, usd: 2 }

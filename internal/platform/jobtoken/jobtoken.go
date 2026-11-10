@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 
@@ -58,6 +59,12 @@ var tools = map[Op]string{
 	OpRunGate:      "run_gate",
 	OpDevServer:    "dev_server",
 	OpAskHuman:     "ask_human",
+}
+
+// Ops lists, sorted, every operation a token may allow: one per worker
+// tool, named "worker." and the tool.
+func Ops() []Op {
+	return slices.Sorted(maps.Keys(tools))
 }
 
 // defaults are the tools a role that lists none may call: the ones every

@@ -3,6 +3,8 @@ package domain
 import (
 	"fmt"
 	"path"
+	"slices"
+	"strings"
 )
 
 // Role is an instance of a Kind, declared in configuration with its own prompt.
@@ -28,6 +30,10 @@ type Role struct {
 	// approve role's sessions may call it.
 	Tools []string `json:"tools,omitempty"`
 }
+
+// WorkerTools are the tools factoryd's worker API serves, by the name a
+// role's tools list them: a role that lists any other name does not load.
+var WorkerTools = []string{"submit_result", "progress", "run_gate", "dev_server", "ask_human"}
 
 // When says when a role runs; a role whose conditions don't apply is skipped
 // at no cost. It runs when any one of Any holds.
@@ -95,9 +101,9 @@ func ValidateRoleName(name string) error {
 	return nil
 }
 
-// Validate checks the role's name, kind and mode, and that only a build role
-// declares allowed paths, each a well-formed pattern; the error names the
-// role.
+// Validate checks the role's name, kind and mode, that only a build role
+// declares allowed paths, each a well-formed pattern, and that every tool it
+// lists is one of WorkerTools; the error names the role.
 func (r Role) Validate() error {
 	if err := ValidateRoleName(r.Name); err != nil {
 		return err
@@ -116,6 +122,12 @@ func (r Role) Validate() error {
 	for _, p := range r.AllowedPaths {
 		if _, err := path.Match(p, ""); p == "" || err != nil {
 			return fmt.Errorf("role %s: %w: allowed path %q", r.Name, ErrInvalidValue, p)
+		}
+	}
+	// A misspelt tool would only be denied at its first call, mid-job.
+	for _, t := range r.Tools {
+		if !slices.Contains(WorkerTools, t) {
+			return fmt.Errorf("role %s: %w: unknown tool %+q, want one of %s", r.Name, ErrInvalidValue, t, strings.Join(WorkerTools, ", "))
 		}
 	}
 	return nil

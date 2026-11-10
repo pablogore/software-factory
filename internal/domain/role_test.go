@@ -132,6 +132,29 @@ func TestRole(t *testing.T) {
 		})
 	})
 
+	specs.Describe(t, "Role.Validate tools", func(s *specs.Spec) {
+		s.It("accepts every worker tool", func(ctx *specs.Context) {
+			role := domain.Role{Name: "builder", Kind: domain.KindBuild, Mode: domain.ModeBlocking, Tools: domain.WorkerTools}
+
+			ctx.Expect(role.Validate()).To(specs.BeNil())
+		})
+
+		s.It("rejects an unknown tool, naming the role and the tool", func(ctx *specs.Context) {
+			role := domain.Role{Name: "builder", Kind: domain.KindBuild, Mode: domain.ModeBlocking, Tools: []string{"submit_result", "run_gat"}}
+
+			err := role.Validate()
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`role builder: invalid value: unknown tool "run_gat", want one of submit_result, progress, run_gate, dev_server, ask_human`)
+		})
+
+		s.It("rejects a tool named in another case", func(ctx *specs.Context) {
+			role := domain.Role{Name: "builder", Kind: domain.KindBuild, Mode: domain.ModeBlocking, Tools: []string{"Run_Gate"}}
+
+			ctx.Expect(role.Validate()).To(specs.MatchError(domain.ErrInvalidValue))
+		})
+	})
+
 	specs.Describe(t, "Role.AlwaysRerun", func(s *specs.Spec) {
 		s.It("is off unless the role is marked", func(ctx *specs.Context) {
 			var r domain.Role
