@@ -26,6 +26,7 @@ const patience = 2 * time.Second
 var (
 	epoch          = time.Date(2026, 11, 7, 10, 0, 0, 0, time.UTC)
 	errAgentFailed = errors.New("agent failed")
+	errSaveFailed  = errors.New("save failed")
 )
 
 // runner is a fake queue.Runner. The agent of each issue, once started,
@@ -193,6 +194,29 @@ func (i *inbox) all() map[string]runmode.Summary {
 	return out
 }
 
+// brakeLog is a fake runmode.BrakeLog; a save fails with fail when set.
+type brakeLog struct {
+	mu   sync.Mutex
+	on   bool
+	fail error
+}
+
+func (l *brakeLog) SaveBrake(_ context.Context, on bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.fail != nil {
+		return l.fail
+	}
+	l.on = on
+	return nil
+}
+
+func (l *brakeLog) BrakeOn(context.Context) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.on, nil
+}
+
 // initiative is issue #1 worked as two slices, the second job "1" being
 // the one the queue started for it.
 func initiative() runmode.IssueReport {
@@ -237,6 +261,7 @@ type fixture struct {
 	mode   *runmode.Mode
 	outbox *outbox
 	inbox  *inbox
+	log    *brakeLog
 }
 
 func newFixture(ctx *specs.Context, order queue.Order, reps reports) fixture {
@@ -246,10 +271,12 @@ func newFixture(ctx *specs.Context, order queue.Order, reps reports) fixture {
 // newFixtureOpen is newFixture with deps answering for the issues the queue
 // depends on, so it holds those depending on open ones.
 func newFixtureOpen(ctx *specs.Context, order queue.Order, reps reports, deps queue.Issues) fixture {
-	f := fixture{r: newRunner(), sched: newScheduler(ctx, 1, costs{}), outbox: &outbox{}, inbox: &inbox{}}
+	f := fixture{r: newRunner(), sched: newScheduler(ctx, 1, costs{}), outbox: &outbox{}, inbox: &inbox{}, log: &brakeLog{}}
 	f.brake = runmode.NewBrake(f.sched)
 	f.q = queue.New(f.brake, order, deps, f.r)
-	f.mode = runmode.New(f.brake, f.q, order, reps, f.outbox, f.inbox)
+	m, err := runmode.New(context.Background(), f.brake, f.q, order, reps, f.outbox, f.inbox, f.log)
+	ctx.Expect(err).To(specs.BeNil())
+	f.mode = m
 	return f
 }
 
@@ -321,7 +348,7 @@ func TestMode(t *testing.T) {
 				ctx.Expect(f.mode.Handle(bg, domain.InitiativeEnded{Job: "1", Initiative: "i1", At: epoch})).To(specs.BeNil())
 				ctx.Expect(f.r.end(ctx, 1, nil)).To(specs.BeNil())
 
-				f.mode.Release(bg)
+				ctx.Expect(f.mode.Release(bg)).To(specs.BeNil())
 				ctx.Expect(f.brake.Engaged()).To(specs.BeFalse())
 				f.r.awaitStart(ctx, 2)
 				ctx.Expect(f.r.end(ctx, 2, nil)).To(specs.BeNil())
@@ -348,7 +375,7 @@ func TestMode(t *testing.T) {
 				f.q.Add(bg, queue.Issue{Number: 1})
 				ctx.Expect(f.sched.Waiting()).ToEqual(0)
 				ctx.Expect(waitingNumbers(f.q)).ToEqual([]int{1})
-				f.mode.Release(bg)
+				ctx.Expect(f.mode.Release(bg)).To(specs.BeNil())
 				f.r.awaitStart(ctx, 1)
 				ctx.Expect(f.r.end(ctx, 1, nil)).To(specs.BeNil())
 			})
@@ -429,6 +456,54 @@ func TestMode(t *testing.T) {
 				ctx.Expect(len(acts)).ToEqual(1)
 				ctx.Expect(acts[0].Payload).To(specs.Contain(`"no_next":"queue-empty"`))
 				ctx.Expect(f.inbox.all()[acts[0].Key].NoNext).ToEqual(domain.NoNextEmpty)
+			})
+		})
+
+		s.When("the brake is saved", func(s *specs.Spec) {
+			s.It("saves it on when it brakes and off when released", func(ctx *specs.Context) {
+				f := newFixture(ctx, queue.Order{}, reports{}.add(alone(5, domain.StageNeedsHuman)))
+				bg := context.Background()
+				ctx.Expect(f.mode.Handle(bg, domain.NeedsHuman{Job: "5", Reason: "blocked", Cause: domain.CauseBlocked, At: epoch})).To(specs.BeNil())
+				on, _ := f.log.BrakeOn(bg)
+				ctx.Expect(on).To(specs.BeTrue())
+				ctx.Expect(f.mode.Release(bg)).To(specs.BeNil())
+				on, _ = f.log.BrakeOn(bg)
+				ctx.Expect(on).To(specs.BeFalse())
+			})
+
+			s.It("starts on when the log has it on, and hands the queue's issues nothing", func(ctx *specs.Context) {
+				r, sched := newRunner(), newScheduler(ctx, 1, costs{})
+				brake := runmode.NewBrake(sched)
+				q := queue.New(brake, queue.Order{}, noDeps{}, r)
+				out := &outbox{}
+				bg := context.Background()
+				m, err := runmode.New(bg, brake, q, queue.Order{}, reports{}, out, &inbox{}, &brakeLog{on: true})
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(brake.Engaged()).To(specs.BeTrue())
+				q.Add(bg, queue.Issue{Number: 1})
+				ctx.Expect(sched.Waiting()).ToEqual(0)
+				ctx.Expect(waitingNumbers(q)).ToEqual([]int{1})
+				ctx.Expect(out.saved()).To(specs.BeEmpty())
+				ctx.Expect(m.Release(bg)).To(specs.BeNil())
+				r.awaitStart(ctx, 1)
+				ctx.Expect(r.end(ctx, 1, nil)).To(specs.BeNil())
+			})
+
+			s.It("keeps the brake on when saving it off fails", func(ctx *specs.Context) {
+				f := newFixture(ctx, queue.Order{}, reports{}.add(alone(5, domain.StageNeedsHuman)))
+				bg := context.Background()
+				ctx.Expect(f.mode.Handle(bg, domain.NeedsHuman{Job: "5", Reason: "blocked", Cause: domain.CauseBlocked, At: epoch})).To(specs.BeNil())
+				f.log.fail = errSaveFailed
+				ctx.Expect(f.mode.Release(bg)).To(specs.MatchError(errSaveFailed))
+				ctx.Expect(f.brake.Engaged()).To(specs.BeTrue())
+			})
+
+			s.It("returns why it could not save it on, with the brake on, so the bus retries", func(ctx *specs.Context) {
+				f := newFixture(ctx, queue.Order{}, reports{}.add(alone(5, domain.StageNeedsHuman)))
+				f.log.fail = errSaveFailed
+				err := f.mode.Handle(context.Background(), domain.NeedsHuman{Job: "5", Reason: "blocked", Cause: domain.CauseBlocked, At: epoch})
+				ctx.Expect(err).To(specs.MatchError(errSaveFailed))
+				ctx.Expect(f.brake.Engaged()).To(specs.BeTrue())
 			})
 		})
 

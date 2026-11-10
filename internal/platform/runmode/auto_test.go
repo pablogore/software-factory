@@ -17,7 +17,7 @@ import (
 
 func newAutoFixture(ctx *specs.Context, l runmode.Limits, reps reports) fixture {
 	f := newFixture(ctx, queue.Order{}, reps)
-	m, err := runmode.NewAuto(f.brake, f.q, queue.Order{}, reps, f.outbox, f.inbox, l)
+	m, err := runmode.NewAuto(context.Background(), f.brake, f.q, queue.Order{}, reps, f.outbox, f.inbox, f.log, l)
 	ctx.Expect(err).To(specs.BeNil())
 	f.mode = m
 	return f
@@ -218,7 +218,7 @@ func TestAuto(t *testing.T) {
 					{runmode.Limits{Issues: -1, USD: 20}, "max-jobs is -1"},
 				} {
 					f := newFixture(ctx, queue.Order{}, reports{})
-					m, err := runmode.NewAuto(f.brake, f.q, queue.Order{}, reports{}, f.outbox, f.inbox, c.limits)
+					m, err := runmode.NewAuto(context.Background(), f.brake, f.q, queue.Order{}, reports{}, f.outbox, f.inbox, f.log, c.limits)
 					ctx.Expect(m).To(specs.BeNil())
 					ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 					ctx.Expect(err.Error()).To(specs.Contain(c.key))
