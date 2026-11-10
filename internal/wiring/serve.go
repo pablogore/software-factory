@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/pablogore/software-factory/internal/platform/portrange"
 	"github.com/pablogore/software-factory/internal/platform/scheduler"
 	"github.com/pablogore/software-factory/internal/ports"
+	"github.com/pablogore/software-factory/internal/slices/worker"
 )
 
 // Serve errors. Callers compare with errors.Is.
@@ -55,6 +58,14 @@ type ServeConfig struct {
 	// once and the USD a job may spend unless a person raised its own.
 	Concurrency int
 	Budget      float64
+	// Costs names the source of jobs' spend: CostsSubscription, or none,
+	// which launches no agent rather than run one without a limit.
+	Costs string
+	// Listen is the address the worker API, with each job's MCP server,
+	// listens on for the sessions' agents.
+	Listen string
+	// Agents gives the agent each role's sessions run on.
+	Agents Agents
 	// Tick is how often the bus's due retries and the outbox are
 	// dispatched.
 	Tick time.Duration
@@ -77,22 +88,31 @@ type Server struct {
 	bus    *bus.Bus
 	outbox *outbox.Deliverer
 	sched  *scheduler.Scheduler
+	api    *http.Server
+	addr   string
 	clock  scheduler.Clock
 	tick   time.Duration
 	grace  time.Duration
 	log    io.Writer
+
+	// work is the context ticks and sessions run with. It outlives the one
+	// Run is given, so a signal does not cut them short before the grace
+	// runs out; cancel ends it.
+	work   context.Context
+	cancel context.CancelFunc
 
 	// running counts the ticks in flight, which a shutdown waits for.
 	running sync.WaitGroup
 }
 
 // StartServer opens cfg's store, validates its pipelines, readies the
-// scheduler and the outbox, registers the subscribers and starts the bus,
-// which first hands them what was pending. An error names the piece that
-// failed, and whatever opened before it is closed again.
+// scheduler and the outbox, has the worker API listen, registers the
+// subscribers and starts the bus, which first hands them what was pending.
+// An error names the piece that failed, and whatever opened before it is
+// closed again.
 func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
-	if cfg.Tick <= 0 || cfg.Grace <= 0 || cfg.Clock == nil || cfg.Log == nil {
-		return nil, fmt.Errorf("config: %w: tick %s and grace %s must be positive, with a clock and a log", domain.ErrInvalidValue, cfg.Tick, cfg.Grace)
+	if cfg.Tick <= 0 || cfg.Grace <= 0 || cfg.Clock == nil || cfg.Log == nil || cfg.Agents == nil || cfg.Listen == "" {
+		return nil, fmt.Errorf("config: %w: tick %s and grace %s must be positive, with a clock, a log, agents and an address to listen on", domain.ErrInvalidValue, cfg.Tick, cfg.Grace)
 	}
 	pipelines, err := servePipelines(cfg.Config)
 	if err != nil {
@@ -108,7 +128,11 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 	fail := func(piece string, err error) (*Server, error) {
 		return nil, errors.Join(fmt.Errorf("%s: %w", piece, err), store.Close())
 	}
-	sched, err := scheduler.New(cfg.Concurrency, cfg.Budget, unpricedCosts{store}, scheduler.GitHub{Limits: noLimits{}, Clock: cfg.Clock})
+	costs, err := costSource(cfg.Costs, store)
+	if err != nil {
+		return fail("scheduler", err)
+	}
+	sched, err := scheduler.New(cfg.Concurrency, cfg.Budget, costs, scheduler.GitHub{Limits: noLimits{}, Clock: cfg.Clock})
 	if err != nil {
 		return fail("scheduler", err)
 	}
@@ -120,34 +144,61 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 	if err != nil {
 		return fail("dev servers", err)
 	}
-	dev := &DevServers{Servers: servers, Worktrees: gitworktree.New(cfg.Repo, cfg.Base, store), Ports: ranges, Bases: store}
-	Worker(jobtoken.New(), store, pipelines, nil, gatelock.New(), cfg.Clock, dev)
+	worktrees := gitworktree.New(cfg.Repo, cfg.Base, store)
+	dev := &DevServers{Servers: servers, Worktrees: worktrees, Ports: ranges, Bases: store}
+	tokens := jobtoken.New()
+	handler, attempts := Worker(tokens, store, pipelines, nil, gatelock.New(), cfg.Clock, dev)
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Listen)
+	if err != nil {
+		return fail("worker api", err)
+	}
+	addr := "http://" + ln.Addr().String()
+	api := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: handler}
+	go func() { _ = api.Serve(ln) }()
+	fail = func(piece string, err error) (*Server, error) {
+		return nil, errors.Join(fmt.Errorf("%s: %w", piece, err), api.Close(), store.Close())
+	}
+	work, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	launcher := &worker.Launcher{
+		Tokens: tokens, Jobs: store, Pipelines: pipelines, Roles: roleAgents{dir: cfg.Config, agents: cfg.Agents},
+		Agents: roleAgents{dir: cfg.Config, agents: cfg.Agents}, Worktrees: worktrees, Scheduler: sched, Attempts: attempts,
+		MCP: func(job domain.JobID) string { return mcpURL(addr, job) }, Log: cfg.Log,
+	}
 	events := bus.New(store, cfg.Clock)
 	if err := dev.Subscribe(events); err != nil {
+		cancel()
+		return fail("subscribers", err)
+	}
+	// The bus hands the launcher its own context, which ends with the
+	// tick; the sessions it launches run with work instead.
+	launch := func(_ context.Context, ev domain.Event) error { return launcher.Launch(work, ev) }
+	if err := events.Subscribe(LaunchSubscriber, launch, worker.LaunchEvents...); err != nil {
+		cancel()
 		return fail("subscribers", err)
 	}
 	if err := events.Start(ctx); err != nil {
+		cancel()
 		return fail("bus", err)
 	}
 	r := &routes{Outbox: store, dests: cfg.Destinations}
 	return &Server{
-		store: store, bus: events, outbox: outbox.New(r, r, cfg.Clock), sched: sched,
-		clock: cfg.Clock, tick: cfg.Tick, grace: cfg.Grace, log: cfg.Log,
+		store: store, bus: events, outbox: outbox.New(r, r, cfg.Clock), sched: sched, api: api, addr: addr,
+		clock: cfg.Clock, tick: cfg.Tick, grace: cfg.Grace, log: cfg.Log, work: work, cancel: cancel,
 	}, nil
 }
+
+// Addr is the base URL the worker API listens on.
+func (s *Server) Addr() string { return s.addr }
 
 // Run dispatches the bus and the outbox every tick until ctx ends, then
 // shuts down: it starts no more ticks, waits for what runs up to the grace
 // and closes the store. It returns ErrShutdownGrace when the grace ran out.
 func (s *Server) Run(ctx context.Context) error {
-	// Work outlives ctx, so a signal does not cut a tick short before the
-	// grace runs out.
-	work, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancel()
+	defer s.cancel()
 	for {
 		select {
 		case <-ctx.Done():
-			return s.shutdown(cancel)
+			return s.shutdown(s.cancel)
 		case <-s.clock.After(s.tick):
 		}
 		done := make(chan struct{})
@@ -155,12 +206,12 @@ func (s *Server) Run(ctx context.Context) error {
 		go func() {
 			defer s.running.Done()
 			defer close(done)
-			s.dispatch(work)
+			s.dispatch(s.work)
 		}()
 		select {
 		case <-done:
 		case <-ctx.Done():
-			return s.shutdown(cancel)
+			return s.shutdown(s.cancel)
 		}
 	}
 }
@@ -182,7 +233,7 @@ const drainPoll = 50 * time.Millisecond
 
 // shutdown waits for the ticks in flight and the scheduler's running agents
 // up to the grace, cancels them with cancel if it runs out, and closes the
-// store.
+// worker API and the store.
 func (s *Server) shutdown(cancel context.CancelFunc) error {
 	drained := make(chan struct{})
 	go func() {
@@ -198,6 +249,9 @@ func (s *Server) shutdown(cancel context.CancelFunc) error {
 	case <-s.clock.After(s.grace):
 		cancel()
 		err = fmt.Errorf("shutdown: %s: %w", s.grace, ErrShutdownGrace)
+	}
+	if cerr := s.api.Close(); cerr != nil {
+		err = errors.Join(err, fmt.Errorf("worker api: %w", cerr))
 	}
 	if cerr := s.store.Close(); cerr != nil {
 		err = errors.Join(err, fmt.Errorf("store: %w", cerr))
