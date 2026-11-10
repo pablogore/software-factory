@@ -26,7 +26,7 @@ type Attempts struct {
 // ends without one, it prompts s once more with Retry and the reason, so the
 // same token submits it: a refused result does not spend it. When that turn
 // misses too, it records a domain.AttemptFailed from role on job with the
-// reason and reports false; no third prompt is sent. A session that ended
+// reason and the last lines s wrote on stderr, and reports false; no third prompt is sent. A session that ended
 // counts as a turn without a result.
 func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, token, prompt string) (bool, error) {
 	missed, err := a.turn(ctx, s, token, prompt)
@@ -37,7 +37,7 @@ func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, t
 	if err != nil || missed == "" {
 		return err == nil, err
 	}
-	return false, a.fail(ctx, job, role, missed)
+	return false, a.fail(ctx, job, role, missed, s.Stderr())
 }
 
 // Retry is the prompt that asks an agent once more for its result, saying
@@ -80,7 +80,7 @@ func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (stri
 	return "no result submitted", nil
 }
 
-func (a *Attempts) fail(ctx context.Context, job domain.JobID, role, reason string) error {
+func (a *Attempts) fail(ctx context.Context, job domain.JobID, role, reason string, stderr []string) error {
 	j, v, err := a.Jobs.Load(ctx, job)
 	if err != nil {
 		return fmt.Errorf("worker: failed attempt: %w", err)
@@ -89,7 +89,7 @@ func (a *Attempts) fail(ctx context.Context, job domain.JobID, role, reason stri
 	if err != nil {
 		return fmt.Errorf("worker: failed attempt: %w", err)
 	}
-	ev := domain.AttemptFailed{Job: job, Role: role, Reason: reason, At: a.Clock.Now()}
+	ev := domain.AttemptFailed{Job: job, Role: role, Reason: reason, Stderr: stderr, At: a.Clock.Now()}
 	if _, _, err := a.Jobs.Apply(ctx, job, v, p, ev); err != nil {
 		return fmt.Errorf("worker: failed attempt: %w", err)
 	}

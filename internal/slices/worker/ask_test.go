@@ -119,6 +119,8 @@ func (s askingSession) Prompt(ctx context.Context, _ string) (<-chan domain.Agen
 	return ch, nil
 }
 
+func (askingSession) Stderr() []string { return nil }
+
 func TestAskHuman(t *testing.T) {
 	specs.Describe(t, "asking a person with a job token", func(s *specs.Spec) {
 		s.It("leaves the job in needs-info with a spec-writer's question, its options and audience saved", func(ctx *specs.Context) {

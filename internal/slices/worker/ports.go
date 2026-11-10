@@ -19,9 +19,11 @@ type jobs interface {
 	History(ctx context.Context, id domain.JobID) ([]ports.Record, error)
 }
 
-// session is the agent session an attempt prompts.
+// session is the agent session an attempt prompts, and whose last stderr
+// lines a failed attempt cites.
 type session interface {
 	Prompt(ctx context.Context, msg string) (<-chan domain.AgentProgressed, error)
+	Stderr() []string
 }
 
 // results tells what a token's submissions came to.

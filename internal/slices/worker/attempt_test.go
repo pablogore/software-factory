@@ -13,13 +13,15 @@ import (
 
 // scripted is an agent session whose turns each submit one result with its
 // token, or none when the turn's entry is empty, then end. A turn past the
-// script submits nothing; closed sessions refuse every prompt.
+// script submits nothing; closed sessions refuse every prompt. Its stderr
+// is what Stderr reports.
 type scripted struct {
 	sub     *worker.Submitter
 	job     domain.JobID
 	token   string
 	turns   []string
 	closed  bool
+	stderr  []string
 	prompts []string
 	answers []error
 }
@@ -39,6 +41,8 @@ func (s *scripted) Prompt(ctx context.Context, msg string) (<-chan domain.AgentP
 	close(ch)
 	return ch, nil
 }
+
+func (s *scripted) Stderr() []string { return s.stderr }
 
 func (w world) attempts() *worker.Attempts {
 	return &worker.Attempts{Results: w.sub, Jobs: w.store, Pipelines: pipelines{"default": pipeline()}, Clock: stopped{}}
@@ -148,6 +152,25 @@ func TestAttempt(t *testing.T) {
 				ctx.Expect(sess.prompts).To(specs.HaveLen(2))
 				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AttemptFailed", "AttemptRetried"})
 				ctx.Expect(w.failed(ctx).Reason).ToEqual("no result submitted")
+			})
+
+			s.It("records the last lines the agent wrote on stderr in the session", func(ctx *specs.Context) {
+				w := newWorld(ctx)
+				sess := w.session()
+				sess.stderr = []string{"error: model overloaded", "retrying in 5s"}
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(ok).To(specs.BeFalse())
+				ctx.Expect(w.failed(ctx).Stderr).ToEqual([]string{"error: model overloaded", "retrying in 5s"})
+			})
+
+			s.It("records the failed attempt without stderr, and retries as before, when the agent wrote none", func(ctx *specs.Context) {
+				w := newWorld(ctx)
+				ok, err := w.attempts().Run(context.Background(), w.session(), "j-1", "builder", w.j1, "build it")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(ok).To(specs.BeFalse())
+				ctx.Expect(w.failed(ctx).Stderr).To(specs.BeNil())
+				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AttemptFailed", "AttemptRetried"})
 			})
 
 			s.It("counts a session that ended as a turn without a result", func(ctx *specs.Context) {
