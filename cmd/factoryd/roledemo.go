@@ -57,7 +57,7 @@ func roleDemo(ctx context.Context, args []string, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "agent %s: %s, launched here as the fake ACP agent\n", rs.Role.Agent, commandLine(rs.Agent))
 	_, _ = fmt.Fprintf(out, "model %s\n", rs.Role.Model)
 
-	sess, err := acp.New(cfg, wiring.SystemClock{}).Start(ctx, ports.SessionSpec{Job: "role-demo", Role: rs.Role.Name, Dir: work})
+	sess, err := acp.New(cfg, wiring.SystemClock{}).Start(ctx, ports.SessionSpec{Job: "role-demo", Role: rs.Role.Name, Kind: rs.Role.Kind, Dir: work})
 	if err != nil {
 		return err
 	}
