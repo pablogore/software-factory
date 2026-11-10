@@ -112,7 +112,11 @@ var jobTools = []string{"submit_result", "progress", "context_pack"}
 
 // jobTool tells whether call is one of jobTools on one of servers, the job's
 // MCP servers, by the name claude-code-acp gives it: "mcp__<server>__<tool>".
+// A call that edits or runs a command is never one, whatever its title.
 func jobTool(servers []ports.MCPServer, call toolCall) bool {
+	if slices.Contains([]string{"edit", "delete", "move", "execute"}, call.Kind) {
+		return false
+	}
 	for _, m := range servers {
 		if tool, ok := strings.CutPrefix(call.Title, "mcp__"+m.Name+"__"); ok && slices.Contains(jobTools, tool) {
 			return true
@@ -321,6 +325,11 @@ var installers = map[string][]string{
 	"apk":     {"add"},
 }
 
+// reservedWords are the shell's words that open a command: the command they
+// run is the word after them. The words that close one (fi, done, "}",
+// esac) are left as its name, so the paths after them are still judged.
+var reservedWords = []string{"!", "{", "if", "then", "elif", "else", "do", "while", "until", "coproc"}
+
 // gitOptions are git's own options that take the next word as their value.
 var gitOptions = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
 
@@ -330,7 +339,7 @@ var gitOptions = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace",
 func judgeWords(root string, dirs, words []string) (reason, to string) {
 	var opts []string
 	for len(words) > 0 {
-		if isAssignment(words[0]) {
+		if isAssignment(words[0]) || slices.Contains(reservedWords, words[0]) {
 			words = words[1:]
 			continue
 		}
@@ -594,7 +603,11 @@ func (l *lexer) commands(end rune) error {
 			endCmd()
 		case strings.ContainsRune(";&|", r):
 			endCmd()
-		case r == '<' && l.at(l.i+1, '<') && !l.at(l.i+2, '<'):
+		case r == '<' && l.at(l.i+1, '<') && l.at(l.i+2, '<'):
+			// A here-string: its word is read as any other.
+			endWord()
+			l.i += 2
+		case r == '<' && l.at(l.i+1, '<'):
 			endWord()
 			l.i += 2
 			if err := l.heredoc(); err != nil {

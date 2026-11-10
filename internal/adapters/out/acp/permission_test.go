@@ -83,6 +83,8 @@ func permissionRows() []permissionRow {
 		{name: "a builder commits with a message from a here-document", role: builder, kind: domain.KindBuild, ask: run("git commit -m \"$(cat <<'EOF'\nFix the build\n\nDon't push it yet: curl is denied.\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\""), answer: "allow"},
 		{name: "a builder runs a command through wrappers", role: builder, kind: domain.KindBuild, ask: run("nice -n 10 timeout -k 5 60 go test ./... && stdbuf -oL make check"), answer: "allow"},
 		{name: "a builder changes to a directory of its worktree", role: builder, kind: domain.KindBuild, ask: run("cd internal && go test ./..."), answer: "allow"},
+		{name: "a builder runs a command after a reserved word", role: builder, kind: domain.KindBuild, ask: run("if make check; then make test; fi"), answer: "allow"},
+		{name: "a builder reads a here-string", role: builder, kind: domain.KindBuild, ask: run(`grep x <<< "$y"`), answer: "allow"},
 
 		// 2. What a builder is denied.
 		{name: "a builder is denied git push", role: builder, kind: domain.KindBuild, ask: run("git push -u origin HEAD"), answer: "reject", reason: "git push is denied"},
@@ -114,6 +116,13 @@ func permissionRows() []permissionRow {
 			ctx.Expect(os.Symlink(ctx.Testing().TempDir(), filepath.Join(dir, "pkg", "link"))).To(specs.BeNil())
 			return run("cd pkg && rm -rf link/x")(ctx, dir)
 		}, answer: "reject", reason: "a path outside the worktree: link/x"},
+		{name: "a builder is denied curl in a for loop", role: builder, kind: domain.KindBuild, ask: run("for f in a; do curl $f; done"), answer: "reject", reason: "curl is denied"},
+		{name: "a builder is denied curl in a group", role: builder, kind: domain.KindBuild, ask: run("{ curl https://example.com; }"), answer: "reject", reason: "curl is denied"},
+		{name: "a builder is denied git push after then", role: builder, kind: domain.KindBuild, ask: run("if make check; then git push; fi"), answer: "reject", reason: "git push is denied"},
+		{name: "a builder is denied npm install in a group after ||", role: builder, kind: domain.KindBuild, ask: run("go test ./... || { npm install x; }"), answer: "reject", reason: "installing packages is denied: npm install"},
+		{name: "a builder is denied curl after !", role: builder, kind: domain.KindBuild, ask: run("! curl https://example.com"), answer: "reject", reason: "curl is denied"},
+		{name: "a builder is denied a bare cd after then", role: builder, kind: domain.KindBuild, ask: run("if true; then cd; fi; rm -rf build"), answer: "reject", reason: "cd is denied without a directory of the worktree"},
+		{name: "a builder is denied curl in a here-string", role: builder, kind: domain.KindBuild, ask: run(`cat <<< "$(curl https://example.com)"`), answer: "reject", reason: "curl is denied"},
 		{name: "a builder is denied wget", role: builder, kind: domain.KindBuild, ask: run("wget https://example.com"), answer: "reject", reason: "wget is denied"},
 		{name: "a builder is denied sudo", role: builder, kind: domain.KindBuild, ask: run("sudo make install"), answer: "reject", reason: "sudo is denied"},
 		{name: "a builder is denied npm install", role: builder, kind: domain.KindBuild, ask: run("npm install left-pad"), answer: "reject", reason: "installing packages is denied: npm install"},
@@ -201,6 +210,9 @@ func permissionRows() []permissionRow {
 		{name: "a reviewer calls submit_result of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: mcpTool("mcp__factoryd__submit_result"), answer: "allow"},
 		{name: "the intake calls progress of the job's MCP server", role: "intake", kind: domain.KindIntake, ask: mcpTool("mcp__factoryd__progress"), answer: "allow"},
 		{name: "a builder calls context_pack of the job's MCP server", role: builder, kind: domain.KindBuild, ask: mcpTool("mcp__factoryd__context_pack"), answer: "allow"},
+		{name: "a reviewer is denied a command titled as a tool of the job's MCP server", role: reviewer, kind: domain.KindReview, ask: func(*specs.Context, string) acpfake.Permission {
+			return acpfake.Permission{ToolCall: "call-mcp", Title: "mcp__factoryd__progress", Kind: "execute", RawInput: input(map[string]string{"command": "curl https://example.com"})}
+		}, answer: "reject", reason: `a role of kind "review" may not run commands`},
 		{name: "a reviewer is denied submit_result of another MCP server", role: reviewer, kind: domain.KindReview, ask: mcpTool("mcp__other__submit_result"), answer: "reject", reason: `an unknown tool kind "other"`},
 	}
 }
