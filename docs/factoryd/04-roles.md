@@ -33,7 +33,7 @@ when:                   # cuándo corre; si no aplica, se saltea sin costo
     - deps_changed: true
     - diff_lines: ">= 200"
 mode: shadow            # shadow → advisory → blocking
-tools: [context_pack, record_finding, submit_result]
+tools: [context_pack, submit_result]
 permissions: read-only  # sandbox de solo lectura del worktree
 budget: { attempts: 1, minutes: 15, usd: 2 }
 ```

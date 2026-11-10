@@ -39,6 +39,7 @@ func samples() []sample {
 		{"approve result", domain.ResultSubmitted{Job: id, Role: "approver", Result: domain.ApproveResult{Decision: domain.ApproveEscalate, Reasons: []string{"risky"}}, At: t}},
 		{"task result", domain.ResultSubmitted{Job: id, Role: "docs", Result: domain.TaskResult{Produces: []string{"README.md"}, Verify: []domain.Check{{Name: "links", Passed: true}}}, At: t}},
 		{"triage result", domain.ResultSubmitted{Job: id, Role: "tech-lead", Result: domain.TriageResult{Decision: domain.TriageEscalate, Brief: "rebase", Question: "Keep the flag? yes/no"}, At: t}},
+		{"SpecWritten", domain.SpecWritten{Job: id, Role: "spec-writer", Title: "S1", Spec: "# S1", At: t}},
 		{"HumanApproved", domain.HumanApproved{Job: id, By: "ana", WaitSeq: 2, At: t}},
 		{"SpecgatePassed", domain.SpecgatePassed{Job: id, At: t}},
 		{"SpecgateFailed", domain.SpecgateFailed{Job: id, Exception: true, At: t}},

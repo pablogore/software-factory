@@ -27,13 +27,13 @@ type Role struct {
 	// Tools are the only worker tools the role's sessions may call; none
 	// means submit_result and progress. run_gate must be listed, and only a
 	// build role's sessions may call it; ask_human too, and only a spec or
-	// approve role's sessions may call it.
+	// approve role's sessions may call it. context_pack must be listed too.
 	Tools []string `json:"tools,omitempty"`
 }
 
 // WorkerTools are the tools factoryd's worker API serves, by the name a
 // role's tools list them: a role that lists any other name does not load.
-var WorkerTools = []string{"submit_result", "progress", "run_gate", "dev_server", "ask_human"}
+var WorkerTools = []string{"submit_result", "progress", "run_gate", "dev_server", "ask_human", "context_pack"}
 
 // When says when a role runs; a role whose conditions don't apply is skipped
 // at no cost. It runs when any one of Any holds.

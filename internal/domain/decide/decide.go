@@ -313,7 +313,10 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 			return evs, nil
 		}
 	case domain.SpecResult:
-		return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageSpecgate, At: e.At}}, nil
+		return []domain.Event{
+			domain.SpecWritten{Job: job.ID, Role: e.Role, Title: r.Title, Spec: r.Spec, At: e.At},
+			domain.StageEntered{Job: job.ID, Stage: domain.StageSpecgate, At: e.At},
+		}, nil
 	case domain.BuildResult:
 		if r.Status == domain.BuildReady {
 			return []domain.Event{domain.StageEntered{Job: job.ID, Stage: domain.StageGate, At: e.At}}, nil

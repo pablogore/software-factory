@@ -5,3 +5,4 @@ prompt: roles/reviewer-code.md
 agent: claude
 model: sonnet
 mode: blocking
+tools: [submit_result, progress, context_pack]

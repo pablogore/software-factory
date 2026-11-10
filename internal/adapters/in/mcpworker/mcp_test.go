@@ -68,7 +68,7 @@ func progressTool(ctx *specs.Context, cs *mcp.ClientSession, args string) (strin
 
 func TestMCP(t *testing.T) {
 	specs.Describe(t, "the worker MCP server", func(s *specs.Spec) {
-		s.It("offers ask_human, dev_server, progress, run_gate and submit_result as its only tools", func(ctx *specs.Context) {
+		s.It("offers ask_human, context_pack, dev_server, progress, run_gate and submit_result as its only tools", func(ctx *specs.Context) {
 			cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer tok")
 			res, err := cs.ListTools(context.Background(), nil)
 			ctx.Expect(err).To(specs.BeNil())
@@ -76,7 +76,7 @@ func TestMCP(t *testing.T) {
 			for i, tool := range res.Tools {
 				names[i] = tool.Name
 			}
-			ctx.Expect(names).ToEqual([]string{"ask_human", "dev_server", "progress", "run_gate", "submit_result"})
+			ctx.Expect(names).ToEqual([]string{"ask_human", "context_pack", "dev_server", "progress", "run_gate", "submit_result"})
 		})
 
 		s.It("hands the bearer token, the job of its path and the arguments to the submitter and names the saved events", func(ctx *specs.Context) {

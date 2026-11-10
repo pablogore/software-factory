@@ -66,6 +66,12 @@ type worktrees interface {
 	Prepare(ctx context.Context, job domain.JobID) (ports.Worktree, error)
 }
 
+// bases tells the commit a job's worktree was made from, which its diff is
+// against.
+type bases interface {
+	Base(ctx context.Context, job domain.JobID) (string, error)
+}
+
 // devPorts hands out a port of job's own range that is not in taken and
 // that nothing listens on.
 type devPorts interface {

@@ -25,6 +25,23 @@ func (ResultSubmitted) EventName() string { return "ResultSubmitted" }
 // JobID implements Event.
 func (e ResultSubmitted) JobID() JobID { return e.Job }
 
+// SpecWritten records the spec a spec role handed in, as it came, so the
+// roles after it read it in their context pack. Title and Spec are
+// agent-written text, data only: Decide never parses them or routes on them.
+type SpecWritten struct {
+	Job   JobID     `json:"job"`
+	Role  string    `json:"role"`
+	Title string    `json:"title,omitempty"`
+	Spec  string    `json:"spec"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (SpecWritten) EventName() string { return "SpecWritten" }
+
+// JobID implements Event.
+func (e SpecWritten) JobID() JobID { return e.Job }
+
 // HumanApproved records that an allowed person approved the job. WaitSeq is
 // the job's WaitSeq when the OK was given: it acts only on that wait.
 type HumanApproved struct {

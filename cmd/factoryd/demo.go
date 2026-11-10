@@ -188,7 +188,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 
 	var mu sync.Mutex
 	mux := http.NewServeMux()
-	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, gate, locks, wiring.SystemClock{}, dev))
+	mux.Handle("/", wiring.WorkerAPI(tokens, store, demoPipelines{}, gate, locks, wiring.SystemClock{}, dev, nil))
 	events := bus.New(store, wiring.SystemClock{})
 	if err := dev.Subscribe(events); err != nil {
 		return err

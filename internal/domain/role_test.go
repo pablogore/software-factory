@@ -145,7 +145,7 @@ func TestRole(t *testing.T) {
 			err := role.Validate()
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
-			ctx.Expect(err.Error()).ToEqual(`role builder: invalid value: unknown tool "run_gat", want one of submit_result, progress, run_gate, dev_server, ask_human`)
+			ctx.Expect(err.Error()).ToEqual(`role builder: invalid value: unknown tool "run_gat", want one of submit_result, progress, run_gate, dev_server, ask_human, context_pack`)
 		})
 
 		s.It("rejects a tool named in another case", func(ctx *specs.Context) {

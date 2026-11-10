@@ -102,8 +102,8 @@ func happyPath() []step {
 	return []step{
 		{"intake ACCEPT enters spec", result("intake", 1, domain.IntakeResult{Decision: domain.IntakeAccept}),
 			[]domain.Event{entered("spec", 1)}},
-		{"spec READY enters specgate", result("spec-writer", 2, domain.SpecResult{Title: "S1", Spec: "# S1"}),
-			[]domain.Event{entered(domain.StageSpecgate, 2)}},
+		{"spec READY records the spec and enters specgate", result("spec-writer", 2, domain.SpecResult{Title: "S1", Spec: "# S1"}),
+			[]domain.Event{domain.SpecWritten{Job: jobID, Role: "spec-writer", Title: "S1", Spec: "# S1", At: at(2)}, entered(domain.StageSpecgate, 2)}},
 		{"specgate OK enters build", domain.SpecgatePassed{Job: jobID, At: at(3)},
 			[]domain.Event{entered("build", 3)}},
 		{"build READY enters gate", result("builder", 4, domain.BuildResult{Status: domain.BuildReady}),
@@ -531,6 +531,8 @@ func eventTime(ev domain.Event) time.Time {
 	case domain.InfoAnswered:
 		return e.At
 	case domain.ChecksRan:
+		return e.At
+	case domain.SpecWritten:
 		return e.At
 	}
 	return time.Time{}

@@ -55,7 +55,7 @@ func newSharedGate(ctx *specs.Context) sharedGate {
 	tokens := jobtoken.New()
 	token, err := tokens.Issue(jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: []string{"submit_result", "progress", "run_gate"}, Round: 1})
 	ctx.Expect(err).To(specs.BeNil())
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, runGate, locks, fixedClock{}, nil))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, runGate, locks, fixedClock{}, nil, nil))
 	ctx.Cleanup(srv.Close)
 	return sharedGate{store: store, gate: gate, client: worker.Client{URL: srv.URL, Token: token}, pidFile: pidFile}
 }
