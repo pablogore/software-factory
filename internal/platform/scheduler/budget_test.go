@@ -46,6 +46,19 @@ func TestSchedulerBudget(t *testing.T) {
 				ctx.Expect(after.Cause).ToEqual(domain.CauseBudget)
 			})
 
+			s.It("tells what the job spent of which budget, for its BudgetExhausted", func(ctx *specs.Context) {
+				spent := newCosts()
+				spent.set("a", 5)
+				sch, c := newBudgeted(ctx, 2, spent), newCrew()
+
+				err := result(ctx, submit(sch, c, "a")["a"])
+
+				var ex *scheduler.ExhaustedError
+				ctx.Expect(errors.As(err, &ex)).To(specs.BeTrue())
+				ctx.Expect(*ex).ToEqual(scheduler.ExhaustedError{Job: "a", Spent: 5, Budget: budget})
+				ctx.Expect(err.Error()).ToEqual(`scheduler: job "a" spent USD 5.00 of 5.00: budget exhausted`)
+			})
+
 			s.It("never launches a person's reply either, and frees the reserved slot", func(ctx *specs.Context) {
 				spent := newCosts()
 				spent.set("a", 5)
