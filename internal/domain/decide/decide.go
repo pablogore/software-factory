@@ -159,7 +159,7 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 	case domain.AttemptFailed:
 		return attemptFailed(job, e, p)
 	case domain.AgentProgressed:
-		return agentProgressed(e)
+		return agentProgressed(job, e)
 	case domain.HumanAsked:
 		return asked(job, e, p)
 	case domain.MergeCompleted:
@@ -805,10 +805,21 @@ func attemptFailed(job domain.Job, e domain.AttemptFailed, p domain.Pipeline) ([
 
 // agentProgressed records a message an agent reported while it works, in
 // any stage, without moving the job. Only messages are recorded: the rest of
-// what a session reports is not kept in the job's history.
-func agentProgressed(e domain.AgentProgressed) ([]domain.Event, error) {
+// what a session reports is not kept in the job's history. A job in
+// needs-info that records no asker, or in triage with no valid wall, is
+// corrupt and fails closed, so the corruption shows instead of being recorded
+// over.
+func agentProgressed(job domain.Job, e domain.AgentProgressed) ([]domain.Event, error) {
 	if err := domain.ValidateRoleName(e.Role); err != nil {
 		return nil, fmt.Errorf("decide: progress: %w", err)
+	}
+	if job.Stage == domain.StageNeedsInfo && domain.Blank(job.InfoFrom) {
+		return nil, fmt.Errorf("decide: progress in needs-info without who asked: %w", domain.ErrMissingField)
+	}
+	if job.Stage == domain.StageTriage {
+		if err := job.Wall.Validate(); err != nil {
+			return nil, fmt.Errorf("decide: progress in triage: wall: %w", err)
+		}
 	}
 	if e.Kind != domain.ProgressMessage {
 		return nil, fmt.Errorf("decide: progress: %w: kind %q", domain.ErrInvalidValue, e.Kind)
