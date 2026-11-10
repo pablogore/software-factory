@@ -331,6 +331,10 @@ var installers = map[string][]string{
 // esac) are left as its name, so the paths after them are still judged.
 var reservedWords = []string{"!", "{", "if", "then", "elif", "else", "do", "while", "until", "coproc"}
 
+// compoundWords are the reserved words that open a compound command, the
+// body a named coproc may run.
+var compoundWords = []string{"{", "if", "while", "until", "case", "for", "select"}
+
 // gitOptions are git's own options that take the next word as their value.
 var gitOptions = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
 
@@ -340,9 +344,9 @@ var gitOptions = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace",
 func judgeWords(root string, dirs, words []string) (reason, to string) {
 	var opts []string
 	for len(words) > 0 {
-		// In "function NAME" and "coproc NAME {", NAME names what follows
-		// it; it is not a command.
-		if words[0] == "function" || (words[0] == "coproc" && len(words) > 2 && words[2] == "{") {
+		// In "function NAME" and "coproc NAME" before a compound command,
+		// NAME names what follows it; it is not a command.
+		if words[0] == "function" || (words[0] == "coproc" && len(words) > 2 && slices.Contains(compoundWords, words[2])) {
 			words = words[min(2, len(words)):]
 			continue
 		}
