@@ -109,7 +109,7 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 		_ = cmd.Wait()
 		close(sess.exited)
 	}()
-	sess.conn = newConn(stdin, sess.notified)
+	sess.conn = newConn(stdin, sess.notified, sess.requested)
 	go sess.conn.read(out)
 	if err := sess.open(ctx); err != nil {
 		_ = sess.Close()

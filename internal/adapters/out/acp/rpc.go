@@ -11,9 +11,13 @@ import (
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
-// codeMethodNotFound is JSON-RPC's answer to a method the client does not
-// serve.
-const codeMethodNotFound = -32601
+// JSON-RPC's error codes for a method the client does not serve, for params
+// it cannot read and for a result it cannot write.
+const (
+	codeMethodNotFound = -32601
+	codeInvalidParams  = -32602
+	codeInternalError  = -32603
+)
 
 // message is one JSON-RPC 2.0 message: a request (ID and Method), a
 // notification (Method only) or a response (ID with Result or Error).
@@ -47,11 +51,14 @@ type conn struct {
 	err     error // why the connection closed; nil while open
 
 	notified func(method string, params json.RawMessage)
-	done     chan struct{}
+	// requested answers a request of the agent with its result, or with
+	// the error the agent gets instead.
+	requested func(method string, params json.RawMessage) (any, *rpcError)
+	done      chan struct{}
 }
 
-func newConn(w io.Writer, notified func(method string, params json.RawMessage)) *conn {
-	return &conn{w: w, pending: map[int64]reply{}, notified: notified, done: make(chan struct{})}
+func newConn(w io.Writer, notified func(method string, params json.RawMessage), requested func(method string, params json.RawMessage) (any, *rpcError)) *conn {
+	return &conn{w: w, pending: map[int64]reply{}, notified: notified, requested: requested, done: make(chan struct{})}
 }
 
 // send writes a request and hands its response to r. When send returns an
@@ -170,9 +177,7 @@ func (c *conn) read(r io.Reader) {
 func (c *conn) handle(m message) {
 	switch {
 	case m.Method != "" && len(m.ID) > 0:
-		// The client serves no methods yet (files, terminals, permissions):
-		// the agent hears so instead of waiting.
-		_ = c.write(message{ID: m.ID, Error: &rpcError{Code: codeMethodNotFound, Message: "method not found: " + m.Method}}, nil)
+		c.answer(m)
 	case m.Method != "":
 		c.notified(m.Method, m.Params)
 	default:
@@ -193,4 +198,20 @@ func (c *conn) handle(m message) {
 		}
 		r(m.Result, nil)
 	}
+}
+
+// answer writes the response to the agent's request m. A method the client
+// does not serve is an error the agent hears, so it does not wait.
+func (c *conn) answer(m message) {
+	result, rerr := c.requested(m.Method, m.Params)
+	if rerr != nil {
+		_ = c.write(message{ID: m.ID, Error: rerr}, nil)
+		return
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		_ = c.write(message{ID: m.ID, Error: &rpcError{Code: codeInternalError, Message: err.Error()}}, nil)
+		return
+	}
+	_ = c.write(message{ID: m.ID, Result: raw}, nil)
 }
