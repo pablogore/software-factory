@@ -289,12 +289,15 @@ func (e ActionFailed) JobID() JobID { return e.Job }
 // AttemptFailed records that Role's session on the job ended its turn
 // without a saved result, and again after factoryd asked it once more and
 // said why. Reason is why the second turn has none, data only: Decide never
-// parses it or routes on it. It counts toward the job's attempt_retries in
-// its stage and round.
+// parses it or routes on it. Stderr is the last lines the agent wrote on
+// stderr in the session, cited for whoever looks at the job and as data
+// only too; none when it wrote nothing. It counts toward the job's
+// attempt_retries in its stage and round.
 type AttemptFailed struct {
 	Job    JobID     `json:"job"`
 	Role   string    `json:"role"`
 	Reason string    `json:"reason"`
+	Stderr []string  `json:"stderr,omitempty"`
 	At     time.Time `json:"at"`
 }
 

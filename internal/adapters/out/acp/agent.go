@@ -15,6 +15,7 @@ import (
 
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/childenv"
+	"github.com/pablogore/software-factory/internal/platform/stderrtail"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -94,6 +95,8 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 		return nil, fmt.Errorf("acp: stdout: %w", err)
 	}
 	cmd.Stdout = w
+	stderr := &stderrtail.Tail{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		_ = out.Close()
 		_ = w.Close()
@@ -101,7 +104,7 @@ func (a *Agent) Start(ctx context.Context, s ports.SessionSpec) (ports.Session, 
 	}
 	_ = w.Close()
 
-	sess := &session{agent: a, spec: s, dir: dir, cmd: cmd, stdin: stdin, stdout: out, closed: make(chan struct{}), exited: make(chan struct{})}
+	sess := &session{agent: a, spec: s, dir: dir, cmd: cmd, stderr: stderr, stdin: stdin, stdout: out, closed: make(chan struct{}), exited: make(chan struct{})}
 	go func() {
 		_ = cmd.Wait()
 		close(sess.exited)

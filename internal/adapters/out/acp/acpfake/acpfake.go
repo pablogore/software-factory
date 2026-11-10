@@ -49,6 +49,8 @@ type Script struct {
 
 // Turn is how the fake answers one prompt.
 type Turn struct {
+	// Stderr is written on stderr, a line each, before the updates.
+	Stderr  []string `json:"stderr,omitempty"`
 	Updates []Update `json:"updates,omitempty"`
 	// Usage, when set, is reported in the prompt's answer.
 	Usage *Usage `json:"usage,omitempty"`
@@ -130,10 +132,10 @@ type rpcError struct {
 var errExit = errors.New("scripted exit")
 
 // Serve plays sc as an ACP agent, reading requests from in and writing to
-// out until in ends, and calls record with what it received after every
+// out until in ends, and the turns' Stderr to errOut, and calls record with what it received after every
 // request or notification, before answering it.
-func Serve(in io.Reader, out io.Writer, sc Script, record func(Received) error) error {
-	f := &fake{sc: sc, out: json.NewEncoder(out), record: record, seen: map[string]bool{}}
+func Serve(in io.Reader, out, errOut io.Writer, sc Script, record func(Received) error) error {
+	f := &fake{sc: sc, out: json.NewEncoder(out), errOut: errOut, record: record, seen: map[string]bool{}}
 	dec := json.NewDecoder(in)
 	for {
 		var m message
@@ -155,6 +157,7 @@ func Serve(in io.Reader, out io.Writer, sc Script, record func(Received) error) 
 type fake struct {
 	sc     Script
 	out    *json.Encoder
+	errOut io.Writer
 	record func(Received) error
 	got    Received
 	turns  int
@@ -263,6 +266,11 @@ func (f *fake) prompt(m message) error {
 		t = f.sc.Turns[f.turns]
 	}
 	f.turns++
+	for _, line := range t.Stderr {
+		if _, err := fmt.Fprintln(f.errOut, line); err != nil {
+			return fmt.Errorf("acpfake: stderr: %w", err)
+		}
+	}
 	for _, u := range t.Updates {
 		if err := f.update(p.SessionID, u); err != nil {
 			return err
@@ -366,7 +374,7 @@ func Run() int {
 		}
 	}
 	args := os.Args[1:]
-	err := Serve(os.Stdin, os.Stdout, sc, func(r Received) error {
+	err := Serve(os.Stdin, os.Stdout, os.Stderr, sc, func(r Received) error {
 		r.Args, r.Env = args, env
 		return save(path, r)
 	})

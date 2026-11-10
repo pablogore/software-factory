@@ -64,6 +64,10 @@ type Session interface {
 	// Resume loads the session again in the agent, or is
 	// ErrResumeUnsupported.
 	Resume(ctx context.Context) error
+	// Stderr is the last stderrtail.MaxLines lines the agent has written on
+	// stderr in the session so far, each cut at stderrtail.MaxLineBytes;
+	// nil when it wrote nothing.
+	Stderr() []string
 	// Close ends the session and kills its agent, with its child processes.
 	// Closing again is a no-op.
 	Close() error
