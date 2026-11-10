@@ -339,6 +339,12 @@ var gitOptions = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace",
 func judgeWords(root string, dirs, words []string) (reason, to string) {
 	var opts []string
 	for len(words) > 0 {
+		// In "function NAME" and "coproc NAME {", NAME names what follows
+		// it; it is not a command.
+		if words[0] == "function" || (words[0] == "coproc" && len(words) > 2 && words[2] == "{") {
+			words = words[min(2, len(words)):]
+			continue
+		}
 		if isAssignment(words[0]) || slices.Contains(reservedWords, words[0]) {
 			words = words[1:]
 			continue
