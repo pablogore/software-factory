@@ -93,6 +93,19 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 	return changes, nil
 }
 
+// Patch is the diff of the worktree at dir, committed or not, against base,
+// the full object name of the commit its branch was made from, as Changes
+// takes it, as text with no color. Untracked files are not in it; Changes
+// lists them. External diff drivers and textconv filters are never run:
+// the worktree's .gitattributes, which the builder writes, could name a
+// command for factoryd to run.
+func (Differ) Patch(ctx context.Context, dir, base string) (string, error) {
+	if !objectName(base) {
+		return "", fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
+	}
+	return git(ctx, dir, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--ignore-submodules=none", base+"^{commit}", "--")
+}
+
 // gitlink is the mode git keeps a submodule's commit with.
 const gitlink = "160000"
 
