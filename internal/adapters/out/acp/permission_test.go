@@ -88,6 +88,7 @@ func permissionRows() []permissionRow {
 		{name: "a builder runs a function of its own", role: builder, kind: domain.KindBuild, ask: run("function f { make check; }; f"), answer: "allow"},
 		{name: "a builder runs a command after a reserved word", role: builder, kind: domain.KindBuild, ask: run("if make check; then make test; fi"), answer: "allow"},
 		{name: "a builder runs a command after its redirections", role: builder, kind: domain.KindBuild, ask: run("2>/dev/null >out.log make check"), answer: "allow"},
+		{name: "a builder sends a command to the background and redirects both outputs of another", role: builder, kind: domain.KindBuild, ask: run("make check & go test &>out.log ./..."), answer: "allow"},
 		{name: "a builder reads a here-string", role: builder, kind: domain.KindBuild, ask: run(`grep x <<< "$y"`), answer: "allow"},
 
 		// 2. What a builder is denied.
@@ -128,6 +129,10 @@ func permissionRows() []permissionRow {
 		{name: "a builder is denied curl after a redirection of stdin", role: builder, kind: domain.KindBuild, ask: run("<in curl https://example.com"), answer: "reject", reason: "curl is denied"},
 		{name: "a builder is denied curl after a redirection of stdin with a space", role: builder, kind: domain.KindBuild, ask: run("< in curl https://example.com"), answer: "reject", reason: "curl is denied"},
 		{name: "a builder is denied gh after a redirection of both outputs", role: builder, kind: domain.KindBuild, ask: run("&>/dev/null gh pr create --fill"), answer: "reject", reason: "gh is denied"},
+		{name: "a builder is denied git push with both outputs redirected in the middle", role: builder, kind: domain.KindBuild, ask: run("git &>/dev/null push"), answer: "reject", reason: "git push is denied"},
+		{name: "a builder is denied npm install with both outputs appended in the middle", role: builder, kind: domain.KindBuild, ask: run("npm &>>out.log install x"), answer: "reject", reason: "installing packages is denied: npm install"},
+		{name: "a builder is denied a path out of its worktree after both outputs are redirected", role: builder, kind: domain.KindBuild, ask: run("cat &>/dev/null /etc/passwd"), answer: "reject", reason: "a path outside the worktree: /etc/passwd"},
+		{name: "a builder is denied git push after a command sent to the background", role: builder, kind: domain.KindBuild, ask: run("make check & git push"), answer: "reject", reason: "git push is denied"},
 		{name: "a builder is denied curl after a clobbering redirection", role: builder, kind: domain.KindBuild, ask: run(">|/dev/null curl https://example.com"), answer: "reject", reason: "curl is denied"},
 		{name: "a builder is denied curl after a redirection to a named descriptor", role: builder, kind: domain.KindBuild, ask: run("{fd}>/dev/null curl https://example.com"), answer: "reject", reason: "curl is denied"},
 		{name: "a builder is denied curl after a here-string", role: builder, kind: domain.KindBuild, ask: run("<<<x curl https://example.com"), answer: "reject", reason: "curl is denied"},

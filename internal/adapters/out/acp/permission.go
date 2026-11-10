@@ -655,6 +655,10 @@ func (l *lexer) commands(end rune) error {
 		case r == ')':
 			depth = max(depth-1, 0)
 			endCmd()
+		case r == '&' && l.at(l.i+1, '>'):
+			// "&>" and "&>>" redirect both outputs, and a number before
+			// them is a word; the ">" is read next, as a redirection.
+			endWord()
 		case strings.ContainsRune(";&|", r):
 			endCmd()
 		case r == '<' && l.at(l.i+1, '<') && l.at(l.i+2, '<'):
