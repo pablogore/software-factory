@@ -12,6 +12,7 @@ import (
 	"github.com/getsyntegrity/go-specs/specs"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/platform/scheduler"
 	"github.com/pablogore/software-factory/internal/ports"
@@ -42,6 +43,7 @@ type launchedAgents struct {
 	mu       sync.Mutex
 	specs    []ports.SessionSpec
 	sessions []*scripted
+	gone     []chan struct{}
 }
 
 func (a *launchedAgents) Start(_ context.Context, _ domain.Role, s ports.SessionSpec) (ports.Session, error) {
@@ -54,7 +56,22 @@ func (a *launchedAgents) Start(_ context.Context, _ domain.Role, s ports.Session
 	token := strings.TrimPrefix(s.MCPServers[0].Headers["Authorization"], "Bearer ")
 	sess := &scripted{sub: a.sub, job: s.Job, token: token, turns: a.turns, hang: a.hang, stderr: []string{"still thinking"}}
 	a.sessions = append(a.sessions, sess)
-	return closable{sess}, nil
+	gone := make(chan struct{})
+	a.gone = append(a.gone, gone)
+	return closable{sess, &sync.Once{}, gone}, nil
+}
+
+// cut tells whether the i-th session started was closed.
+func (a *launchedAgents) cut(i int) bool {
+	a.mu.Lock()
+	gone := a.gone[i]
+	a.mu.Unlock()
+	select {
+	case <-gone:
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *launchedAgents) started() []ports.SessionSpec {
@@ -63,12 +80,23 @@ func (a *launchedAgents) started() []ports.SessionSpec {
 	return append([]ports.SessionSpec{}, a.specs...)
 }
 
-// closable is a scripted session as ports.Session.
-type closable struct{ *scripted }
+// closable is a scripted session as ports.Session; gone is closed with it.
+type closable struct {
+	*scripted
+	once *sync.Once
+	gone chan struct{}
+}
 
 func (closable) Cancel() error                { return nil }
 func (closable) Resume(context.Context) error { return ports.ErrResumeUnsupported }
-func (c closable) Close() error               { c.closed = true; return nil }
+
+func (c closable) Close() error {
+	c.once.Do(func() {
+		c.closed = true
+		close(c.gone)
+	})
+	return nil
+}
 
 // inline runs work at once, in the caller, unless refuse is set, as a
 // scheduler with a free slot or one that will not launch it. It counts the
@@ -109,6 +137,34 @@ func newHandTimer() *handTimer {
 func (t *handTimer) After(d time.Duration) <-chan time.Time {
 	t.asked <- d
 	return t.fire
+}
+
+// eachTimer is a timer whose every duration runs out only when the test
+// closes the channel it was handed on asked for it.
+type eachTimer struct{ asked chan chan time.Time }
+
+func (t eachTimer) After(time.Duration) <-chan time.Time {
+	fire := make(chan time.Time)
+	t.asked <- fire
+	return fire
+}
+
+// heldLocks are a job's gate locks whose first Preempt, which a submitted
+// result runs once its token is authorized and while it holds its job's
+// lock, signals entered and waits for release.
+type heldLocks struct {
+	*gatelock.Locks
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (l *heldLocks) Preempt(ctx context.Context, job domain.JobID) error {
+	l.once.Do(func() {
+		close(l.entered)
+		<-l.release
+	})
+	return l.Locks.Preempt(ctx, job)
 }
 
 // lockedBuffer is a log written from the launcher's goroutines.
@@ -372,6 +428,71 @@ func TestLaunchTimeout(t *testing.T) {
 			ctx.Expect(sess.closed).To(specs.BeTrue())
 			_, err := w.tokens.Authorize(tokenOf(agents.started()[0]), jobtoken.OpProgress, "j-1")
 			ctx.Expect(err).To(specs.MatchError(jobtoken.ErrUnknownToken))
+		})
+
+		s.It("refuses the session's token at the cut, and records no failure when a result submitted before it is saved after", func(ctx *specs.Context) {
+			w := newWorld(ctx)
+			p := reviewPipeline()
+			w.apply(ctx, "j-1", domain.ResultSubmitted{Job: "j-1", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at})
+			review := decided[domain.StageEntered](ctx, w, p, "j-1", domain.GatePassed{Job: "j-1", Run: domain.ChecksRun{Command: "make check"}, At: at})
+			locks := &heldLocks{Locks: gatelock.New(), entered: make(chan struct{}), release: make(chan struct{})}
+			w.sub.Pipelines = pipelines{"default": p}
+			w.sub.Locks = locks
+			agents := &launchedAgents{sub: w.sub, hang: true}
+			l := w.launcher(p, agents, &inline{}, &lockedBuffer{})
+			timer := eachTimer{asked: make(chan chan time.Time, 2)}
+			l.Clock = timer
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				launch(ctx, l, review)
+			}()
+
+			// reviewer-code's session hands in its result, which waits on the
+			// job's lock until the test releases it.
+			codeLimit := <-timer.asked
+			eventually(ctx, func() bool { return len(agents.started()) == 1 })
+			token := tokenOf(agents.started()[0])
+			submitted := make(chan error, 1)
+			go func() {
+				_, err := w.sub.Submit(context.Background(), token, "j-1", []byte(`{"verdict":"PASS"}`))
+				submitted <- err
+			}()
+			<-locks.entered
+
+			close(codeLimit)
+			// The cut takes the token away at once, while the attempt still waits
+			// to record its failure.
+			eventually(ctx, func() bool {
+				_, err := w.tokens.Authorize(token, jobtoken.OpSubmitResult, "j-1")
+				return errors.Is(err, jobtoken.ErrUnknownToken)
+			})
+			eventually(ctx, func() bool { return agents.cut(0) })
+			select {
+			case <-done:
+				ctx.Testing().Fatal("the launch ended before the result was in")
+			default:
+			}
+			close(locks.release)
+			ctx.Expect(<-submitted).To(specs.BeNil())
+			// reviewer-security's session runs past its limit with no result.
+			close(<-timer.asked)
+			<-done
+
+			job, _, err := w.store.Load(context.Background(), "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(job.Passed).ToEqual([]string{"reviewer-code"})
+			var failures []string
+			hist, err := w.store.History(context.Background(), "j-1")
+			ctx.Expect(err).To(specs.BeNil())
+			for _, h := range hist {
+				if e, ok := h.Event.(domain.AttemptFailed); ok {
+					failures = append(failures, e.Role)
+				}
+			}
+			ctx.Expect(failures).ToEqual([]string{"reviewer-security"})
+			// The cut session's outcome was taken, so it is not kept for ever.
+			ctx.Expect(w.sub.Take(token)).ToEqual(worker.Outcome{})
 		})
 	})
 }
