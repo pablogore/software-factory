@@ -91,6 +91,36 @@ func TestContextPackPatch(t *testing.T) {
 			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
 		})
 
+		s.It("never runs a hook core.hooksPath names", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			hooks := ctx.Testing().TempDir()
+			marker := filepath.Join(ctx.Testing().TempDir(), "ran")
+			hook(ctx, hooks, marker)
+			must(ctx, dir, "config", "core.hooksPath", hooks)
+			write(ctx, dir, "README.md", "changed\n")
+
+			patch, err := gitdiff.Differ{}.Patch(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(patch).To(specs.Contain("+changed\n"))
+			_, err = os.Stat(marker)
+			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
+		})
+
+		s.It("never runs a hook in the repo's hooks folder", func(ctx *specs.Context) {
+			dir, fork := newRepo(ctx)
+			marker := filepath.Join(ctx.Testing().TempDir(), "ran")
+			hook(ctx, filepath.Join(dir, ".git", "hooks"), marker)
+			write(ctx, dir, "README.md", "changed\n")
+
+			patch, err := gitdiff.Differ{}.Patch(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(patch).To(specs.Contain("+changed\n"))
+			_, err = os.Stat(marker)
+			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
+		})
+
 		s.It("shows a deleted file, and a symlink as its target, never reading outside the worktree", func(ctx *specs.Context) {
 			dir, fork := newRepoWith(ctx, map[string]string{"conf/key": "base key\n"})
 			outside := ctx.Testing().TempDir()
@@ -119,4 +149,12 @@ func TestContextPackPatch(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 		})
 	})
+}
+
+// hook puts in hooks a post-index-change hook that creates marker.
+func hook(ctx *specs.Context, hooks, marker string) {
+	ctx.Testing().Helper()
+	name := filepath.Join(hooks, "post-index-change")
+	ctx.Expect(os.MkdirAll(hooks, 0o750)).To(specs.BeNil())
+	ctx.Expect(os.WriteFile(name, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o700)).To(specs.BeNil()) //nolint:gosec // a hook must be executable.
 }
