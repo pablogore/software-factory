@@ -10,7 +10,8 @@
 // Before launching any work the scheduler asks how much its job has spent:
 // a job that spent its whole budget, its own when a person raised it or else
 // the scheduler's, never runs its agent, and its slot goes at once to the
-// next work in line.
+// next work in line. Neither does a job whose spend or budget is not a finite
+// amount at or above 0.
 //
 // Work handed over as using GitHub launches only while GitHub's remaining
 // API limit is at or above a threshold. Below it, the work gives its slot to
@@ -25,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -43,6 +45,11 @@ var ErrBudget = errors.New("budget must be above 0, with a cost source")
 // was about to launch, so the agent never ran. Whoever submitted the work
 // records domain.BudgetExhausted for the job, which stops it in needs-human.
 var ErrBudgetExhausted = errors.New("budget exhausted")
+
+// ErrInvalidCost means the cost source told a spend or a budget that is not
+// a finite number at or above 0, so the agent never ran: launching it could
+// let it run with no limit at all.
+var ErrInvalidCost = errors.New("invalid cost")
 
 // ErrGitHub means New was given a negative GitHub threshold, or no limit
 // source or clock to wait with.
@@ -130,7 +137,7 @@ func New(concurrency int, budget float64, costs CostSource, github GitHub) (*Sch
 // Submit hands w, work for job, over to run with ctx. It never blocks: w
 // starts now if a slot is free, or waits in line behind earlier work. The
 // returned channel receives w's error once it has run, or ErrBudgetExhausted
-// when it never ran.
+// or ErrInvalidCost when it never ran.
 func (s *Scheduler) Submit(ctx context.Context, job domain.JobID, w Work) <-chan error {
 	it := item{ctx: ctx, job: job, work: w, done: make(chan error, 1)}
 	s.mu.Lock()
@@ -235,9 +242,15 @@ func (s *Scheduler) launch(it item) (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: spend of job %q: %w", it.job, err)
 	}
+	if !valid(spent) {
+		return 0, fmt.Errorf("scheduler: spend of job %q is USD %v: %w", it.job, spent, ErrInvalidCost)
+	}
 	budget, err := s.costs.Budget(it.ctx, it.job)
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: budget of job %q: %w", it.job, err)
+	}
+	if !valid(budget) {
+		return 0, fmt.Errorf("scheduler: budget of job %q is USD %v: %w", it.job, budget, ErrInvalidCost)
 	}
 	if budget == 0 {
 		budget = s.budget
@@ -250,6 +263,12 @@ func (s *Scheduler) launch(it item) (time.Duration, error) {
 		return wait, err
 	}
 	return 0, it.work(it.ctx)
+}
+
+// valid tells whether usd is a finite amount at or above 0. NaN fails every
+// comparison, so a plain spent >= budget would launch it.
+func valid(usd float64) bool {
+	return usd >= 0 && !math.IsInf(usd, 1)
 }
 
 // hold tells how long it must wait for GitHub's reset before it may
