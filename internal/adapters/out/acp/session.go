@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/stderrtail"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -25,6 +26,9 @@ type session struct {
 	conn     *conn
 	id       string
 	loadable bool
+	// stderr keeps the last lines the agent writes on stderr; os/exec
+	// copies them in on its own goroutine until the agent exits.
+	stderr *stderrtail.Tail
 	// exited ends once the agent process has exited and been reaped.
 	exited chan struct{}
 
@@ -237,6 +241,12 @@ func (s *session) Resume(ctx context.Context) error {
 		return fmt.Errorf("acp: session/load: %w", err)
 	}
 	return nil
+}
+
+// Stderr is the last lines the agent has written on stderr, as far as they
+// were read: all of them once the session is closed.
+func (s *session) Stderr() []string {
+	return s.stderr.Lines()
 }
 
 // Close kills the agent's process group and waits for the agent, then stops
