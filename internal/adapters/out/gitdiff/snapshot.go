@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -132,15 +133,20 @@ func staged(ctx context.Context, dir string, root *os.Root, p string, newHash fu
 		}
 		mode, content = "120000", []byte(target)
 	case info.Mode().IsRegular():
-		// Root opens a file swapped for a symlink since Lstat only if it
-		// points inside the worktree.
-		content, err = root.ReadFile(p)
-		if err != nil {
-			return "", "", false, fmt.Errorf("gitdiff: %w", err)
-		}
 		mode = "100644"
 		if info.Mode()&0o111 != 0 {
 			mode = "100755"
+		}
+		var regular bool
+		content, regular, err = read(ctx, root, p, newHash, object, clean)
+		if err != nil {
+			return "", "", false, err
+		}
+		if !regular {
+			return "", "", false, nil
+		}
+		if content == nil {
+			return mode, object, true, nil
 		}
 	default:
 		return "", "", false, nil
@@ -157,6 +163,72 @@ func staged(ctx context.Context, dir string, root *os.Root, p string, newHash fu
 		return "", "", false, err
 	}
 	return mode, strings.TrimSpace(name), true, nil
+}
+
+// maxFile is the most of a tracked file snapshot reads into memory. A larger
+// one that changed is staged as tooLarge, so one huge or sparse file can't
+// exhaust factoryd's memory.
+const maxFile = 4 << 20
+
+// tooLarge stands for the content of a changed file over maxFile.
+var tooLarge = []byte(fmt.Sprintf("factoryd did not read this file: it is over %d bytes\n", maxFile))
+
+// read is the content of p, a regular file by its path from root, or nil
+// when it is over maxFile and still the index's object, given clean as for
+// staged; false when p is no longer a regular file. It opens p without
+// blocking and checks the open file, so a file swapped for a FIFO since
+// Lstat can't hang the call. Root opens a file swapped for a symlink only if
+// it points inside the worktree.
+func read(ctx context.Context, root *os.Root, p string, newHash func() hash.Hash, object string, clean bool) ([]byte, bool, error) {
+	f, err := root.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, false, fmt.Errorf("gitdiff: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, false, fmt.Errorf("gitdiff: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	if info.Size() <= maxFile {
+		content, err := io.ReadAll(io.LimitReader(f, maxFile+1))
+		if err != nil {
+			return nil, false, fmt.Errorf("gitdiff: %w", err)
+		}
+		if len(content) <= maxFile {
+			return content, true, nil
+		}
+		return tooLarge, true, nil
+	}
+	if !clean {
+		return tooLarge, true, nil
+	}
+	// Hash it a piece at a time, so an unchanged large file keeps its object.
+	h := newHash()
+	h.Write([]byte("blob " + strconv.FormatInt(info.Size(), 10) + "\x00"))
+	buf := make([]byte, 64<<10)
+	r := io.LimitReader(f, info.Size()+1)
+	var n int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, fmt.Errorf("gitdiff: %w", err)
+		}
+		k, err := r.Read(buf)
+		h.Write(buf[:k])
+		n += int64(k)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("gitdiff: %w", err)
+		}
+	}
+	if n == info.Size() && hex.EncodeToString(h.Sum(nil)) == object {
+		return nil, true, nil
+	}
+	return tooLarge, true, nil
 }
 
 // missing reports whether err says there is no file at a path, or a file

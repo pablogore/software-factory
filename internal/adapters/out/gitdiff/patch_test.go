@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
@@ -119,6 +120,19 @@ func TestContextPackPatch(t *testing.T) {
 			ctx.Expect(patch).To(specs.Contain("+changed\n"))
 			_, err = os.Stat(marker)
 			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
+		})
+
+		s.It("stands a changed file over 4 MiB for a note, and keeps an unchanged one out", func(ctx *specs.Context) {
+			large := strings.Repeat("x", 4<<20) + "\n"
+			dir, fork := newRepoWith(ctx, map[string]string{"big": large, "same": large})
+			write(ctx, dir, "big", large+"more\n")
+
+			patch, err := gitdiff.Differ{}.Patch(bg, dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(patch).To(specs.Contain("diff --git a/big b/big\n"))
+			ctx.Expect(patch).To(specs.Contain("+factoryd did not read this file: it is over 4194304 bytes\n"))
+			ctx.Expect(patch).To(specs.Not(specs.Contain("a/same")))
 		})
 
 		s.It("shows a deleted file, and a symlink as its target, never reading outside the worktree", func(ctx *specs.Context) {
