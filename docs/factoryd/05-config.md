@@ -22,6 +22,10 @@ No se exporta: estado de jobs, tokens, sesiones, costos (eso es otro export: `fa
 
 **Credenciales y HOME del agente.** El agente y el gate no heredan el entorno de factoryd: reciben solo una lista blanca (`PATH`, locale, `TMPDIR`, cachés de Go). Cada agente de `roles.yaml` puede declarar `env_passthrough`, una lista de *nombres* de variables (p. ej. `OPENAI_API_KEY`) que se copian tal cual del entorno de factoryd; la config nunca lleva valores, y `factoryd config-validate` rechaza ahí `GITHUB_TOKEN`, `GH_TOKEN` y los tokens de canales. El agente y el gate usan un HOME propio por job, en el directorio de datos de factoryd, fuera del worktree y separado del de los otros jobs. Un agente con `home: user` corre en cambio con el HOME del usuario, para los que inician sesión con su cuenta (como Claude Code con suscripción): hasta que exista el sandbox (E04.2), eso le da al agente acceso a la carpeta del usuario.
 
+**Opciones de `factoryd serve`: `--listen` y `--costs`.**
+- `--listen <dirección>` (por defecto `127.0.0.1:7317`): dónde escuchan la API del trabajador y el MCP de cada job, a los que se conectan las sesiones de los agentes. Si la dirección no es local (loopback), `serve` arranca igual pero muestra un aviso que la nombra: otras máquinas podrían llegar a la API y a los MCP de los jobs.
+- `--costs <fuente>`: de dónde sale lo que gasta un job. `subscription` cuenta 0 USD (agentes pagados por suscripción, no por uso), así que el presupuesto nunca corta un job. Sin fuente declarada, `serve` no lanza ningún agente, en vez de correr uno sin límite de gasto.
+
 ## Capas y precedencia
 1. Valores por defecto del binario.
 2. **Global** (repo central de configuración, ej. `pablogore/factory-config`): proveedores, roles, prompts, presupuestos.
