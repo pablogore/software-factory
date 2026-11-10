@@ -22,7 +22,7 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // unknown limit, budget raises from every kind of author, without a name,
 // for an issue cap and to no amount, a completed merge, a failed one, a spent
 // budget, a refused external action with and without a key, a failed
-// attempt with and without a reason, an agent's progress with and without a
+// attempt with and without a reason and one from triage's role, an agent's progress with and without a
 // message, triage's RETRY
 // and ESCALATE, one from another role and every missing or nil event of
 // nilEvents.
@@ -51,6 +51,7 @@ func fuzzEvents() []domain.Event {
 		domain.CapRaiseRequested{Job: jobID, By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Cap: domain.CapSlices, Value: 8, WaitSeq: 1, At: at(1)},
 		refused(1), domain.ActionFailed{Job: jobID, Key: " ", Kind: "comment", Error: "403 forbidden", At: at(1)},
 		failedAttempt(1), domain.AttemptFailed{Job: jobID, Role: "builder", Reason: " ", At: at(1)},
+		domain.AttemptFailed{Job: jobID, Role: "tech-lead", Reason: "no result submitted", At: at(1)},
 		progressed("running the tests", 1), progressed("", 1),
 		mergeFailed("conflict in go.sum", 1), triageRetry(1), triageEscalate(1),
 		result("builder", 1, domain.TriageResult{Decision: domain.TriageRetry, Brief: triageBrief}))
@@ -77,7 +78,8 @@ func fuzzEvents() []domain.Event {
 // from an allowed person changes nothing and is not an error, that one moves
 // the job only out of needs-human for a spent budget and always with its
 // history entry first, and that a missing or nil event is an error, never a
-// panic.
+// panic, and that no job keeps more failed attempts than its attempt_retries
+// without leaving its stage and round.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(i), uint8(0), uint8(1))
@@ -91,9 +93,10 @@ func FuzzDecide(f *testing.F) {
 		job.InfoFrom = fuzzAsker(job.Stage, done)
 		job.Cause = fuzzCause(job.Stage, round)
 		job.Wall = fuzzWall(job.Stage, done)
+		job.AttemptsFailed = int(round) % (domain.DefaultAttemptRetries + 1)
 		before := newJob()
 		before.Stage, before.Round, before.Passed = job.Stage, job.Round, append([]string(nil), job.Passed...)
-		before.InfoFrom, before.Cause, before.Wall = job.InfoFrom, job.Cause, job.Wall
+		before.InfoFrom, before.Cause, before.Wall, before.AttemptsFailed = job.InfoFrom, job.Cause, job.Wall, job.AttemptsFailed
 		evs := fuzzEvents()
 		ev := evs[int(event)%len(evs)]
 
@@ -122,6 +125,12 @@ func FuzzDecide(f *testing.F) {
 		after := decide.Apply(job, first)
 		if after.Round > 3+after.TriageRetries {
 			t.Fatalf("round %d past max_rounds 3 and %d triage retries", after.Round, after.TriageRetries)
+		}
+		if after.AttemptsFailed > domain.DefaultAttemptRetries {
+			t.Fatalf("%d failed attempts in stage %q round %d, over attempt_retries %d", after.AttemptsFailed, after.Stage, after.Round, domain.DefaultAttemptRetries)
+		}
+		if (after.Stage != job.Stage || after.Round != job.Round) && after.AttemptsFailed != 0 {
+			t.Fatalf("stage %q round %d keeps %d failed attempts from stage %q round %d", after.Stage, after.Round, after.AttemptsFailed, job.Stage, job.Round)
 		}
 		if len(first) > 0 && (after.Stage == domain.StageNeedsInfo) != (after.InfoFrom != "") {
 			t.Fatalf("stage %q with asker %q after %s", after.Stage, after.InfoFrom, ev.EventName())

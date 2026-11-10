@@ -59,12 +59,15 @@ func (w world) history(ctx *specs.Context, id domain.JobID) []string {
 	return names
 }
 
-// failed is job j-1's last saved event, which must be a failed attempt.
+// failed is job j-1's last saved event but the retry Decide follows it
+// with, which must be a failed attempt.
 func (w world) failed(ctx *specs.Context) domain.AttemptFailed {
 	hist, err := w.store.History(context.Background(), "j-1")
 	ctx.Expect(err).To(specs.BeNil())
-	ctx.Expect(len(hist) > 0).To(specs.BeTrue())
-	e, ok := hist[len(hist)-1].Event.(domain.AttemptFailed)
+	ctx.Expect(len(hist) > 1).To(specs.BeTrue())
+	_, retried := hist[len(hist)-1].Event.(domain.AttemptRetried)
+	ctx.Expect(retried).To(specs.BeTrue())
+	e, ok := hist[len(hist)-2].Event.(domain.AttemptFailed)
 	ctx.Expect(ok).To(specs.BeTrue())
 	return e
 }
@@ -143,7 +146,7 @@ func TestAttempt(t *testing.T) {
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeFalse())
 				ctx.Expect(sess.prompts).To(specs.HaveLen(2))
-				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AttemptFailed"})
+				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AttemptFailed", "AttemptRetried"})
 				ctx.Expect(w.failed(ctx).Reason).ToEqual("no result submitted")
 			})
 

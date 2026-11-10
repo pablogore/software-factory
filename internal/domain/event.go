@@ -289,7 +289,8 @@ func (e ActionFailed) JobID() JobID { return e.Job }
 // AttemptFailed records that Role's session on the job ended its turn
 // without a saved result, and again after factoryd asked it once more and
 // said why. Reason is why the second turn has none, data only: Decide never
-// parses it or routes on it. It changes no state.
+// parses it or routes on it. It counts toward the job's attempt_retries in
+// its stage and round.
 type AttemptFailed struct {
 	Job    JobID     `json:"job"`
 	Role   string    `json:"role"`
@@ -302,6 +303,22 @@ func (AttemptFailed) EventName() string { return "AttemptFailed" }
 
 // JobID implements Event.
 func (e AttemptFailed) JobID() JobID { return e.Job }
+
+// AttemptRetried records that Role runs again on the job in a new session
+// after its failed attempt, the Retry-th time in the job's stage and round.
+// The job stays where it is.
+type AttemptRetried struct {
+	Job   JobID     `json:"job"`
+	Role  string    `json:"role"`
+	Retry int       `json:"retry"`
+	At    time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (AttemptRetried) EventName() string { return "AttemptRetried" }
+
+// JobID implements Event.
+func (e AttemptRetried) JobID() JobID { return e.Job }
 
 // NeedsInfo records that the job waits for a person to answer a question
 // from stage From, which gets the answer. Question is the question an

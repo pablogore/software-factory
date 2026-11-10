@@ -29,6 +29,11 @@ func causeRows() []causeRow {
 		job.Stage, job.Round, job.Passed = "review", 3, []string{"reviewer-security", "reviewer-ux", "reviewer-ui", "security-deep"}
 		return job
 	}
+	retried := func() domain.Job {
+		job := building(2)
+		job.AttemptsFailed = 1
+		return job
+	}
 	return []causeRow{
 		{"a builder BLOCKED records blocked", func() domain.Job { return building(2) }, blockedBuild("cannot reach the payments API", 1), domain.CauseBlocked},
 		{"an approver ESCALATE records escalated", approving,
@@ -41,6 +46,7 @@ func causeRows() []causeRow {
 		{"a failed merge records merge-failed", merging, mergeFailed("conflict in go.sum", 1), domain.CauseMergeFailed},
 		{"a spent budget records budget-exhausted", func() domain.Job { return building(2) }, budgetSpent(1), domain.CauseBudget},
 		{"an approver's question records asked", approving, approverAsks(1), domain.CauseAsked},
+		{"a failed attempt with no retry left records attempt-failed", retried, failedAttempt(1), domain.CauseAttemptFailed},
 	}
 }
 
@@ -188,6 +194,7 @@ func TestNeedsHumanCause(t *testing.T) {
 				{"after a failed merge it is refused, naming the cause", domain.CauseMergeFailed, nil, decide.ErrOKRefused},
 				{"after a spent budget it is refused, naming the cause", domain.CauseBudget, nil, decide.ErrOKRefused},
 				{"after an approver's question it is refused, naming the cause", domain.CauseAsked, nil, decide.ErrOKRefused},
+				{"after failed attempts it is refused, naming the cause", domain.CauseAttemptFailed, nil, decide.ErrOKRefused},
 			}
 			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
 				job := waitingFor(ctx, r.cause)
@@ -259,6 +266,7 @@ func TestNeedsHumanCause(t *testing.T) {
 				{"after a spent budget it is refused and the job keeps waiting", domain.CauseBudget, nil, decide.ErrUnsupported},
 				{"after an approver's question it is the answer and the job goes back to approve", domain.CauseAsked,
 					[]domain.Event{domain.InfoAnswered{Job: jobID, By: "pablogore", Text: "rename the flag", At: at(2)}, entered("approve", 2)}, nil},
+				{"after failed attempts it sends the job back to build", domain.CauseAttemptFailed, toBuild, nil},
 			}
 			specs.Table(s, rows, func(r okRow) string { return r.name }, func(ctx *specs.Context, r okRow) {
 				job := waitingFor(ctx, r.cause)

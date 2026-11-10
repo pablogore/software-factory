@@ -35,6 +35,11 @@ const DefaultMaxRounds = 3
 // factory.
 const DefaultTriageRetries = 1
 
+// DefaultAttemptRetries is how many times a role whose attempt failed runs
+// again in a new session, in one stage and round, when the pipeline doesn't
+// set attempt_retries.
+const DefaultAttemptRetries = 1
+
 // Limits are the pipeline's retry limits. A nil value is not set and takes
 // its default; a nil HumanReworks, set or not, is unlimited.
 type Limits struct {
@@ -42,17 +47,18 @@ type Limits struct {
 	HumanReworks   *int `json:"human_reworks,omitempty"`
 	TriageRetries  *int `json:"triage_retries,omitempty"`
 	MaxRounds      *int `json:"max_rounds,omitempty"`
+	AttemptRetries *int `json:"attempt_retries,omitempty"`
 }
 
 // LimitKeys are the retry limits a pipeline's limits block may set and a
 // person may override for one job.
-var LimitKeys = []string{"spec_rejections", "human_reworks", "triage_retries", "max_rounds"}
+var LimitKeys = []string{"spec_rejections", "human_reworks", "triage_retries", "max_rounds", "attempt_retries"}
 
 // PipelineCap is the most a pipeline may set limit key to, in its limits block
 // or, for max_rounds, in a review stage: a retry limit high enough to let a
 // job loop for long takes a per-job override (04-roles.md "Validación").
 func PipelineCap(key string) int {
-	if key == "triage_retries" {
+	if key == "triage_retries" || key == "attempt_retries" {
 		return 3
 	}
 	return 10
@@ -60,7 +66,7 @@ func PipelineCap(key string) int {
 
 // OverrideCap is the most a person may set limit key to for one job.
 func OverrideCap(key string) int {
-	if key == "triage_retries" {
+	if key == "triage_retries" || key == "attempt_retries" {
 		return 5
 	}
 	return 20
@@ -103,6 +109,7 @@ func (l Limits) Validate() error {
 		{"human_reworks", l.HumanReworks},
 		{"triage_retries", l.TriageRetries},
 		{"max_rounds", l.MaxRounds},
+		{"attempt_retries", l.AttemptRetries},
 	} {
 		if v.n != nil && *v.n < minLimit(v.key) {
 			return fmt.Errorf("limits: %w: %s %d, want at least %d", ErrInvalidValue, v.key, *v.n, minLimit(v.key))
@@ -138,6 +145,16 @@ func (p Pipeline) TriageRetries() int {
 		return DefaultTriageRetries
 	}
 	return *p.Limits.TriageRetries
+}
+
+// AttemptRetries is how many times a role whose attempt failed runs again in
+// a new session before the job hits a wall: limits.attempt_retries, or
+// DefaultAttemptRetries when it is not set.
+func (p Pipeline) AttemptRetries() int {
+	if p.Limits.AttemptRetries == nil {
+		return DefaultAttemptRetries
+	}
+	return *p.Limits.AttemptRetries
 }
 
 // HumanReworks is how many reworks back to build a person may send from needs-human:

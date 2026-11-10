@@ -62,9 +62,13 @@ func TestPipeline(t *testing.T) {
 			ctx.Expect(validPipeline().TriageRetries()).ToEqual(1)
 		})
 
+		s.It("takes attempt_retries 1 when the pipeline doesn't set it", func(ctx *specs.Context) {
+			ctx.Expect(validPipeline().AttemptRetries()).ToEqual(1)
+		})
+
 		s.It("accepts every limit at its cap and a review at the max_rounds cap", func(ctx *specs.Context) {
 			p := validPipeline()
-			p.Limits = domain.Limits{SpecRejections: ptr(10), HumanReworks: ptr(10), TriageRetries: ptr(3), MaxRounds: ptr(10)}
+			p.Limits = domain.Limits{SpecRejections: ptr(10), HumanReworks: ptr(10), TriageRetries: ptr(3), MaxRounds: ptr(10), AttemptRetries: ptr(3)}
 			p.Stages[2].MaxRounds = ptr(10)
 			ctx.Expect(p.Validate(roles)).To(specs.BeNil())
 		})
@@ -299,6 +303,12 @@ func TestPipeline(t *testing.T) {
 				{"names max_rounds 0 in limits", func(p *domain.Pipeline) {
 					p.Limits.MaxRounds = ptr(0)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: max_rounds 0, want at least 1"},
+				{"names attempt_retries 0", func(p *domain.Pipeline) {
+					p.Limits.AttemptRetries = ptr(0)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: attempt_retries 0, want at least 1"},
+				{"names attempt_retries above its cap of 3", func(p *domain.Pipeline) {
+					p.Limits.AttemptRetries = ptr(4)
+				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: attempt_retries 4, want at most 3"},
 				{"names spec_rejections above its cap of 10", func(p *domain.Pipeline) {
 					p.Limits.SpecRejections = ptr(11)
 				}, domain.ErrInvalidValue, "pipeline default: limits: invalid value: spec_rejections 11, want at most 10"},

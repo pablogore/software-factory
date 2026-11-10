@@ -34,6 +34,7 @@ type Job struct {
 	SpecRejections int            `json:"spec_rejections,omitempty"` // times specgate rejected the spec
 	HumanReworks   int            `json:"human_reworks,omitempty"`   // reworks back to build a person sent from needs-human; never reset
 	TriageRetries  int            `json:"triage_retries,omitempty"`  // rounds triage gave the job after a wall; never reset
+	AttemptsFailed int            `json:"attempts_failed,omitempty"` // failed attempts in the current stage and round; reset when either changes
 	Limits         Limits         `json:"limits,omitzero"`           // limits a person overrode for this job; a nil one is the pipeline's
 	ReworksLifted  bool           `json:"reworks_lifted,omitempty"`  // a person overrode human_reworks to unlimited for this job
 	InfoFrom       string         `json:"info_from,omitempty"`       // in needs-info, or needs-human after an agent's question, the stage that asked and gets the answer

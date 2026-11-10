@@ -10,7 +10,8 @@ import (
 )
 
 // wall decides a job that hit a wall the system detects: a builder BLOCKED,
-// a gate failed or CHANGES in the last round, a failed merge. While it has
+// a gate failed or CHANGES in the last round, a failed merge, a role's
+// attempts that kept failing. While it has
 // triage retries left (triage_retries, a person's override for this job,
 // else the pipeline's), triage looks at it first; after that, or with 0, it
 // waits for a person with a closed question and the wall's cause, so OK and
