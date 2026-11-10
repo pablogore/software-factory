@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
+	"github.com/pablogore/software-factory/internal/adapters/out/gitdiff"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -40,24 +41,36 @@ type GateChecks interface {
 	Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error)
 }
 
+// ContextPacks is what the worker's context_pack reads a job's diff with:
+// its worktree from Worktrees, against the base commit Bases recorded for
+// it.
+type ContextPacks struct {
+	Worktrees ports.Workspace
+	Bases     ports.BaseLog
+}
+
 // WorkerAPI is the worker HTTP API over jobs, deciding results with the
 // tokens issued from tokens and running a builder's checks with gate under
 // the job's lock in locks, the one the job's real gate takes: a result
 // submitted cancels a run in progress. dev runs the sessions' dev servers;
-// without it dev_server is refused.
-func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock, dev *DevServers) http.Handler {
-	h, _ := Worker(tokens, jobs, p, gate, locks, clock, dev)
+// without it dev_server is refused. packs reads the jobs' diffs for
+// context_pack; without it context_pack is refused.
+func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock, dev *DevServers, packs *ContextPacks) http.Handler {
+	h, _ := Worker(tokens, jobs, p, gate, locks, clock, dev, packs)
 	return h
 }
 
 // Worker is WorkerAPI and the Attempts that run agents' turns over the same
 // submissions, so an attempt sees the results its agent handed in through
 // the API.
-func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock, dev *DevServers) (http.Handler, *worker.Attempts) {
+func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock, dev *DevServers, packs *ContextPacks) (http.Handler, *worker.Attempts) {
 	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Gate: gate, Locks: locks, Clock: clock}
 	if dev != nil {
 		sub.Servers, sub.Worktrees, sub.Ports, sub.DevCommands = dev.Servers, dev.Worktrees, dev.Ports, baseDevCommand{dev.Bases}
 		dev.sub = sub
+	}
+	if packs != nil {
+		sub.Worktrees, sub.Bases, sub.Diffs = packs.Worktrees, packs.Bases, gitdiff.Differ{}
 	}
 	return mcpworker.Handler(sub), &worker.Attempts{Results: sub, Jobs: jobs, Pipelines: p, Clock: clock}
 }

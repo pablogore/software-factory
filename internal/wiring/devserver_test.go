@@ -70,7 +70,7 @@ func newDevWorld(ctx *specs.Context, job domain.Job) devWorld {
 	ctx.Expect(err).To(specs.BeNil())
 	dev := &wiring.DevServers{Servers: servers, Worktrees: oneDir(dir), Ports: ranges, Bases: store}
 	tokens := jobtoken.New()
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, nil, gatelock.New(), fixedClock{}, dev))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, nil, gatelock.New(), fixedClock{}, dev, nil))
 	ctx.Cleanup(srv.Close)
 	events := bus.New(store, fixedClock{})
 	ctx.Expect(dev.Subscribe(events)).To(specs.BeNil())

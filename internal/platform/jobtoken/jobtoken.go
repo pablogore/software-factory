@@ -4,8 +4,9 @@
 // default: a job token authorizes only submitting its own job's result,
 // reporting progress on it, running its checks for a build role that lists
 // it, running its dev server for a builder or a UX or UI reviewer that
-// lists it and asking a person a question for a spec or approve role that
-// lists it, and of those only what its role's tools allow, so it never works
+// lists it, asking a person a question for a spec or approve role that
+// lists it and reading its context pack for a role that lists it, and of
+// those only what its role's tools allow, so it never works
 // for another job or for an operator's operation, even one added later, nor
 // once the job moved on.
 package jobtoken
@@ -49,6 +50,7 @@ const (
 	OpRunGate      Op = "worker.run_gate"
 	OpDevServer    Op = "worker.dev_server"
 	OpAskHuman     Op = "worker.ask_human"
+	OpContextPack  Op = "worker.context_pack"
 )
 
 // tools names the worker tool each operation is called by, as a role's
@@ -59,6 +61,7 @@ var tools = map[Op]string{
 	OpRunGate:      "run_gate",
 	OpDevServer:    "dev_server",
 	OpAskHuman:     "ask_human",
+	OpContextPack:  "context_pack",
 }
 
 // Ops lists, sorted, every operation a token may allow: one per worker
@@ -189,8 +192,8 @@ func (t *Tokens) Revoke(token string) {
 }
 
 // Authorize returns token's grant when it allows op on job: only
-// OpSubmitResult, OpProgress, OpRunGate, OpDevServer or OpAskHuman on the
-// job it was issued for, only when the grant lists op's tool, or lists none
+// OpSubmitResult, OpProgress, OpRunGate, OpDevServer, OpAskHuman or
+// OpContextPack on the job it was issued for, only when the grant lists op's tool, or lists none
 // and the tool is one of defaults, and only for a grant of a kind and of
 // one of the roles the tool is limited to, if any.
 // It decides on the call, not on the tools an agent was shown, so an agent

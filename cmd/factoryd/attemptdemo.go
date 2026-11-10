@@ -48,7 +48,7 @@ func attemptDemo(ctx context.Context, out io.Writer) error {
 		return err
 	}
 	tokens := jobtoken.New()
-	api, attempts := wiring.Worker(tokens, store, demoPipelines{}, nil, gatelock.New(), wiring.SystemClock{}, nil)
+	api, attempts := wiring.Worker(tokens, store, demoPipelines{}, nil, gatelock.New(), wiring.SystemClock{}, nil, nil)
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return err

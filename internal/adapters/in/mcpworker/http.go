@@ -2,8 +2,8 @@
 // work on jobs, with the session's job token. For now it is the HTTP routes
 // `factory worker submit-result`, `factory worker run-gate` and `factory
 // worker dev-server` and `factory worker ask-human` call and the MCP tools
-// submit_result, progress, run_gate, dev_server and ask_human, all over one
-// Submitter; it
+// submit_result, progress, run_gate, dev_server, ask_human and
+// context_pack, all over one Submitter; it
 // serves nothing else, so a job token gets no other operation from it
 // (06-interfaz-y-observabilidad.md).
 package mcpworker
@@ -46,8 +46,9 @@ const DevServerPath = "/worker/jobs/{job}/dev-server"
 // arguments are, and the Submitter decodes both the same way.
 const AskPath = "/worker/jobs/{job}/ask"
 
-// Submitter decides a result, records a progress message, runs the checks
-// or records a question to a person, on a job with the token it came with.
+// Submitter decides a result, records a progress message, runs the checks,
+// records a question to a person or gives the context pack, on a job with
+// the token it came with.
 type Submitter interface {
 	Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
 	Progress(ctx context.Context, token string, job domain.JobID, text string) ([]domain.Event, error)
@@ -55,6 +56,7 @@ type Submitter interface {
 	DevServer(ctx context.Context, token string, job domain.JobID) (int, error)
 	StopDevServer(ctx context.Context, token string, job domain.JobID) error
 	AskHuman(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
+	ContextPack(ctx context.Context, token string, job domain.JobID) (string, error)
 }
 
 // Accepted is the answer to a result that was decided: the job and the

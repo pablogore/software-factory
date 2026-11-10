@@ -181,13 +181,13 @@ func TestLoadRole(t *testing.T) {
 					"names the role and a misspelt tool",
 					"name: builder\nkind: build\nmode: blocking\ntools: [submit_result, run_gat]\n",
 					domain.ErrInvalidValue,
-					`role builder: invalid value: unknown tool "run_gat", want one of submit_result, progress, run_gate, dev_server, ask_human`,
+					`role builder: invalid value: unknown tool "run_gat", want one of submit_result, progress, run_gate, dev_server, ask_human, context_pack`,
 				},
 				{
 					"names the role and a tool the worker does not serve",
-					"name: security-deep\nkind: review\nmode: shadow\ntools: [context_pack]\n",
+					"name: security-deep\nkind: review\nmode: shadow\ntools: [record_finding]\n",
 					domain.ErrInvalidValue,
-					`role security-deep: invalid value: unknown tool "context_pack", want one of submit_result, progress, run_gate, dev_server, ask_human`,
+					`role security-deep: invalid value: unknown tool "record_finding", want one of submit_result, progress, run_gate, dev_server, ask_human, context_pack`,
 				},
 			}
 			specs.Table(s, rows, func(r badRoleRow) string {

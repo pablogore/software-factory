@@ -31,6 +31,7 @@ type submitter struct {
 	asks     []call
 	run      domain.ChecksRun
 	devs     []call
+	packs    []call
 }
 
 type call struct {
@@ -82,6 +83,14 @@ func (s *submitter) AskHuman(_ context.Context, token string, job domain.JobID, 
 		return nil, s.err
 	}
 	return []domain.Event{domain.HumanAsked{Job: job}, domain.NeedsInfo{Job: job, From: "spec"}}, nil
+}
+
+func (s *submitter) ContextPack(_ context.Context, token string, job domain.JobID) (string, error) {
+	s.packs = append(s.packs, call{token: token, job: job})
+	if s.err != nil {
+		return "", s.err
+	}
+	return "# Context pack of job \"" + string(job) + "\", round 1\n", nil
 }
 
 // gateRun is a failing run of the checks, with a rule the diff broke.

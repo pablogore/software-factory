@@ -9,7 +9,8 @@
 // or a UX or UI reviewer's session, for the MCP tool dev_server and
 // `factory worker dev-server`. AskHuman records a spec-writer's or
 // approver's question to a person, for the MCP tool ask_human and `factory
-// worker ask-human`.
+// worker ask-human`. ContextPack gives a role's agent its job's spec, diff,
+// touched files and decisions, for the MCP tool context_pack.
 package worker
 
 import (
@@ -47,6 +48,10 @@ type Submitter struct {
 	Worktrees   worktrees
 	Ports       devPorts
 	DevCommands devCommands
+	// Bases and Diffs give ContextPack the diff of the job's worktree from
+	// Worktrees against its base.
+	Bases bases
+	Diffs diffs
 
 	// byJob runs one call on a job at a time, Submit, Progress, AskHuman or
 	// the start of RunGate, so a token, which is for one job, is revoked after

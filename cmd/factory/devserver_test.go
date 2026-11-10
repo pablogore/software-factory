@@ -97,7 +97,7 @@ func serve(ctx *specs.Context) served {
 	servers := devserver.New(time.Second)
 	ctx.Cleanup(func() { _ = servers.StopJob(context.Background(), "j-1") })
 	dev := &wiring.DevServers{Servers: servers, Worktrees: oneDir{dir}, Ports: ranges, Bases: store}
-	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, &gate{}, gatelock.New(), stopped{}, dev))
+	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, &gate{}, gatelock.New(), stopped{}, dev, nil))
 	ctx.Cleanup(srv.Close)
 	s.url = srv.URL
 	return s
