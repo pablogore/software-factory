@@ -158,6 +158,45 @@ func TestDemoHostileRepo(t *testing.T) {
 			ctx.Expect(h.marked()).To(specs.BeFalse())
 		})
 
+		// The job's HOME is the builder's to write, as its checks share it.
+		s.It("lists an untracked file a .gitconfig in the job's HOME points the scratch repo's ignore rules away from", func(ctx *specs.Context) {
+			h := newHostile(ctx)
+			must(ctx, h.dir, "switch", "-q", base)
+			write(ctx, h.dir, ".gitignore", "*.log\n")
+			must(ctx, h.dir, "add", ".gitignore")
+			must(ctx, h.dir, "commit", "-q", "-m", "ignore")
+			fork := must(ctx, h.dir, "rev-parse", "HEAD")
+			must(ctx, h.dir, "switch", "-q", "factory/job-1")
+			// git init copies the template's config, and core.worktree in it
+			// would make check-ignore read the job's .gitignore files.
+			templates := ctx.Testing().TempDir()
+			write(ctx, templates, "config", "[core]\n\tworktree = "+h.dir+"\n")
+			write(ctx, h.home, ".gitconfig", "[init]\n\ttemplateDir = "+templates+"\n")
+			write(ctx, h.dir, "sub/.gitignore", "*\n")
+			write(ctx, h.dir, "sub/evil", "evil\n")
+
+			changes, err := h.differ.Changes(bg, job, h.dir, fork)
+
+			ctx.Expect(err).To(specs.BeNil())
+			var paths []string
+			for _, c := range changes {
+				paths = append(paths, c.Path)
+			}
+			ctx.Expect(paths).To(specs.ContainAllOf("sub/.gitignore", "sub/evil"))
+		})
+
+		// A filter the repo's own attributes name still runs (S1c), but the
+		// job's HOME adds none.
+		s.It("reads no attributes file from the job's HOME", func(ctx *specs.Context) {
+			h := newHostile(ctx)
+			write(ctx, h.home, ".config/git/attributes", "data.txt filter=evil\n")
+			must(ctx, h.dir, "config", "filter.evil.clean", h.dump()+"; cat")
+
+			h.changes(ctx)
+
+			ctx.Expect(h.marked()).To(specs.BeFalse())
+		})
+
 		s.It("hands no token to any git it runs, and the job's HOME to each", func(ctx *specs.Context) {
 			h := newHostile(ctx)
 			gitPath, err := exec.LookPath("git")
@@ -203,6 +242,8 @@ func TestDemoHostileRepo(t *testing.T) {
 				}
 			}
 			ctx.Expect(len(homes)).ToEqual(strings.Count(log, "--- git "))
+			ctx.Expect(strings.Count(log, "\nGIT_CONFIG_GLOBAL="+os.DevNull+"\n")).ToEqual(len(homes))
+			ctx.Expect(strings.Count(log, "\nGIT_CONFIG_NOSYSTEM=1\n")).ToEqual(len(homes))
 			for _, line := range homes {
 				ctx.Expect(line).ToEqual("HOME=" + h.home)
 			}

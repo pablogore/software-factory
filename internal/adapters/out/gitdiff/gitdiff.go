@@ -341,10 +341,14 @@ func git(ctx context.Context, home, dir string, args ...string) (string, error) 
 // git diff does to refresh it; hooks the config defines by name still run.
 // GIT_NO_LAZY_FETCH: with a promisor remote in that config, git would fetch
 // an object missing from the store over a transport the builder picked.
+// No global or system config, and no attributes file, which git reads from
+// HOME/.config/git even then: the job's HOME is the builder's to write, and
+// a .gitconfig there could, say, give the scratch repo of ignoredAtBase a
+// template whose core.worktree points at the job's .gitignore files.
 func run(ctx context.Context, home, dir, stdin string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.attributesFile=" + os.DevNull}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(childenv.Base(home), "GIT_NO_LAZY_FETCH=1")
+	cmd.Env = append(childenv.Base(home), "GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
