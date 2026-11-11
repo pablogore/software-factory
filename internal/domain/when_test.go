@@ -110,6 +110,16 @@ func TestWhen(t *testing.T) {
 				"when does not apply: no changed file matches paths ui/**"},
 			{"checks risk even beside a key the job can't evaluate yet", domain.When{Any: []domain.Condition{{Risk: []domain.Risk{domain.RiskHigh}, Labels: []string{"security"}}}}, low, false,
 				"when does not apply: the intake risk is low, not high"},
+			{"applies when every condition of all holds", domain.When{All: []domain.Condition{risk(domain.RiskHigh), surfaces("ui")}}, high, true, ""},
+			{"does not apply when one condition of all fails, and says which", domain.When{All: []domain.Condition{risk(domain.RiskHigh), surfaces("ui")}}, domain.Rating{Risk: domain.RiskHigh, Surfaces: []string{"api"}}, false,
+				"when does not apply: no intake surface matches surfaces ui"},
+			{"gives the reason of every condition of all that fails", domain.When{All: []domain.Condition{risk(domain.RiskHigh), surfaces("ui")}}, low, false,
+				"when does not apply: the intake risk is low, not high; no intake surface matches surfaces ui"},
+			{"applies when all holds and one condition of any holds", domain.When{All: []domain.Condition{risk(domain.RiskHigh)}, Any: []domain.Condition{surfaces("security"), surfaces("ui")}}, high, true, ""},
+			{"does not apply when all holds but no condition of any does", domain.When{All: []domain.Condition{risk(domain.RiskHigh)}, Any: []domain.Condition{surfaces("security")}}, high, false,
+				"when does not apply: no intake surface matches surfaces security"},
+			{"does not apply when a condition of any holds but all does not", domain.When{All: []domain.Condition{risk(domain.RiskHigh)}, Any: []domain.Condition{surfaces("api")}}, low, false,
+				"when does not apply: the intake risk is low, not high"},
 		}
 		specs.Table(s, rows, func(r ratingRow) string { return r.name }, func(ctx *specs.Context, r ratingRow) {
 			ok, reason := r.when.Applies(diff, r.rating)
@@ -135,6 +145,15 @@ func TestWhen(t *testing.T) {
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 			ctx.Expect(err.Error()).ToEqual(r.want)
+		})
+
+		s.It("validates the conditions of all too", func(ctx *specs.Context) {
+			role := domain.Role{Name: "reviewer-big", Kind: domain.KindReview, Mode: domain.ModeBlocking, When: domain.When{All: []domain.Condition{risk("critical")}}}
+
+			err := role.Validate()
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`role reviewer-big: invalid value: when risk "critical", want low, medium or high`)
 		})
 
 		s.It("accepts every operator diff_lines takes", func(ctx *specs.Context) {

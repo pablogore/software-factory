@@ -222,6 +222,17 @@ func TestLoadRole(t *testing.T) {
 			})
 		})
 
+		s.It("loads when conditions under all, beside any", func(ctx *specs.Context) {
+			r, err := configyaml.LoadRole([]byte("name: security-deep\nkind: review\nmode: shadow\nwhen:\n  all:\n    - risk: [high]\n    - surfaces: [auth]\n  any:\n    - paths: [src/**]\n"))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.When.All).ToEqual([]domain.Condition{
+				{Risk: []domain.Risk{domain.RiskHigh}},
+				{Surfaces: []string{"auth"}},
+			})
+			ctx.Expect(r.When.Any).ToEqual([]domain.Condition{{Paths: []string{"src/**"}}})
+		})
+
 		s.It("rejects a when risk level that doesn't exist, naming the role", func(ctx *specs.Context) {
 			_, err := configyaml.LoadRole([]byte("name: security-deep\nkind: review\nmode: shadow\nwhen:\n  any:\n    - risk: [severe]\n"))
 
@@ -270,8 +281,8 @@ func TestLoadRole(t *testing.T) {
 				},
 				{
 					"names the unknown key in when",
-					"name: security-deep\nkind: review\nmode: shadow\nwhen:\n  all:\n    - paths: [src/**]\n",
-					`parse role: invalid value: line 5: unknown key "all"`,
+					"name: security-deep\nkind: review\nmode: shadow\nwhen:\n  none:\n    - paths: [src/**]\n",
+					`parse role: invalid value: line 5: unknown key "none"`,
 				},
 				{
 					"names the unknown key in budget",

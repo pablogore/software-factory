@@ -17,11 +17,13 @@ import (
 )
 
 // ratingRoles are review roles as their files declare them: one with no
-// when, one kept for high risk and one kept for the auth surface.
+// when, one kept for high risk, one kept for the auth surface and one kept
+// for high-risk work on auth.
 var ratingRoles = []string{
 	"name: reviewer-code\nkind: review\nmode: blocking\n",
 	"name: reviewer-risky\nkind: review\nmode: blocking\nwhen:\n  any:\n    - risk: [high]\n",
 	"name: reviewer-auth\nkind: review\nmode: blocking\nwhen:\n  any:\n    - surfaces: [auth, payments]\n",
+	"name: reviewer-risky-auth\nkind: review\nmode: blocking\nwhen:\n  all:\n    - risk: [high]\n    - surfaces: [auth]\n",
 }
 
 type ratingDemoRow struct {
@@ -40,11 +42,17 @@ func TestDemoReviewSkipByIntake(t *testing.T) {
 			{"skips the high-risk and auth roles, with their reasons, on a low-risk job with no surface", domain.RiskLow, []string{}, []domain.ReviewSkipped{
 				{Job: "j-1", Round: 1, Role: "reviewer-risky", Reason: "when does not apply: the intake risk is low, not high", At: at},
 				{Job: "j-1", Round: 1, Role: "reviewer-auth", Reason: "when does not apply: no intake surface matches surfaces auth, payments", At: at},
+				{Job: "j-1", Round: 1, Role: "reviewer-risky-auth", Reason: "when does not apply: the intake risk is low, not high; no intake surface matches surfaces auth", At: at},
 			}},
-			{"skips only the auth role on a high-risk job that touches the ui", domain.RiskHigh, []string{"ui"}, []domain.ReviewSkipped{
+			{"skips the auth roles on a high-risk job that touches the ui", domain.RiskHigh, []string{"ui"}, []domain.ReviewSkipped{
 				{Job: "j-1", Round: 1, Role: "reviewer-auth", Reason: "when does not apply: no intake surface matches surfaces auth, payments", At: at},
+				{Job: "j-1", Round: 1, Role: "reviewer-risky-auth", Reason: "when does not apply: no intake surface matches surfaces auth", At: at},
 			}},
-			{"runs the high-risk role on a job intake never rated", "", nil, nil},
+			{"skips only the high-risk roles on a low-risk job that touches auth", domain.RiskLow, []string{"auth"}, []domain.ReviewSkipped{
+				{Job: "j-1", Round: 1, Role: "reviewer-risky", Reason: "when does not apply: the intake risk is low, not high", At: at},
+				{Job: "j-1", Round: 1, Role: "reviewer-risky-auth", Reason: "when does not apply: the intake risk is low, not high", At: at},
+			}},
+			{"runs the high-risk roles on a job intake never rated", "", nil, nil},
 		}
 		specs.Table(s, rows, func(r ratingDemoRow) string { return r.name }, func(ctx *specs.Context, r ratingDemoRow) {
 			var roles []domain.Role

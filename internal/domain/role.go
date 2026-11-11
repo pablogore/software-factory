@@ -36,14 +36,15 @@ type Role struct {
 var WorkerTools = []string{"submit_result", "progress", "run_gate", "dev_server", "ask_human", "context_pack"}
 
 // When says when a role runs; a role whose conditions don't apply is skipped
-// at no cost. It runs when any one of Any holds.
+// at no cost. It runs when any one of Any holds and every one of All holds.
 type When struct {
 	Any []Condition `json:"any,omitempty"`
+	All []Condition `json:"all,omitempty"`
 }
 
-// Condition is one entry of When.Any. Risk and Surfaces read intake's
-// rating of the job: Risk holds when its risk is one of them, Surfaces when
-// it shares at least one surface with them.
+// Condition is one entry of When.Any or When.All. Risk and Surfaces read
+// intake's rating of the job: Risk holds when its risk is one of them,
+// Surfaces when it shares at least one surface with them.
 type Condition struct {
 	Risk        []Risk   `json:"risk,omitempty"`
 	Surfaces    []string `json:"surfaces,omitempty"`
@@ -130,7 +131,7 @@ func (r Role) Validate() error {
 		}
 	}
 	// A malformed condition would only show when a review round reads it.
-	for _, c := range r.When.Any {
+	for _, c := range slices.Concat(r.When.Any, r.When.All) {
 		if err := c.validate(); err != nil {
 			return fmt.Errorf("role %s: %w", r.Name, err)
 		}

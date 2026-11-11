@@ -30,10 +30,15 @@ type Rating struct {
 // is nil, and surfaces when intake never rated the job. An unrated job's
 // risk counts as high, so a role kept for risky work runs.
 func (w When) Applies(diff *DiffSummary, rating Rating) (bool, string) {
-	if len(w.Any) == 0 {
-		return true, ""
-	}
 	var why []string
+	for _, c := range w.All {
+		if ok, reason := c.holds(diff, rating); !ok {
+			why = append(why, reason)
+		}
+	}
+	if len(why) > 0 {
+		return false, "when does not apply: " + strings.Join(why, "; ")
+	}
 	for _, c := range w.Any {
 		ok, reason := c.holds(diff, rating)
 		if ok {
@@ -41,7 +46,10 @@ func (w When) Applies(diff *DiffSummary, rating Rating) (bool, string) {
 		}
 		why = append(why, reason)
 	}
-	return false, "when does not apply: " + strings.Join(why, "; ")
+	if len(why) > 0 {
+		return false, "when does not apply: " + strings.Join(why, "; ")
+	}
+	return true, ""
 }
 
 // holds reports whether every key c sets holds on diff and rating and,
