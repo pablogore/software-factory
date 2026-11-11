@@ -53,7 +53,7 @@ stages:
 Y en la fábrica (`factory.yaml` o `.factory/` del repo): `pipeline: default`. Otra fábrica puede usar `pipeline: backend` sin ux/ui.
 
 ### Cuándo corre un rol (`when`)
-Un rol de review con `when` corre si se cumple al menos una de las condiciones de `any`; dentro de una condición, tienen que cumplirse todas sus claves. Si ninguna se cumple, el rol se saltea en esa ronda y el historial del job registra el rol, la ronda y el motivo.
+Un rol de review con `when` corre si se cumple al menos una de las condiciones de `any` y se cumplen todas las de `all`; dentro de una condición, tienen que cumplirse todas sus claves. Si un rol pone las dos, tienen que cumplirse las dos. Si no se cumplen, el rol se saltea en esa ronda y el historial del job registra el rol, la ronda y el motivo.
 
 ```yaml
 when:
@@ -63,6 +63,15 @@ when:
     - paths: ["src/auth/**"]       # algún archivo cambiado coincide
     - diff_lines: ">= 200"         # tamaño del diff (líneas agregadas más borradas)
 ```
+
+```yaml
+when:
+  all:                             # corre solo con riesgo alto y si toca auth
+    - risk: [high]
+    - surfaces: [auth]
+```
+
+Las claves de una condición son las mismas en `any` y en `all`.
 
 - `risk`: lista de `low`, `medium` o `high`; otro valor es error de validación. Si el intake no dejó riesgo (jobs aceptados antes de que lo pidiera), cuenta como `high`, así el revisor corre en vez de saltearse.
 - `surfaces`: nombres libres, comparados exactos con los del intake. Un intake que dijo que no hay superficies (`[]`) no comparte ninguna. Si el intake no dejó riesgo, tampoco calificó superficies y la condición cuenta como que aplica.
