@@ -2,6 +2,7 @@ package wiring
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -54,11 +55,37 @@ const (
 	DefaultRunGateMaxOutput = 1 << 20
 )
 
+// RunGateChecks is Gate as a builder's run_gate runs it: the whole call,
+// its checks, its test counts and its git steps alike, ends once Timeout
+// passes, its commands killed with their process group, and it answers with
+// an error wrapping domain.ErrTimedOut, never a failed run. It returns only
+// once what it ran has stopped, so the job's lock is free for the next call.
+// A Timeout not set is DefaultRunGateTimeout.
+type RunGateChecks struct {
+	*build.Gate
+	Timeout time.Duration
+}
+
+// Check implements GateChecks.
+func (c *RunGateChecks) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error) {
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = DefaultRunGateTimeout
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, domain.ErrTimedOut)
+	defer cancel()
+	run, err := c.Gate.Check(ctx, id)
+	if errors.Is(context.Cause(ctx), domain.ErrTimedOut) {
+		return domain.ChecksRun{}, fmt.Errorf("%w: the call ran over %s and was stopped, checks, test counts and git steps included; it has no result, so call again", domain.ErrTimedOut, timeout)
+	}
+	return run, err
+}
+
 // RunGate is Gate as a builder's run_gate runs it, for the worker API: a
-// run past timeout is killed with its process group, and at most maxOutput
-// bytes of each command's output are kept, the run noting either.
-func RunGate(jobs ports.JobStore, p Pipelines, worktrees ports.Workspace, bases ports.BaseLog, clock ports.Clock, locks *gatelock.Locks, homes childenv.Homes, command, countCommand []string, timeout time.Duration, maxOutput int) *build.Gate {
+// call past timeout is stopped, as RunGateChecks says, and at most
+// maxOutput bytes of each command's output are kept, the run noting it.
+func RunGate(jobs ports.JobStore, p Pipelines, worktrees ports.Workspace, bases ports.BaseLog, clock ports.Clock, locks *gatelock.Locks, homes childenv.Homes, command, countCommand []string, timeout time.Duration, maxOutput int) *RunGateChecks {
 	g := Gate(jobs, p, worktrees, bases, clock, locks, homes, command, countCommand)
-	g.Checks = checkrun.Runner{Homes: homes, Timeout: timeout, MaxOutput: maxOutput}
-	return g
+	g.Checks = checkrun.Runner{Homes: homes, MaxOutput: maxOutput}
+	return &RunGateChecks{Gate: g, Timeout: timeout}
 }

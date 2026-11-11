@@ -12,3 +12,7 @@ var (
 // ErrBusy means the operation is already running for the same job, and a
 // second one is refused rather than queued.
 var ErrBusy = errors.New("already running")
+
+// ErrTimedOut means the operation ran over its time limit and was stopped:
+// it has no result, not a failed one.
+var ErrTimedOut = errors.New("timed out")
