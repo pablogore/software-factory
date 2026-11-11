@@ -81,6 +81,22 @@ func (f *fakeAgents) received(ctx *specs.Context, n int) acpfake.Received {
 	return got
 }
 
+// submitted is what the n-th session's fake agent got once it recorded a
+// submit's answer. The fake records it after factoryd saved the result, so
+// a test that saw the job move on may read the file before it does.
+func (f *fakeAgents) submitted(ctx *specs.Context, n int) acpfake.Received {
+	deadline := time.Now().Add(20 * time.Second)
+	got := f.received(ctx, n)
+	for len(got.Submitted) == 0 {
+		if time.Now().After(deadline) {
+			ctx.Testing().Fatal("the session never recorded its submit")
+		}
+		time.Sleep(20 * time.Millisecond)
+		got = f.received(ctx, n)
+	}
+	return got
+}
+
 type failingAgent struct{ err error }
 
 func (a failingAgent) Start(context.Context, ports.SessionSpec) (ports.Session, error) {
@@ -251,7 +267,7 @@ func TestDemoLaunch(t *testing.T) {
 			ctx.Expect(agents.launched()).ToEqual([]string{"builder", "builder"})
 			prompt, err := os.ReadFile("../../roles/builder.md")
 			ctx.Expect(err).To(specs.BeNil())
-			first, second := agents.received(ctx, 0), agents.received(ctx, 1)
+			first, second := agents.received(ctx, 0), agents.submitted(ctx, 1)
 			ctx.Expect(len(first.Prompts)).ToEqual(2)
 			ctx.Expect(first.Prompts[0]).ToEqual(string(prompt))
 			ctx.Expect(second.Prompts).ToEqual([]string{string(prompt)})
@@ -314,7 +330,7 @@ func TestDemoTimeoutRetryListen(t *testing.T) {
 			ctx.Expect(err).To(specs.BeNil())
 			// Cut, not asked again in the hung session: the retry is a new one.
 			ctx.Expect(agents.received(ctx, 0).Prompts).ToEqual([]string{string(prompt)})
-			second := agents.received(ctx, 1)
+			second := agents.submitted(ctx, 1)
 			ctx.Expect(second.Prompts).ToEqual([]string{string(prompt)})
 			ctx.Expect(second.Submitted).ToEqual([]string{"result recorded for job j-1: StageEntered"})
 
