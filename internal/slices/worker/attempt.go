@@ -17,6 +17,10 @@ type Attempts struct {
 	Jobs      jobs
 	Pipelines pipelines
 	Clock     ports.Clock
+
+	// paused holds the agents whose limit a turn ended on, so a Launcher
+	// starts no new session on them until they may go on.
+	paused pauses
 }
 
 // Run prompts s with prompt and waits for its turn to end. It reports true
@@ -29,7 +33,8 @@ type Attempts struct {
 // on job with the reason and the last lines s wrote on stderr, and reports
 // false; no third prompt is sent. A turn that ends on the usage or rate
 // limit of agent, the agent role runs on, is no miss: it revokes token and
-// records a domain.AgentLimited instead, with no retry. A result saved with
+// records a domain.AgentLimited instead, with no retry, and holds agent
+// until the limit lets it go on. A result saved with
 // token before it was revoked still counts. A session that ended counts as
 // a turn without a result.
 func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, agent, token, prompt string) (bool, error) {
@@ -106,8 +111,10 @@ func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (stri
 // limited revokes token, the session's token, and once every submission it
 // made is in records that role's session at job hit agent's limit as end,
 // its turn's end, says, unless one of them saved a result or asked a
-// question. It reports whether one did.
+// question. It reports whether one did. The agent is held until end says
+// it may go on either way: its limit is the agent's, not the job's.
 func (a *Attempts) limited(ctx context.Context, job domain.JobID, role, agent, token string, end domain.AgentProgressed) (bool, error) {
+	a.paused.pause(agent, end.ResumeAt)
 	handed := false
 	err := a.Results.Settle(job, token, func(o Outcome) error {
 		if o.Saved || o.Asked {

@@ -35,12 +35,14 @@ var builderTools = []string{"submit_result", "progress", "run_gate"}
 
 // launchedAgents starts scripted sessions that submit turns with the token
 // their MCP server was given, and records each session's spec; with fail
-// set, no session starts, and with hang set, every turn hangs.
+// set, no session starts, with hang set, every turn hangs, and with limited
+// set, that turn ends on the agent's limit.
 type launchedAgents struct {
-	sub   *worker.Submitter
-	turns []string
-	fail  error
-	hang  bool
+	sub     *worker.Submitter
+	turns   []string
+	fail    error
+	hang    bool
+	limited int
 
 	mu       sync.Mutex
 	specs    []ports.SessionSpec
@@ -56,7 +58,7 @@ func (a *launchedAgents) Start(_ context.Context, _ domain.Role, s ports.Session
 		return nil, a.fail
 	}
 	token := strings.TrimPrefix(s.MCPServers[0].Headers["Authorization"], "Bearer ")
-	sess := &scripted{sub: a.sub, job: s.Job, token: token, turns: a.turns, hang: a.hang, stderr: []string{"still thinking"}}
+	sess := &scripted{sub: a.sub, job: s.Job, token: token, turns: a.turns, hang: a.hang, limited: a.limited, stderr: []string{"still thinking"}}
 	a.sessions = append(a.sessions, sess)
 	gone := make(chan struct{})
 	a.gone = append(a.gone, gone)

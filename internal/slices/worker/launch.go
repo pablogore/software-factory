@@ -32,7 +32,10 @@ const MCPServerName = "factoryd"
 // at once, and its attempt fails, so a hung agent does not hold its slot
 // for ever. The attempts run through Scheduler, so it
 // decides whether and when each launches; an attempt it never launched for
-// the job's spent budget stops the job in needs-human.
+// the job's spent budget stops the job in needs-human. An attempt whose
+// role runs on an agent paused on its usage or rate limit starts no session:
+// it gives its slot up and goes back to Scheduler once the agent may go on,
+// while sessions already running on that agent go on.
 type Launcher struct {
 	Tokens    issuer
 	Jobs      jobs
@@ -172,7 +175,8 @@ func (l *Launcher) claim(key launchKey) bool {
 }
 
 // attempt runs key's attempt in a new session, unless the job left its round
-// or stage entry while it waited for a slot. A role, worktree or agent that fails to start the
+// or stage entry while it waited for a slot, or waits for later when the
+// role's agent is paused on its limit. A role, worktree or agent that fails to start the
 // session is a failed attempt, so the role runs again or the job hits a
 // wall instead of waiting for a session that never came.
 func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
@@ -190,6 +194,10 @@ func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
 	role, prompt, err := l.Roles.Role(ctx, key.role)
 	if err != nil {
 		return l.Attempts.fail(ctx, key.job, key.role, "the role's session could not start: "+err.Error(), nil, nil)
+	}
+	if wait := l.Attempts.paused.pausedFor(role.Agent, l.Attempts.Clock.Now()); wait > 0 {
+		go l.later(ctx, key, wait)
+		return nil
 	}
 	token, err := l.Tokens.Issue(jobtoken.For(job, hist, role))
 	if err != nil {
@@ -217,6 +225,19 @@ func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
 		return err
 	}
 	return l.timedOut(ctx, key, token, sess.Stderr())
+}
+
+// later hands key's attempt to Scheduler again once wait, what is left of
+// its agent's limit, passed. It waits off any slot, so the jobs of other
+// agents take them meanwhile; nothing is handed over once ctx ends.
+func (l *Launcher) later(ctx context.Context, key launchKey, wait time.Duration) {
+	select {
+	case <-l.Clock.After(wait):
+	case <-ctx.Done():
+		return
+	}
+	done := l.Scheduler.Submit(ctx, key.job, func(ctx context.Context) error { return l.attempt(ctx, key) })
+	l.report(ctx, key, done)
 }
 
 // deadline is the context a session runs with, which ends with ctx or once
