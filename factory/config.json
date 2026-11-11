@@ -4,6 +4,7 @@
   "base_branch": "main",
   "allowed_bases": ["main", "arch/factoryd-go"],
   "language": "es",
+  "cost_check": false,
   "checkpoint": "every-slice",
   "merge_method": "merge",
   "labels": {
