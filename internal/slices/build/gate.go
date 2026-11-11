@@ -86,11 +86,11 @@ func (g *Gate) Run(ctx context.Context, id domain.JobID) ([]domain.Event, error)
 	if err != nil {
 		return nil, fmt.Errorf("gate: %w", err)
 	}
-	run, err := g.check(ctx, id, p)
+	run, diff, err := g.check(ctx, id, p)
 	if err != nil {
 		return nil, err
 	}
-	var ev domain.Event = domain.GatePassed{Job: id, Run: run, At: g.Clock.Now()}
+	var ev domain.Event = domain.GatePassed{Job: id, Run: run, Diff: diff, At: g.Clock.Now()}
 	if !run.Passed() {
 		ev = domain.GateFailed{Job: id, Run: run, At: g.Clock.Now()}
 	}
@@ -118,7 +118,8 @@ func (g *Gate) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, er
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("gate: %w", err)
 	}
-	return g.check(ctx, id, p)
+	run, _, err := g.check(ctx, id, p)
+	return run, err
 }
 
 func (g *Gate) configured() error {
@@ -136,23 +137,24 @@ func (g *Gate) configured() error {
 
 // check runs the checks, the diff rules and the test count in the worktree
 // of job id, which follows p, and returns the run with their violations and
-// notes on it.
-func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (domain.ChecksRun, error) {
+// notes on it, and what the job changed against its base, or nil with no
+// base recorded.
+func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (domain.ChecksRun, *domain.DiffSummary, error) {
 	wt, err := g.Worktrees.Prepare(ctx, id)
 	if err != nil {
-		return domain.ChecksRun{}, fmt.Errorf("gate: worktree of %q: %w", id, err)
+		return domain.ChecksRun{}, nil, fmt.Errorf("gate: worktree of %q: %w", id, err)
 	}
-	violations, base, err := g.diffRules(ctx, id, wt.Path, p)
+	violations, base, diff, err := g.diffRules(ctx, id, wt.Path, p)
 	if err != nil {
-		return domain.ChecksRun{}, err
+		return domain.ChecksRun{}, nil, err
 	}
 	count, err := g.countCommand(ctx, id, wt.Path, base)
 	if err != nil {
-		return domain.ChecksRun{}, fmt.Errorf("gate: test count command of %q: %w", id, err)
+		return domain.ChecksRun{}, nil, fmt.Errorf("gate: test count command of %q: %w", id, err)
 	}
 	run, err := g.Checks.Run(ctx, id, wt.Path, g.Command)
 	if err != nil {
-		return domain.ChecksRun{}, fmt.Errorf("gate: checks of %q: %w", id, err)
+		return domain.ChecksRun{}, nil, fmt.Errorf("gate: checks of %q: %w", id, err)
 	}
 	run.Violations = append(run.Violations, violations...)
 	switch {
@@ -163,11 +165,11 @@ func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (d
 	default:
 		dropped, err := g.testCount(ctx, id, count, wt.Path, base)
 		if err != nil {
-			return domain.ChecksRun{}, fmt.Errorf("gate: test count of %q: %w", id, err)
+			return domain.ChecksRun{}, nil, fmt.Errorf("gate: test count of %q: %w", id, err)
 		}
 		run.Violations = append(run.Violations, dropped...)
 	}
-	return run, nil
+	return run, diff, nil
 }
 
 // countCommand is the operator's count command, or else the one the repo
@@ -184,24 +186,32 @@ const NoBase = "no base commit was recorded when the job's worktree was made, so
 
 // diffRules is a reason for each diff rule the worktree at dir breaks
 // against job id's recorded base, or NoBase when it has none, after one for
-// each index flag that hides a file's changes from that diff, and the base,
-// or "" when there is none.
-func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p domain.Pipeline) ([]string, string, error) {
+// each index flag that hides a file's changes from that diff, the base, or
+// "" when there is none, and what the diff changed, or nil with no base.
+func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p domain.Pipeline) ([]string, string, *domain.DiffSummary, error) {
 	flagged, err := g.Diffs.Flagged(ctx, id, dir)
 	if err != nil {
-		return nil, "", fmt.Errorf("gate: index of %q: %w", id, err)
+		return nil, "", nil, fmt.Errorf("gate: index of %q: %w", id, err)
 	}
 	reasons := HiddenByIndex(flagged)
 	base, err := g.Bases.Base(ctx, id)
 	if errors.Is(err, ports.ErrNoBase) {
-		return append(reasons, NoBase), "", nil
+		return append(reasons, NoBase), "", nil, nil
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("gate: base of %q: %w", id, err)
+		return nil, "", nil, fmt.Errorf("gate: base of %q: %w", id, err)
 	}
 	changes, err := g.Diffs.Changes(ctx, id, dir, base)
 	if err != nil {
-		return nil, "", fmt.Errorf("gate: diff of %q: %w", id, err)
+		return nil, "", nil, fmt.Errorf("gate: diff of %q: %w", id, err)
+	}
+	lines, err := g.Diffs.Lines(ctx, id, dir, base)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("gate: diff size of %q: %w", id, err)
+	}
+	diff := &domain.DiffSummary{Lines: lines}
+	for _, c := range changes {
+		diff.Paths = append(diff.Paths, c.Path)
 	}
 	reasons = append(reasons, ReposChanged(changes, Roles(p))...)
 	reasons = append(reasons, ProtectedTouched(changes)...)
@@ -209,9 +219,9 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 	reasons = append(reasons, TestsDeleted(changes)...)
 	marks, err := g.marksAdded(ctx, id, dir, base, changes)
 	if err != nil {
-		return nil, "", fmt.Errorf("gate: tests of %q: %w", id, err)
+		return nil, "", nil, fmt.Errorf("gate: tests of %q: %w", id, err)
 	}
-	return append(reasons, marks...), base, nil
+	return append(reasons, marks...), base, diff, nil
 }
 
 // marksAdded is MarksAdded for each test file changes add or modify, read

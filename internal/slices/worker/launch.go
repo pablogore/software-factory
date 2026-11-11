@@ -144,13 +144,17 @@ func same(a, b domain.Event) bool {
 }
 
 // runningRoles are the roles that run in stage st this round: every role of
-// the stage, or only job.Reviewers when a later review round names them, as
-// decide takes their results.
+// the stage, or only job.Reviewers when a later review round names them,
+// less those whose when does not apply, as decide takes their results.
 func runningRoles(job domain.Job, st domain.Stage) []string {
-	if st.Kind == domain.KindReview && len(job.Reviewers) > 0 {
-		return job.Reviewers
+	if st.Kind != domain.KindReview {
+		return st.Roles
 	}
-	return st.Roles
+	roles := st.Roles
+	if len(job.Reviewers) > 0 {
+		roles = job.Reviewers
+	}
+	return slices.DeleteFunc(slices.Clone(roles), func(role string) bool { return slices.Contains(job.Skipped, role) })
 }
 
 // claim tells whether key was not launched yet, and marks it launched.

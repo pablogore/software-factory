@@ -41,10 +41,12 @@ type bases interface {
 // diffs lists the files a worktree changed against base, the commit its
 // branch was made from, and the files its index marks so that no diff shows
 // their changes, and reads a file as base has it and as the worktree has it,
-// by its path from the repo root; the job picks the environment git runs
-// with, as it does the checks'.
+// by its path from the repo root, and counts the lines the worktree added
+// and deleted against base; the job picks the environment git runs with, as
+// it does the checks'.
 type diffs interface {
 	Changes(ctx context.Context, job domain.JobID, dir, base string) ([]domain.FileChange, error)
+	Lines(ctx context.Context, job domain.JobID, dir, base string) (int, error)
 	Flagged(ctx context.Context, job domain.JobID, dir string) ([]domain.FlaggedFile, error)
 	AtBase(ctx context.Context, job domain.JobID, dir, base, file string) (string, error)
 	InWorktree(ctx context.Context, job domain.JobID, dir, file string) (string, error)

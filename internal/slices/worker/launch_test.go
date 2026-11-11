@@ -374,6 +374,24 @@ func TestLaunch(t *testing.T) {
 			ctx.Expect(roles).ToEqual([]string{"reviewer-code", "reviewer-security"})
 		})
 
+		s.It("launches no session for a reviewer whose when does not apply to the diff", func(ctx *specs.Context) {
+			w := newWorld(ctx)
+			p := reviewPipeline()
+			p.Roles = []domain.Role{{Name: "reviewer-security", Kind: domain.KindReview, Mode: domain.ModeBlocking, When: domain.When{Any: []domain.Condition{{Paths: []string{"auth/**"}}}}}}
+			w.apply(ctx, "j-1", domain.ResultSubmitted{Job: "j-1", Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady}, At: at})
+			gate := domain.GatePassed{Job: "j-1", Run: domain.ChecksRun{Command: "make check"}, Diff: &domain.DiffSummary{Paths: []string{"a.go"}, Lines: 1}, At: at}
+			review := decided[domain.StageEntered](ctx, w, p, "j-1", gate)
+			agents := &launchedAgents{sub: w.sub}
+
+			launch(ctx, w.launcher(p, agents, &inline{}, &lockedBuffer{}), review)
+
+			var roles []string
+			for _, s := range agents.started() {
+				roles = append(roles, s.Role)
+			}
+			ctx.Expect(roles).ToEqual([]string{"reviewer-code"})
+		})
+
 		s.It("records an agent that does not start as a failed attempt", func(ctx *specs.Context) {
 			w := newWorld(ctx)
 			build := enteredBuild(ctx, w, "j-1")

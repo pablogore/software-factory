@@ -211,6 +211,8 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Passed = append(slices.Clip(job.Passed), e.Role)
 		case domain.ChangesRequested:
 			job.Changes = append(slices.Clip(job.Changes), e.Role)
+		case domain.ReviewSkipped:
+			job.Skipped = append(slices.Clip(job.Skipped), e.Role)
 		case domain.SpecRejected:
 			job.SpecRejections = e.Rejections
 		case domain.CapRaised:
@@ -256,9 +258,11 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 			job.Reason = e.Reason
 		}
 		// attempt_retries bounds the attempts of one stage and round, so a
-		// new stage or round starts with every retry.
+		// new stage or round starts with every retry; a skip holds for the
+		// stage and round it was decided in.
 		if job.Stage != stage || job.Round != round {
 			job.AttemptsFailed = 0
+			job.Skipped = nil
 		}
 	}
 	return job
@@ -654,7 +658,7 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 	if len(job.Reviewers) > 0 {
 		round = job.Reviewers
 	}
-	if (len(job.Reviewers) > 0 && !slices.Contains(round, e.Role)) || slices.Contains(job.Passed, e.Role) || slices.Contains(job.Changes, e.Role) {
+	if (len(job.Reviewers) > 0 && !slices.Contains(round, e.Role)) || slices.Contains(job.Passed, e.Role) || slices.Contains(job.Changes, e.Role) || slices.Contains(job.Skipped, e.Role) {
 		return nil, illegal(job, e)
 	}
 	if r.Verdict == domain.ReviewChanges && stage.OnChanges == "" {
@@ -669,7 +673,7 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 		evs = []domain.Event{domain.ChangesRequested{Job: job.ID, Role: e.Role, Findings: r.Findings, At: e.At}}
 	}
 	for _, role := range round {
-		if role != e.Role && !slices.Contains(job.Passed, role) && !slices.Contains(changes, role) {
+		if role != e.Role && !slices.Contains(job.Passed, role) && !slices.Contains(changes, role) && !slices.Contains(job.Skipped, role) {
 			return evs, nil
 		}
 	}
@@ -682,7 +686,7 @@ func reviewed(job domain.Job, e domain.ResultSubmitted, r domain.ReviewResult, p
 		return append(evs, wall(job, p, domain.CauseChanges, reason, e.At)...), nil
 	}
 	return append(evs,
-		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: rerun(p, stage.Roles, changes), At: e.At},
+		domain.RoundStarted{Job: job.ID, Round: job.Round + 1, Reviewers: rerun(p, stage.Roles, changes, job.Skipped), At: e.At},
 		domain.StageEntered{Job: job.ID, Stage: stage.OnChanges, At: e.At},
 	), nil
 }
@@ -696,12 +700,14 @@ func blocks(p domain.Pipeline, role string) bool {
 }
 
 // rerun lists, in stage order, the roles of the next round: every role that
-// asked for CHANGES in this one, whatever its mode, plus the always_rerun ones.
-func rerun(p domain.Pipeline, roles, changes []string) []string {
+// asked for CHANGES in this one, whatever its mode, plus the always_rerun ones
+// and the skipped ones, which have no pass to keep and whose when the next
+// diff may meet.
+func rerun(p domain.Pipeline, roles, changes, skipped []string) []string {
 	var out []string
 	for _, role := range roles {
 		j := slices.IndexFunc(p.Roles, func(r domain.Role) bool { return r.Name == role })
-		if slices.Contains(changes, role) || (j >= 0 && p.Roles[j].AlwaysRerun) {
+		if slices.Contains(changes, role) || slices.Contains(skipped, role) || (j >= 0 && p.Roles[j].AlwaysRerun) {
 			out = append(out, role)
 		}
 	}
@@ -868,7 +874,40 @@ func gatePassed(job domain.Job, e domain.GatePassed, p domain.Pipeline) ([]domai
 	if err := e.Run.Validate(); err != nil {
 		return nil, fmt.Errorf("decide: gate passed: %w", err)
 	}
-	return append([]domain.Event{checksRan(job, e.Run, e.At)}, evs...), nil
+	return append([]domain.Event{checksRan(job, e.Run, e.At)}, skipped(job, e, p, evs)...), nil
+}
+
+// skipped adds to evs, the move past the gate, a ReviewSkipped for each role
+// of the round in the review stage it enters whose when does not apply to
+// the diff e names. When none of the round's roles is left, the round ends
+// there with no verdict to wait for, so the job moves past the review stage.
+func skipped(job domain.Job, e domain.GatePassed, p domain.Pipeline, evs []domain.Event) []domain.Event {
+	entered, ok := evs[len(evs)-1].(domain.StageEntered)
+	i := slices.IndexFunc(p.Stages, func(s domain.Stage) bool { return s.Name == entered.Stage })
+	if !ok || i < 0 || p.Stages[i].Kind != domain.KindReview {
+		return evs
+	}
+	round := p.Stages[i].Roles
+	if len(job.Reviewers) > 0 {
+		round = job.Reviewers
+	}
+	left := 0
+	for _, role := range round {
+		j := slices.IndexFunc(p.Roles, func(r domain.Role) bool { return r.Name == role })
+		if j < 0 {
+			left++
+			continue
+		}
+		if ok, reason := p.Roles[j].When.Applies(e.Diff); ok {
+			left++
+		} else {
+			evs = append(evs, domain.ReviewSkipped{Job: job.ID, Round: job.Round, Role: role, Reason: reason, At: e.At})
+		}
+	}
+	if left == 0 && len(round) > 0 {
+		evs = append(evs, next(job, p, i, e.At)...)
+	}
+	return evs
 }
 
 // gateFailed keeps the checks run with the job, so the next round's builder
