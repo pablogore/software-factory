@@ -180,12 +180,13 @@ Then tell the user, in a few lines:
   CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --model sonnet --strict-mcp-config --setting-sources project,local
   ```
 
-  `--model sonnet` is a recommendation: the orchestrator on sonnet spends less
-  of the usage limit or the API budget than on opus.
+  `--model sonnet` is a recommendation, not a measurement: nobody has yet
+  compared what the orchestrator costs on sonnet and on opus.
   The rest leaves out MCP servers, the user's own settings (`~/.claude/settings.json`)
-  and automatic memory; the project's `.claude/` settings still load. It isn't
-  confirmed yet whether the subagents inherit this setup; that is measured in
-  spike S4.
+  and automatic memory; the project's `.claude/` settings still load. The
+  subagents of a clean session have no MCP servers and no memory either;
+  without these flags they have both. Whether the subagents inherit the user's
+  settings is not confirmed: their transcripts don't show it.
 - Every job ends as a PR. The approver merges what it approves; the rest wait
   labeled `factory:needs-human`. Approve one by merging it on GitHub, or tell
   the factory what to change with `/factory <anything>`.

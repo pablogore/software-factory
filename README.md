@@ -127,12 +127,14 @@ Start the session that runs `/factory` from the project root with:
 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --model sonnet --strict-mcp-config --setting-sources project,local
 ```
 
-`--model sonnet` is a recommendation: the orchestrator on sonnet spends less
-of your usage limit or your API budget than on opus. The rest leaves out MCP
+`--model sonnet` is a recommendation, not a measurement: nobody has yet compared
+what the orchestrator costs on sonnet and on opus. The rest leaves out MCP
 servers, your user settings (`~/.claude/settings.json`) and automatic memory,
 so the orchestrator's context carries only the project's `.claude/` settings
-and the factory itself. It isn't confirmed yet whether the
-subagents inherit this setup; that is measured in spike S4.
+and the factory itself. The subagents of a clean session have no MCP servers
+and no memory either; without these flags they have both. Whether the
+subagents inherit your user settings is not confirmed: their transcripts don't
+show it.
 
 ## The guide
 
