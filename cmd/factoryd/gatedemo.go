@@ -1,20 +1,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/configyaml"
+	"github.com/pablogore/software-factory/internal/adapters/out/gitsafe"
 	"github.com/pablogore/software-factory/internal/adapters/out/gitworktree"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
@@ -110,6 +109,10 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	homes, err := childenv.DefaultHomes()
+	if err != nil {
+		return err
+	}
 	job := domain.Job{ID: gateDemoJob, Title: "Gate demo job", Pipeline: "demo", Stage: domain.StageGate, Round: 1}
 	var store gateStore
 	var ws ports.Workspace
@@ -121,7 +124,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 		if err := mem.Create(ctx, job); err != nil {
 			return err
 		}
-		commit, err := revParse(ctx, abs, *base)
+		commit, err := revParse(ctx, homes, gateDemoJob, abs, *base)
 		if err != nil {
 			return err
 		}
@@ -135,7 +138,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 			return err
 		}
 		defer func() { _ = lite.Close() }()
-		wts := gitworktree.New(abs, *base, lite)
+		wts := gitworktree.New(abs, *base, lite, homes)
 		saved, _, err := lite.Load(ctx, job.ID)
 		if errors.Is(err, ports.ErrJobNotFound) {
 			return makeDemoJob(ctx, lite, wts, job, *base, *dir, *db, out)
@@ -153,10 +156,6 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	if errors.Is(err, ports.ErrNoBase) {
 		commit = "none"
 	} else if err != nil {
-		return err
-	}
-	homes, err := childenv.DefaultHomes()
-	if err != nil {
 		return err
 	}
 	g := wiring.Gate(store, rolePipelines{role}, ws, store, wiring.SystemClock{}, gatelock.New(), homes, strings.Fields(*command), strings.Fields(*count))
@@ -217,14 +216,17 @@ func makeDemoJob(ctx context.Context, store gateStore, ws ports.Workspace, job d
 }
 
 // revParse is the full object name of the commit rev names in the repo at
-// dir.
-func revParse(ctx context.Context, dir, rev string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--end-of-options", rev+"^{commit}")
-	cmd.Dir = dir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("base %q in %s: %w: %s", rev, dir, err, strings.TrimSpace(stderr.String()))
+// dir, read with git run for job with its HOME in homes, as the gate runs
+// git on the job's worktree: dir is the person's, but the job's checks run
+// there and can write its config.
+func revParse(ctx context.Context, homes childenv.Homes, job domain.JobID, dir, rev string) (string, error) {
+	home, err := homes.For(job)
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	out, err := gitsafe.Run(ctx, home, dir, nil, "rev-parse", "--verify", "--end-of-options", rev+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("base %q: %w", rev, err)
+	}
+	return strings.TrimSpace(out), nil
 }

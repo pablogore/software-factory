@@ -110,7 +110,12 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	head, err := revParse(ctx, abs, "HEAD")
+	homes, err := childenv.DefaultHomes()
+	if err != nil {
+		return err
+	}
+	// Every job's worktree is dir, so any job's git may read its HEAD.
+	head, err := revParse(ctx, homes, demoJobs[0], abs, "HEAD")
 	if err != nil {
 		return err
 	}
@@ -150,10 +155,6 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	}
 	if *timeout <= 0 || *maxOutput <= 0 || *maxRuns <= 0 {
 		return fmt.Errorf("%w: -gate-timeout, -gate-max-output and -gate-max-runs must be positive", domain.ErrInvalidValue)
-	}
-	homes, err := childenv.DefaultHomes()
-	if err != nil {
-		return err
 	}
 	locks := gatelock.New()
 	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, locks, homes, strings.Fields(*command), nil, *timeout, *maxOutput, *maxRuns)
