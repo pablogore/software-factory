@@ -1,6 +1,6 @@
 // Package sqlite implements ports.JobStore, ports.EventLog, ports.EventFeed,
-// ports.DeadEvents, ports.Outbox, ports.DiscardLog, ports.BaseLog and
-// ports.BrakeLog on SQLite with the pure-Go modernc.org/sqlite driver, so
+// ports.DeadEvents, ports.Outbox, ports.DiscardLog, ports.BaseLog,
+// ports.BrakeLog and ports.CapLog on SQLite with the pure-Go modernc.org/sqlite driver, so
 // factoryd builds with CGO_ENABLED=0.
 package sqlite
 
@@ -89,10 +89,14 @@ CREATE TABLE IF NOT EXISTS brake (
 	id      INTEGER PRIMARY KEY CHECK (id = 1),
 	engaged INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS issue_caps (
+	issue INTEGER PRIMARY KEY,
+	data  TEXT NOT NULL
+);
 `
 
 // Store is a JobStore, EventLog, EventFeed, DeadEvents, Outbox, DiscardLog,
-// BaseLog and BrakeLog backed by one SQLite file.
+// BaseLog, BrakeLog and CapLog backed by one SQLite file.
 type Store struct {
 	db        *sql.DB
 	maxReason int
