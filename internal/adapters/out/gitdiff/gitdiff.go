@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pablogore/software-factory/internal/domain"
@@ -76,11 +77,22 @@ func (d Differ) Changes(ctx context.Context, job domain.JobID, dir, base string)
 		}
 		changes = append(changes, c)
 	}
+	untracked, err := untrackedChanges(ctx, home, dir, base)
+	if err != nil {
+		return nil, err
+	}
+	return append(changes, untracked...), nil
+}
+
+// untrackedChanges are the untracked files of the worktree at dir that the
+// .gitignore files of base don't ignore, as additions, and the untracked
+// folders with a .git of their own, as nested repos.
+func untrackedChanges(ctx context.Context, home, dir, base string) ([]domain.FileChange, error) {
 	// ":/" lists from the repo root whatever dir is, and --full-name keeps
 	// paths from the root like git diff's. No --exclude-standard: it would
 	// also take .git/info/exclude, core.excludesFile and the branch's own
 	// .gitignore files, which the builder can all write to hide a file.
-	out, err = git(ctx, home, dir, "ls-files", "--others", "--full-name", "-z", "--", ":/")
+	out, err := git(ctx, home, dir, "ls-files", "--others", "--full-name", "-z", "--", ":/")
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +101,7 @@ func (d Differ) Changes(ctx context.Context, job domain.JobID, dir, base string)
 	if err != nil {
 		return nil, err
 	}
+	var changes []domain.FileChange
 	for _, p := range untracked {
 		// Without --directory, git ends an untracked entry in "/" only for a
 		// folder that is a repo of its own.
@@ -101,6 +114,55 @@ func (d Differ) Changes(ctx context.Context, job domain.JobID, dir, base string)
 		}
 	}
 	return changes, nil
+}
+
+// Lines counts the lines the worktree at dir, committed or not, added and
+// deleted against base, as Changes takes it: git's numstat of the tracked
+// files, plus every line of each untracked file Changes lists as added. A
+// binary file and a repo of its own count no lines.
+func (d Differ) Lines(ctx context.Context, job domain.JobID, dir, base string) (int, error) {
+	if !objectName(base) {
+		return 0, fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
+	}
+	home, err := d.home(job)
+	if err != nil {
+		return 0, err
+	}
+	out, err := git(ctx, home, dir, "diff", "--numstat", "--no-renames", "-z", base+"^{commit}", "--")
+	if err != nil {
+		return 0, err
+	}
+	lines := 0
+	for _, f := range nulFields(out) {
+		added, rest, _ := strings.Cut(f, "\t")
+		deleted, _, _ := strings.Cut(rest, "\t")
+		// numstat prints "-" for a binary file.
+		a, errA := strconv.Atoi(added)
+		r, errR := strconv.Atoi(deleted)
+		if errA == nil && errR == nil {
+			lines += a + r
+		}
+	}
+	untracked, err := untrackedChanges(ctx, home, dir, base)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range untracked {
+		if c.Repo != "" {
+			continue
+		}
+		content, err := d.InWorktree(ctx, job, dir, c.Path)
+		if err != nil {
+			return 0, err
+		}
+		if !strings.ContainsRune(content, 0) {
+			lines += strings.Count(content, "\n")
+			if content != "" && !strings.HasSuffix(content, "\n") {
+				lines++
+			}
+		}
+	}
+	return lines, nil
 }
 
 // gitlink is the mode git keeps a submodule's commit with.

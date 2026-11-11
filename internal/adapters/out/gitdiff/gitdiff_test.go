@@ -155,6 +155,25 @@ func TestDiffer(t *testing.T) {
 			})
 		})
 
+		s.It("counts the lines committed or not, untracked files included, and none of an ignored or binary file", func(ctx *specs.Context) {
+			dir, fork := newRepoWith(ctx, map[string]string{".gitignore": "*.log\n"})
+			write(ctx, dir, "a.go", "one\ntwo\n")
+			must(ctx, dir, "add", "a.go")
+			must(ctx, dir, "commit", "-qm", "a")
+			write(ctx, dir, "README.md", "changed\n")
+			write(ctx, dir, "notes/new.txt", "x\ny\nno newline")
+			write(ctx, dir, "build.log", "ignored\nignored\n")
+			write(ctx, dir, "blob.bin", "\x00\x01\n")
+			must(ctx, dir, "rm", "-q", "AGENTS.md")
+
+			lines, err := differ(ctx).Lines(bg, job, dir, fork)
+
+			// a.go 2, README.md 1 added and 1 deleted, AGENTS.md 1 deleted,
+			// notes/new.txt 3.
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(lines).ToEqual(8)
+		})
+
 		s.It("lists an untracked file .git/info/exclude or core.excludesFile hides", func(ctx *specs.Context) {
 			dir, fork := newRepo(ctx)
 			write(ctx, dir, ".git/info/exclude", "hidden_test.go\n")

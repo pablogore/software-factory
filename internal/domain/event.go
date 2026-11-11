@@ -100,11 +100,14 @@ func (SpecRejected) EventName() string { return "SpecRejected" }
 func (e SpecRejected) JobID() JobID { return e.Job }
 
 // GatePassed records that the deterministic gate (checks) passed on the
-// branch; Run is the checks run it judged.
+// branch; Run is the checks run it judged. Diff is what the job changed
+// against its base, which the review roles' when reads; nil when the gate
+// could not tell, as with no base recorded.
 type GatePassed struct {
-	Job JobID     `json:"job"`
-	Run ChecksRun `json:"run"`
-	At  time.Time `json:"at"`
+	Job  JobID        `json:"job"`
+	Run  ChecksRun    `json:"run"`
+	Diff *DiffSummary `json:"diff,omitempty"`
+	At   time.Time    `json:"at"`
 }
 
 // EventName implements Event.
@@ -168,6 +171,23 @@ func (ReviewPassed) EventName() string { return "ReviewPassed" }
 
 // JobID implements Event.
 func (e ReviewPassed) JobID() JobID { return e.Job }
+
+// ReviewSkipped records that a review role of the current stage does not
+// run in this round, and why: its when does not apply to the job's diff. It
+// neither passes nor asks for CHANGES.
+type ReviewSkipped struct {
+	Job    JobID     `json:"job"`
+	Round  int       `json:"round"`
+	Role   string    `json:"role"`
+	Reason string    `json:"reason"`
+	At     time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (ReviewSkipped) EventName() string { return "ReviewSkipped" }
+
+// JobID implements Event.
+func (e ReviewSkipped) JobID() JobID { return e.Job }
 
 // ChangesRequested records that one review role of the current stage asked
 // for CHANGES.

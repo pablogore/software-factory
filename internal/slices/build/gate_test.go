@@ -42,11 +42,13 @@ func (worktrees) Prepare(_ context.Context, job domain.JobID) (ports.Worktree, e
 	return ports.Worktree{Job: job, Path: "/wt/" + string(job), Branch: "factory/" + string(job)}, nil
 }
 
-// diffs answers every diff with changes, or with err, and records against
-// what base it was asked; it answers the index's flags with flagged, or with
-// flagErr, and a file's content with before and after, or with readErr.
+// diffs answers every diff with changes and lines, or with err, and records
+// against what base it was asked; it answers the index's flags with flagged,
+// or with flagErr, and a file's content with before and after, or with
+// readErr.
 type diffs struct {
 	changes []domain.FileChange
+	lines   int
 	err     error
 	dir     string
 	base    string
@@ -60,6 +62,10 @@ type diffs struct {
 func (d *diffs) Changes(_ context.Context, _ domain.JobID, dir, base string) ([]domain.FileChange, error) {
 	d.dir, d.base = dir, base
 	return d.changes, d.err
+}
+
+func (d *diffs) Lines(context.Context, domain.JobID, string, string) (int, error) {
+	return d.lines, d.err
 }
 
 func (d *diffs) Flagged(context.Context, domain.JobID, string) ([]domain.FlaggedFile, error) {
@@ -172,6 +178,21 @@ func TestGate(t *testing.T) {
 				job, _, err := store.Load(bg, "j-1")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(job.Stage).ToEqual("review")
+			})
+
+			s.It("records the diff's paths and size on the pass, for the review roles' when", func(ctx *specs.Context) {
+				d := &diffs{changes: []domain.FileChange{{Path: "a.go", Kind: domain.ChangeModified}, {Path: "ui/b.tsx", Kind: domain.ChangeAdded}}, lines: 42}
+				g, _ := newGateDiff(ctx, domain.StageGate, 1, &checks{run: passing}, d)
+				when := domain.When{Any: []domain.Condition{{Paths: []string{"docs/**"}}, {DiffLines: ">= 50"}}}
+				g.Pipelines = pipelines{roles: []domain.Role{{Name: "reviewer-code", Kind: domain.KindReview, Mode: domain.ModeBlocking, When: when}}}
+
+				evs, err := g.Run(bg, "j-1")
+
+				ctx.Expect(err).To(specs.BeNil())
+				// The stage's only reviewer is skipped, so the round ends with it.
+				ctx.Expect(names(evs)).ToEqual([]string{"ChecksRan", "StageEntered", "ReviewSkipped", "MergeRequested"})
+				ctx.Expect(evs[2]).ToEqual(domain.ReviewSkipped{Job: "j-1", Round: 1, Role: "reviewer-code",
+					Reason: "when does not apply: no changed file matches paths docs/**; the diff has 42 lines, not >= 50", At: at})
 			})
 		})
 
