@@ -142,7 +142,11 @@ func scan(ctx context.Context, home, dir, f string, hooks, filters map[string]bo
 		case section == "filter" && cut > 0:
 			filters[rest[:cut]] = true
 		case (section == "include" || section == "includeif") && strings.HasSuffix(key, ".path") && value != "":
-			if p, ok := includePath(home, f, value); ok {
+			p, ok, err := includePath(home, f, value)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
 				included = append(included, p)
 			}
 		}
@@ -155,10 +159,12 @@ func scan(ctx context.Context, home, dir, f string, hooks, filters map[string]bo
 // relative path is from f's folder. One with a %(prefix)/ is in git's own
 // install, out of the builder's reach. The path is joined as a string and
 // never cleaned, as git does: cleaning drops a link/.. that the OS resolves
-// through the link's target, so it would name a different file.
-func includePath(home, f, value string) (string, bool) {
+// through the link's target, so it would name a different file. A ~name
+// user.Lookup can't find is an error: git may still find it, and read the
+// file.
+func includePath(home, f, value string) (string, bool, error) {
 	if strings.HasPrefix(value, "%(prefix)/") {
-		return "", false
+		return "", false, nil
 	}
 	if strings.HasPrefix(value, "~") {
 		name, _, _ := strings.Cut(value[1:], "/")
@@ -166,16 +172,16 @@ func includePath(home, f, value string) (string, bool) {
 		if name != "" {
 			u, err := user.Lookup(name)
 			if err != nil {
-				return "", false
+				return "", false, fmt.Errorf("gitsafe: cannot resolve include path ~%s: %w", name, err)
 			}
 			dir = u.HomeDir
 		}
-		return dir + value[1+len(name):], true
+		return dir + value[1+len(name):], true, nil
 	}
 	if filepath.IsAbs(value) {
-		return value, true
+		return value, true, nil
 	}
-	return f[:strings.LastIndexAny(f, "/"+string(filepath.Separator))+1] + value, true
+	return f[:strings.LastIndexAny(f, "/"+string(filepath.Separator))+1] + value, true, nil
 }
 
 func sortedKeys(m map[string]bool) []string {
