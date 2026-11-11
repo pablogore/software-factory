@@ -19,6 +19,25 @@ tell the user; never work around it.
 /factory <anything>   talk to the factory: ask about jobs, give feedback, file a feature
 ```
 
+## Spending less
+
+This session lasts the whole run, and everything it writes or reads is paid
+again on every later turn. Keep it lean:
+
+- **Model.** Run the orchestrator on sonnet unless the user asks for another
+  model. If this session runs on another model and the user didn't pick it,
+  tell them once, at the start, to switch with `/model sonnet` (or to start
+  `claude --model sonnet`), and carry on.
+- **Messages.** Tell the user only what they need to know or decide: a job
+  waiting on a human (needs-human, needs-info, a checkpoint, a pause or a cap),
+  a PR ready to merge, and the summary when the run ends. Don't report each
+  transition or each agent that finishes; when there is nothing of that kind,
+  end your turn without a message.
+- **Scripts.** Leave every decision that needs no judgment to the
+  `factory/bin/` scripts: which stage comes next, which jobs to start, which
+  reviewers and models, whether a cap is hit. Run the script and do what it
+  prints; don't work it out in the session or rebuild it from the files.
+
 ## The pipeline
 
 ```
@@ -102,7 +121,7 @@ Spawn every agent with the Agent tool, in the background, with
 `agents` for the reviewers, and never for intake, spec-writer, builder or
 approver: their frontmatter sets it. Each agent replies with one line;
 you are notified when it finishes, and you advance that job then. While agents
-run, don't poll and don't wait: end your turn with a one-line status.
+run, don't poll and don't wait: end your turn (see **Spending less**).
 Whenever a job looks idle (no agent running for it, nothing advancing), run
 `factory/bin/job status` before you wait: it prints one line under each job
 waiting on a human, with the question it asked or why it escalated. Tell the
@@ -167,8 +186,8 @@ Whenever you move a job to `needs-human` and `factory/bin/job` prints
 `triage` instead, the scripts hit a wall and the tech-lead looks first: go to
 **triage**. Escalations from the approver go straight to the human.
 
-Each step below runs when the previous agent or script finishes. Report one
-short line per transition, e.g. `004-dark-mode #12: gate PASS → reviewing (code, ux, ui)`.
+Each step below runs when the previous agent or script finishes. Don't report
+the transitions; tell the user only what **Spending less** lists.
 
 **intake.** Spawn `intake` with `<header>`. It runs once per issue. When it
 returns, read its decision:
