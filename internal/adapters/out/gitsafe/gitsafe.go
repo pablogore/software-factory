@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -24,6 +23,10 @@ import (
 
 // maxIncludes is how deep includes go, git's own limit.
 const maxIncludes = 10
+
+// ErrUserInclude is the error Run fails with when the repo's config includes
+// a file from the home of a user named with ~name/.
+var ErrUserInclude = errors.New("include from another user's home")
 
 // Run runs git in dir with childenv.Base, home as its HOME and env added,
 // and returns its output untrimmed. No hook runs, whether from the hooks
@@ -159,24 +162,21 @@ func scan(ctx context.Context, home, dir, f string, hooks, filters map[string]bo
 // relative path is from f's folder. One with a %(prefix)/ is in git's own
 // install, out of the builder's reach. The path is joined as a string and
 // never cleaned, as git does: cleaning drops a link/.. that the OS resolves
-// through the link's target, so it would name a different file. A ~name
-// user.Lookup can't find is an error: git may still find it, and read the
-// file.
+// through the link's target, so it would name a different file. A ~name is
+// an error, whether its user can be found or not: git finds it with
+// getpwnam, which NSS may answer with another home than user.Lookup's, or
+// at all when user.Lookup can't, so the file scanned here may not be the
+// one git reads.
 func includePath(home, f, value string) (string, bool, error) {
 	if strings.HasPrefix(value, "%(prefix)/") {
 		return "", false, nil
 	}
 	if strings.HasPrefix(value, "~") {
 		name, _, _ := strings.Cut(value[1:], "/")
-		dir := home
 		if name != "" {
-			u, err := user.Lookup(name)
-			if err != nil {
-				return "", false, fmt.Errorf("gitsafe: cannot resolve include path ~%s: %w", name, err)
-			}
-			dir = u.HomeDir
+			return "", false, fmt.Errorf("gitsafe: the config includes %s, from the home of user %s: %w", value, name, ErrUserInclude)
 		}
-		return dir + value[1+len(name):], true, nil
+		return home + value[1:], true, nil
 	}
 	if filepath.IsAbs(value) {
 		return value, true, nil

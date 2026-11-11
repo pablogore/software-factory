@@ -2,8 +2,10 @@ package gitsafe_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,14 +29,18 @@ func git(ctx *specs.Context, dir string, args ...string) string {
 func TestRun(t *testing.T) {
 	specs.Describe(t, "gitsafe.Run", func(s *specs.Spec) {
 		// git resolves ~name with getpwnam, which can find a user
-		// user.Lookup can't, and would read the file and run its hooks. The
-		// include is on a branch the repo isn't on, so the git run here
-		// doesn't expand it but one in a job's worktree would.
-		s.It("fails and runs no git command when the config includes a file from the home of a user it can't resolve", func(ctx *specs.Context) {
+		// user.Lookup can't, or give another home, and would read the file
+		// and run its hooks. The include is on a branch the repo isn't on,
+		// so the git run here doesn't expand it but one in a job's worktree
+		// would.
+		specs.Table(s, userRows(), func(r userRow) string {
+			return "fails and runs no git command when the config includes a file from the home of " + r.name
+		}, func(ctx *specs.Context, r userRow) {
+			name := r.user(ctx)
 			repo := ctx.Testing().TempDir()
 			git(ctx, repo, "init", "-q", "-b", "main")
 			git(ctx, repo, "commit", "-q", "--allow-empty", "-m", "base")
-			git(ctx, repo, "config", "includeIf.onbranch:factory/**.path", "~nosuchuser-xyz/x.inc")
+			git(ctx, repo, "config", "includeIf.onbranch:factory/**.path", "~"+name+"/x.inc")
 			gitPath, err := exec.LookPath("git")
 			ctx.Expect(err).To(specs.BeNil())
 			// From here on every git found on PATH logs its arguments.
@@ -45,11 +51,28 @@ func TestRun(t *testing.T) {
 
 			_, err = gitsafe.Run(context.Background(), ctx.Testing().TempDir(), repo, nil, "tag", "ran")
 
-			ctx.Expect(err).To(specs.Not(specs.BeNil()))
-			ctx.Expect(err.Error()).To(specs.Contain("gitsafe: cannot resolve include path ~nosuchuser-xyz"))
+			ctx.Expect(errors.Is(err, gitsafe.ErrUserInclude)).To(specs.BeTrue())
+			ctx.Expect(err.Error()).To(specs.Contain("~" + name + "/x.inc"))
 			data, err := os.ReadFile(log)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(string(data)).To(specs.Not(specs.Contain("git tag ran")))
 		})
 	})
+}
+
+// userRow names, by user, the user whose home an include is from.
+type userRow struct {
+	name string
+	user func(ctx *specs.Context) string
+}
+
+func userRows() []userRow {
+	return []userRow{
+		{"a user it can't resolve", func(*specs.Context) string { return "nosuchuser-xyz" }},
+		{"a user it can resolve", func(ctx *specs.Context) string {
+			me, err := user.Current()
+			ctx.Expect(err).To(specs.BeNil())
+			return me.Username
+		}},
+	}
 }
