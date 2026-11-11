@@ -9,6 +9,10 @@ import (
 	"testing"
 
 	"github.com/getsyntegrity/go-specs/specs"
+
+	"github.com/pablogore/software-factory/internal/adapters/out/gitworktree"
+	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 )
 
 func TestDemoS5(t *testing.T) {
@@ -50,5 +54,42 @@ func TestDemoS5(t *testing.T) {
 			_, err = run(h.repo, "rev-parse", "--verify", "--quiet", backupRef)
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 		})
+
+		// factoryd serve takes the repo as "." by default, and git drops a
+		// relative GIT_CEILING_DIRECTORIES entry.
+		s.It("fails, and saves nothing, when the worktree's .git is deleted and the repo is given as .", func(ctx *specs.Context) {
+			h := relative(ctx, newHostile(ctx))
+			wt := h.prepare(ctx)
+			dirty(ctx, wt)
+			ctx.Expect(os.Remove(filepath.Join(wt, ".git"))).To(specs.BeNil())
+
+			err := h.ws.Clean(context.Background(), hostileJob)
+
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err.Error()).To(specs.Contain("not a git repository"))
+			_, err = run(h.repo, "rev-parse", "--verify", "--quiet", backupRef)
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+		})
+
+		s.It("backs up the worktree's own files when the repo is given as .", func(ctx *specs.Context) {
+			h := relative(ctx, newHostile(ctx))
+			dirty(ctx, h.prepare(ctx))
+
+			err := h.ws.Clean(context.Background(), hostileJob)
+
+			ctx.Expect(err).To(specs.BeNil())
+			files := must(ctx, h.repo, "--no-replace-objects", "ls-tree", "-r", "--name-only", backupRef)
+			ctx.Expect(files).ToEqual(".gitattributes\ndata.txt\nnew.txt")
+		})
 	})
+}
+
+// relative is h with its Workspace over the repo given as ".", run from the
+// repo, as factoryd serve runs by default.
+func relative(ctx *specs.Context, h hostile) hostile {
+	ctx.Testing().Chdir(h.repo)
+	store, err := memstore.New()
+	ctx.Expect(err).To(specs.BeNil())
+	h.ws = gitworktree.New(".", base, store, childenv.Homes{Root: filepath.Dir(h.home)})
+	return h
 }

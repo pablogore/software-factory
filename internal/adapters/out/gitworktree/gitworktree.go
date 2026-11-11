@@ -166,7 +166,9 @@ func backupRef(job domain.JobID) string {
 }
 
 // worktree names the job's path and branch, refusing ids that would land
-// outside .worktrees.
+// outside .worktrees. The path is absolute whatever the repo was given as:
+// git runs in other folders than the one the repo is relative to, and drops
+// a relative GIT_CEILING_DIRECTORIES entry.
 func (w *Workspace) worktree(job domain.JobID) (ports.Worktree, error) {
 	id := string(job)
 	if id == "" {
@@ -175,9 +177,13 @@ func (w *Workspace) worktree(job domain.JobID) (ports.Worktree, error) {
 	if id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
 		return ports.Worktree{}, fmt.Errorf("job id %q: %w", id, domain.ErrInvalidValue)
 	}
+	path, err := filepath.Abs(filepath.Join(w.repo, ".worktrees", id))
+	if err != nil {
+		return ports.Worktree{}, err
+	}
 	return ports.Worktree{
 		Job:    job,
-		Path:   filepath.Join(w.repo, ".worktrees", id),
+		Path:   path,
 		Branch: "factory/" + id,
 	}, nil
 }
