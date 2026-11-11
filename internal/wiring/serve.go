@@ -181,6 +181,10 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 		cancel()
 		return fail("subscribers", err)
 	}
+	if err := SubscribeSpecgate(events, Specgate(store, pipelines, cfg.Clock)); err != nil {
+		cancel()
+		return fail("subscribers", err)
+	}
 	// The bus hands the launcher its own context, which ends with the
 	// tick; the sessions it launches run with work instead.
 	launch := func(_ context.Context, ev domain.Event) error { return launcher.Launch(work, ev) }
