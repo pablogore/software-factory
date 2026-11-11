@@ -344,6 +344,30 @@ func (AttemptFailed) EventName() string { return "AttemptFailed" }
 // JobID implements Event.
 func (e AttemptFailed) JobID() JobID { return e.Job }
 
+// AgentLimited records that Role's session on the job ended because Agent,
+// the agent the role runs on, hit its provider's usage or rate limit. It is
+// not a failed attempt: it spends none of the job's attempt_retries and no
+// round. The job is paused in its stage until ResumeAt, when the agent said
+// it may go on or its adapter's default wait after the limit. Reason is the
+// agent's own words, data only: Decide never parses it or routes on it.
+//
+// Nothing relaunches the stage on its own yet: until it does, a person ends
+// the pause by stopping the job, as from any stage.
+type AgentLimited struct {
+	Job      JobID     `json:"job"`
+	Role     string    `json:"role"`
+	Agent    string    `json:"agent,omitempty"`
+	Reason   string    `json:"reason"`
+	ResumeAt time.Time `json:"resume_at"`
+	At       time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (AgentLimited) EventName() string { return "AgentLimited" }
+
+// JobID implements Event.
+func (e AgentLimited) JobID() JobID { return e.Job }
+
 // AttemptRetried records that Role runs again on the job in a new session
 // after its failed attempt, the Retry-th time in the job's stage and round.
 // The job stays where it is.

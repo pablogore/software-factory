@@ -22,7 +22,8 @@ var fuzzStages = []string{"intake", "spec", domain.StageSpecgate, "build", domai
 // unknown limit, budget raises from every kind of author, without a name,
 // for an issue cap and to no amount, a completed merge, a failed one, a spent
 // budget, a refused external action with and without a key, a failed
-// attempt with and without a reason and one from triage's role, an agent's progress with and without a
+// attempt with and without a reason and one from triage's role, an agent's
+// limit with and without a reason or when it resumes, an agent's progress with and without a
 // message, triage's RETRY
 // and ESCALATE, one from another role and every missing or nil event of
 // nilEvents.
@@ -52,6 +53,8 @@ func fuzzEvents() []domain.Event {
 		refused(1), domain.ActionFailed{Job: jobID, Key: " ", Kind: "comment", Error: "403 forbidden", At: at(1)},
 		failedAttempt(1), domain.AttemptFailed{Job: jobID, Role: "builder", Reason: " ", At: at(1)},
 		domain.AttemptFailed{Job: jobID, Role: "tech-lead", Reason: "no result submitted", At: at(1)},
+		agentLimited(1), domain.AgentLimited{Job: jobID, Role: "builder", Reason: " ", ResumeAt: at(30), At: at(1)},
+		domain.AgentLimited{Job: jobID, Role: "builder", Reason: "rate limited", At: at(1)},
 		progressed("running the tests", 1), progressed("", 1),
 		mergeFailed("conflict in go.sum", 1), triageRetry(1), triageEscalate(1),
 		result("builder", 1, domain.TriageResult{Decision: domain.TriageRetry, Brief: triageBrief}))
@@ -78,8 +81,9 @@ func fuzzEvents() []domain.Event {
 // from an allowed person changes nothing and is not an error, that one moves
 // the job only out of needs-human for a spent budget and always with its
 // history entry first, and that a missing or nil event is an error, never a
-// panic, and that no job keeps more failed attempts than its attempt_retries
-// without leaving its stage and round.
+// panic, that no job keeps more failed attempts than its attempt_retries
+// without leaving its stage and round, and that an agent's limit leaves the
+// job in its stage and round with no failed attempt more.
 func FuzzDecide(f *testing.F) {
 	for i := range fuzzEvents() {
 		f.Add(uint8(i), uint8(i), uint8(0), uint8(1))
@@ -128,6 +132,9 @@ func FuzzDecide(f *testing.F) {
 		}
 		if after.AttemptsFailed > domain.DefaultAttemptRetries {
 			t.Fatalf("%d failed attempts in stage %q round %d, over attempt_retries %d", after.AttemptsFailed, after.Stage, after.Round, domain.DefaultAttemptRetries)
+		}
+		if _, ok := ev.(domain.AgentLimited); ok && err1 == nil && (after.Stage != job.Stage || after.Round != job.Round || after.AttemptsFailed != job.AttemptsFailed || after.Limited == nil) {
+			t.Fatalf("agent's limit moved the job in stage %q round %d: %+v", job.Stage, job.Round, after)
 		}
 		if (after.Stage != job.Stage || after.Round != job.Round) && after.AttemptsFailed != 0 {
 			t.Fatalf("stage %q round %d keeps %d failed attempts from stage %q round %d", after.Stage, after.Round, after.AttemptsFailed, job.Stage, job.Round)

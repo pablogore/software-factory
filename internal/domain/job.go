@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Stages a job can be in that are not pipeline stages: the deterministic gates
 // after a spec and after a build, the end of the pipeline, the wait for a
@@ -44,6 +47,7 @@ type Job struct {
 	Wall           HumanCause     `json:"wall,omitempty"`            // in triage, the cause the job waits in needs-human with if triage escalates
 	Budget         float64        `json:"budget_usd,omitempty"`      // the job's own budget a person raised; 0 is the scheduler's
 	Paused         *Paused        `json:"paused,omitempty"`          // in needs-human for a spent budget, where the job was
+	Limited        *Limited       `json:"limited,omitempty"`         // in a pipeline stage or triage, the agent's limit the job is paused on; cleared when the stage or round changes
 	WaitSeq        int            `json:"wait_seq"`                  // entries into needs-human, needs-info or done so far; a person's action names the one it answers
 	Passed         []string       `json:"passed,omitempty"`          // review roles of the current stage that passed
 	Changes        []string       `json:"changes,omitempty"`         // review roles of the current stage that asked for CHANGES
@@ -66,6 +70,17 @@ type Paused struct {
 	Reason string     `json:"reason,omitempty"`
 	Wall   HumanCause `json:"wall,omitempty"`
 	Spent  float64    `json:"spent_usd"`
+}
+
+// Limited is the usage or rate limit of an agent a job is paused on, in the
+// stage it hit it: the Role whose session hit it, the Agent that role runs
+// on, the agent's own words in Reason, data only, and Until, when the agent
+// said it may go on or factoryd's default wait after the limit.
+type Limited struct {
+	Role   string    `json:"role"`
+	Agent  string    `json:"agent,omitempty"`
+	Reason string    `json:"reason"`
+	Until  time.Time `json:"until"`
 }
 
 // Validate checks the invariants Apply keeps on every job Decide folds: a
