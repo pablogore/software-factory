@@ -51,7 +51,14 @@ func TestResult(t *testing.T) {
 
 		s.When("checking verdicts", func(s *specs.Spec) {
 			rows := []verdictRow{
-				{"intake ACCEPT", domain.IntakeResult{Decision: domain.IntakeAccept}, true},
+				{"intake ACCEPT with risk and surfaces", domain.IntakeResult{Decision: domain.IntakeAccept, Risk: domain.RiskMedium, Surfaces: &[]string{"ui", "security"}}, true},
+				{"intake ACCEPT with risk and no surfaces", domain.IntakeResult{Decision: domain.IntakeAccept, Risk: domain.RiskHigh, Surfaces: &[]string{}}, true},
+				{"intake ACCEPT without risk", domain.IntakeResult{Decision: domain.IntakeAccept, Surfaces: &[]string{}}, false},
+				{"intake ACCEPT with risk critical", domain.IntakeResult{Decision: domain.IntakeAccept, Risk: "critical", Surfaces: &[]string{}}, false},
+				{"intake ACCEPT saying nothing about surfaces", domain.IntakeResult{Decision: domain.IntakeAccept, Risk: domain.RiskLow}, false},
+				{"intake ACCEPT with a blank surface", domain.IntakeResult{Decision: domain.IntakeAccept, Risk: domain.RiskLow, Surfaces: &[]string{"ui", " "}}, false},
+				{"intake NEEDS_INFO without risk or surfaces", domain.IntakeResult{Decision: domain.IntakeNeedsInfo}, true},
+				{"intake REJECT without risk or surfaces", domain.IntakeResult{Decision: domain.IntakeReject, Reason: "duplicate"}, true},
 				{"intake MAYBE", domain.IntakeResult{Decision: "MAYBE"}, false},
 				{"spec with body", domain.SpecResult{Spec: "# S1"}, true},
 				{"spec empty", domain.SpecResult{}, false},

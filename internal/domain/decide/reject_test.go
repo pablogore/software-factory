@@ -122,7 +122,7 @@ func TestReject(t *testing.T) {
 		s.When("an event arrives on the rejected job", func(s *specs.Spec) {
 			rows := append([]eventRow{
 				{"refuses another intake REJECT", rejectIntake("still a duplicate", 2)},
-				{"refuses an intake ACCEPT", result("intake", 2, domain.IntakeResult{Decision: domain.IntakeAccept})},
+				{"refuses an intake ACCEPT", result("intake", 2, accept())},
 				{"refuses an intake NEEDS_INFO", needsInfo()},
 				{"refuses a spec", result("spec-writer", 2, domain.SpecResult{Title: "S1", Spec: "# S1"})},
 				{"refuses a builder READY", result("builder", 2, domain.BuildResult{Status: domain.BuildReady})},

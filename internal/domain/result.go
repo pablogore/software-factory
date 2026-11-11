@@ -19,6 +19,16 @@ const (
 	IntakeReject    IntakeDecision = "REJECT"
 )
 
+// Risk is how much an accepted change can break, as intake rates it.
+type Risk string
+
+// Risk levels, the same as routing in the factory on main.
+const (
+	RiskLow    Risk = "low"
+	RiskMedium Risk = "medium"
+	RiskHigh   Risk = "high"
+)
+
 // Slice is one piece of work an accepted intake splits the ticket into.
 type Slice struct {
 	ID    string `json:"id"`
@@ -27,19 +37,44 @@ type Slice struct {
 
 // IntakeResult starts, asks about or discards a ticket. Reason is the intake
 // agent's own words, kept on a rejected job; it is optional, so results
-// written before it existed still validate.
+// written before it existed still validate. Risk and Surfaces are intake's
+// rating, kept on an accepted job. Surfaces is a pointer so an ACCEPT that
+// says nothing about them (nil) differs from one that says none ([]).
 type IntakeResult struct {
 	Decision IntakeDecision `json:"decision"`
 	Slices   []Slice        `json:"slices,omitempty"`
 	Reason   string         `json:"reason,omitempty"`
+	Risk     Risk           `json:"risk,omitempty"`
+	Surfaces *[]string      `json:"surfaces,omitempty"`
 }
 
 // Kind implements Result.
 func (IntakeResult) Kind() Kind { return KindIntake }
 
-// Validate implements Result.
+// Validate implements Result. An ACCEPT needs its risk and a statement of
+// its surfaces, an empty list when there are none; NEEDS_INFO and REJECT
+// need neither. Surfaces are free names, so only a blank one is invalid.
 func (r IntakeResult) Validate() error {
-	return oneOf("decision", r.Decision, IntakeAccept, IntakeNeedsInfo, IntakeReject)
+	if err := oneOf("decision", r.Decision, IntakeAccept, IntakeNeedsInfo, IntakeReject); err != nil {
+		return err
+	}
+	if r.Risk != "" || r.Decision == IntakeAccept {
+		if err := oneOf("risk", r.Risk, RiskLow, RiskMedium, RiskHigh); err != nil {
+			return err
+		}
+	}
+	if r.Surfaces == nil {
+		if r.Decision == IntakeAccept {
+			return fmt.Errorf("%w: surfaces (an empty list when there are none)", ErrMissingField)
+		}
+		return nil
+	}
+	for i, name := range *r.Surfaces {
+		if Blank(name) {
+			return fmt.Errorf("%w: surfaces[%d] is blank", ErrInvalidValue, i)
+		}
+	}
+	return nil
 }
 
 // SpecResult carries the structured spec that specgate checks next.

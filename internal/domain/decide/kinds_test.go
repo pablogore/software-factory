@@ -29,7 +29,7 @@ type kindRow struct {
 func TestKinds(t *testing.T) {
 	specs.Describe(t, "Decide on every kind's results", func(s *specs.Spec) {
 		rows := []kindRow{
-			{"decides an intake ACCEPT", "intake", "intake", domain.IntakeResult{Decision: domain.IntakeAccept}, false},
+			{"decides an intake ACCEPT", "intake", "intake", accept(), false},
 			{"decides an intake NEEDS_INFO", "intake", "intake", domain.IntakeResult{Decision: domain.IntakeNeedsInfo}, false},
 			{"decides an intake REJECT", "intake", "intake", domain.IntakeResult{Decision: domain.IntakeReject}, false},
 			{"decides a spec", "spec", "spec-writer", domain.SpecResult{Title: "S1", Spec: "# S1"}, false},

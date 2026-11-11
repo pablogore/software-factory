@@ -376,6 +376,21 @@ func (NeedsInfo) EventName() string { return "NeedsInfo" }
 // JobID implements Event.
 func (e NeedsInfo) JobID() JobID { return e.Job }
 
+// IntakeAccepted records intake's rating of an accepted job: its Risk and
+// its Surfaces, empty when intake said there are none.
+type IntakeAccepted struct {
+	Job      JobID     `json:"job"`
+	Risk     Risk      `json:"risk"`
+	Surfaces []string  `json:"surfaces"`
+	At       time.Time `json:"at"`
+}
+
+// EventName implements Event.
+func (IntakeAccepted) EventName() string { return "IntakeAccepted" }
+
+// JobID implements Event.
+func (e IntakeAccepted) JobID() JobID { return e.Job }
+
 // JobRejected records that intake discarded the ticket: the job ends
 // rejected, final, with Reason. On a slice job it comes with a
 // ReplanRequested. Reason is agent-written text, data only:
