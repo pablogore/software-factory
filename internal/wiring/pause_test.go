@@ -66,7 +66,8 @@ func TestDemoAgentPause(t *testing.T) {
 				// j-3's reviewer and approver, on codex, pass the branch.
 				{Turns: []acpfake.Turn{{Submit: json.RawMessage(`{"verdict":"PASS"}`)}}},
 				{Turns: []acpfake.Turn{{Submit: json.RawMessage(`{"decision":"APPROVE"}`)}}},
-				// j-2's builder, on claude once its hour passed.
+				// j-1's and j-2's builders, on claude once its hour passed.
+				{Turns: []acpfake.Turn{{Submit: ready}}},
 				{Turns: []acpfake.Turn{{Submit: ready}}},
 			}}
 			cfg := launchConfig(ctx, clk, agents, &syncBuffer{})
@@ -91,14 +92,15 @@ func TestDemoAgentPause(t *testing.T) {
 			ctx.Expect(history(ctx, cfg.Store, "j-2")).ToEqual([]string{"StageEntered(build)"})
 
 			clk.Advance(limited.Until.Sub(clk.Now()))
-			tickUntil(ctx, clk, func() bool { return load("j-2").Stage == domain.StageGate })
+			tickUntil(ctx, clk, func() bool {
+				return load("j-1").Stage == domain.StageGate && load("j-2").Stage == domain.StageGate
+			})
 
-			ctx.Expect(agents.launched()).ToEqual([]string{"builder", "reviewer-code", "approver", "builder"})
+			ctx.Expect(agents.launched()).ToEqual([]string{"builder", "reviewer-code", "approver", "builder", "builder"})
 			ctx.Expect(history(ctx, cfg.Store, "j-2")).ToEqual([]string{"StageEntered(build)", "StageEntered(gate)"})
-			// The job that hit the limit stays paused: relaunching it is not
-			// this slice's.
-			ctx.Expect(load("j-1").Stage).ToEqual("build")
-			ctx.Expect(load("j-1").Limited).To(specs.Not(specs.BeNil()))
+			// The job that hit the limit runs its stage again, spending no
+			// attempt.
+			ctx.Expect(history(ctx, cfg.Store, "j-1")).ToEqual([]string{"StageEntered(build)", "AgentLimited", "StageEntered(gate)"})
 
 			stop()
 			ctx.Expect(<-done).To(specs.BeNil())

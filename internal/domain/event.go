@@ -351,8 +351,8 @@ func (e AttemptFailed) JobID() JobID { return e.Job }
 // it may go on or its adapter's default wait after the limit. Reason is the
 // agent's own words, data only: Decide never parses it or routes on it.
 //
-// Nothing relaunches the stage on its own yet: until it does, a person ends
-// the pause by stopping the job, as from any stage.
+// Once ResumeAt passed, factoryd serve runs the role again in a new
+// session, also after a restart, which reads the pause back from the job.
 type AgentLimited struct {
 	Job      JobID     `json:"job"`
 	Role     string    `json:"role"`
