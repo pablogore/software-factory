@@ -119,6 +119,19 @@ the wait. To change an escalated PR, tell the factory what you want with
 something different: that goes to the replan. To drop a job that waits on you
 or on its author, tell the factory to reject it. 
 
+## A clean session
+
+Start the session that runs `/factory` from the project root with:
+
+```bash
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --strict-mcp-config --setting-sources project,local
+```
+
+It leaves out MCP servers, your user settings (`~/.claude/settings.json`) and
+automatic memory, so the orchestrator's context carries only the project's
+`.claude/` settings and the factory itself. It isn't confirmed yet whether the
+subagents inherit this setup; that is measured in spike S4.
+
 ## The guide
 
 This folder is the companion to **A Developer's Guide to Software Factories**,
@@ -185,7 +198,9 @@ jobs, copy `examples/jobs/` to `factory/jobs/` first.
 
 Cost is the API-equivalent price of each job's agents, read from Claude Code's
 transcripts. On a subscription plan it shows where the spend goes, not what
-you're billed.
+you're billed. `factory/bin/job summary` shows the orchestrator's total apart
+(`total agents $X, orchestrator $Y`): each orchestrator session counts once,
+however many jobs it ran, and stays out of each job's cost.
 
 ## The example jobs
 

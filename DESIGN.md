@@ -155,7 +155,9 @@ with model and token counts per message, to
 with the job's folder, so `factory/bin/job` sums the transcripts that name it
 and prices them with `prices_usd_per_mtok`. The figure is the API-equivalent
 cost of the job's agents; on a subscription it shows relative spend, not your
-bill. The orchestrator's own tokens aren't attributed to a job. The
+bill. The orchestrator's own tokens aren't attributed to a job: `job summary`
+shows the orchestrator's total apart, from each `<session>.jsonl` next to the
+subagents it ran, counted once per session and left out of every job's cost. The
 transcript format isn't a documented interface, so a Claude Code update could
 break this.
 
