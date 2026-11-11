@@ -60,6 +60,7 @@ func samples() []sample {
 		{"ActionFailed", domain.ActionFailed{Job: id, Key: "job-1/comment/1", Kind: "comment", Error: "403 forbidden", At: t}},
 		{"AttemptFailed", domain.AttemptFailed{Job: id, Role: "builder", Reason: "no result submitted", Stderr: []string{"error: model overloaded"}, At: t}},
 		{"AttemptRetried", domain.AttemptRetried{Job: id, Role: "builder", Retry: 1, At: t}},
+		{"AgentLimited", domain.AgentLimited{Job: id, Role: "builder", Agent: "claude", Reason: "rate limited", ResumeAt: t.Add(time.Hour), At: t}},
 		{"NeedsInfo", domain.NeedsInfo{Job: id, From: "intake", Question: "Dark mode for everyone?", At: t}},
 		{"IntakeAccepted", domain.IntakeAccepted{Job: id, Risk: domain.RiskMedium, Surfaces: []string{"ui"}, At: t}},
 		{"JobRejected", domain.JobRejected{Job: id, Reason: "duplicate", At: t}},

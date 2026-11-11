@@ -57,6 +57,7 @@ var codecs = func() map[string]codec {
 	add(register[domain.ActionFailed]())
 	add(register[domain.AttemptFailed]())
 	add(register[domain.AttemptRetried]())
+	add(register[domain.AgentLimited]())
 	add(register[domain.NeedsInfo]())
 	add(register[domain.IntakeAccepted]())
 	add(register[domain.JobRejected]())

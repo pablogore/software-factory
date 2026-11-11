@@ -65,6 +65,9 @@ type Turn struct {
 	StopReason string `json:"stop_reason,omitempty"`
 	// Exit makes the agent exit after its updates, without answering.
 	Exit bool `json:"exit,omitempty"`
+	// Error, when set, answers the prompt with this JSON-RPC error after
+	// the updates, as an agent does that hit its provider's limit.
+	Error *Error `json:"error,omitempty"`
 	// Hang makes the agent work on after its updates until it is cancelled,
 	// then answer with the cancelled stop reason.
 	Hang bool `json:"hang,omitempty"`
@@ -97,6 +100,14 @@ type Permission struct {
 	// Params, when set, is sent as the request's params as it is, in
 	// place of the rest, such as params the client cannot read.
 	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// Error is a JSON-RPC error a turn answers its prompt with: its code, its
+// message and, when set, its data as it is.
+type Error struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 // Usage is the tokens a turn reports.
@@ -157,8 +168,9 @@ type message struct {
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 // errExit is how a turn with Exit stops Serve.
@@ -329,6 +341,9 @@ func (f *fake) prompt(m message) error {
 	}
 	if t.Exit {
 		return errExit
+	}
+	if t.Error != nil {
+		return f.write(message{ID: m.ID, Error: &rpcError{Code: t.Error.Code, Message: t.Error.Message, Data: t.Error.Data}})
 	}
 	if t.Hang {
 		f.hanging = &m

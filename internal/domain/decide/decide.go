@@ -158,6 +158,8 @@ func Decide(job domain.Job, ev domain.Event, p domain.Pipeline) ([]domain.Event,
 		return actionFailed(job, e)
 	case domain.AttemptFailed:
 		return attemptFailed(job, e, p)
+	case domain.AgentLimited:
+		return agentLimited(job, e, p)
 	case domain.AgentProgressed:
 		return agentProgressed(job, e)
 	case domain.HumanAsked:
@@ -196,6 +198,8 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		switch e := ev.(type) {
 		case domain.AttemptFailed:
 			job.AttemptsFailed++
+		case domain.AgentLimited:
+			job.Limited = &domain.Limited{Role: e.Role, Agent: e.Agent, Reason: e.Reason, Until: e.ResumeAt}
 		case domain.StageEntered:
 			job.Stage, job.InfoFrom, job.Passed, job.Changes = e.Stage, "", nil, nil
 			job = leftNeedsHuman(job)
@@ -261,10 +265,12 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		}
 		// attempt_retries bounds the attempts of one stage and round, so a
 		// new stage or round starts with every retry; a skip holds for the
-		// stage and round it was decided in.
+		// stage and round it was decided in, and so does a pause on an
+		// agent's limit.
 		if job.Stage != stage || job.Round != round {
 			job.AttemptsFailed = 0
 			job.Skipped = nil
+			job.Limited = nil
 		}
 	}
 	return job
@@ -813,6 +819,27 @@ func attemptFailed(job domain.Job, e domain.AttemptFailed, p domain.Pipeline) ([
 		return []domain.Event{e, domain.NeedsHuman{Job: job.ID, Reason: reason, Cause: domain.CauseAttemptFailed, At: e.At}}, nil
 	}
 	return append([]domain.Event{e}, wall(job, p, domain.CauseAttemptFailed, reason, e.At)...), nil
+}
+
+// agentLimited records that a role's session hit its agent's usage or rate
+// limit and pauses the job in its stage until the agent may go on. Unlike a
+// failed attempt it counts nothing, so the pause spends no retry and no
+// round. Only a pipeline stage or triage runs agents, so a limit anywhere
+// else is illegal.
+func agentLimited(job domain.Job, e domain.AgentLimited, p domain.Pipeline) ([]domain.Event, error) {
+	if job.Stage != domain.StageTriage && !slices.ContainsFunc(p.Stages, func(s domain.Stage) bool { return s.Name == job.Stage }) {
+		return nil, illegal(job, e)
+	}
+	if err := domain.ValidateRoleName(e.Role); err != nil {
+		return nil, fmt.Errorf("decide: agent limited: %w", err)
+	}
+	if domain.Blank(e.Reason) {
+		return nil, fmt.Errorf("decide: agent limited without a reason: %w", domain.ErrMissingField)
+	}
+	if e.ResumeAt.IsZero() {
+		return nil, fmt.Errorf("decide: agent limited without when it resumes: %w", domain.ErrMissingField)
+	}
+	return []domain.Event{e}, nil
 }
 
 // agentProgressed records a message an agent reported while it works, in

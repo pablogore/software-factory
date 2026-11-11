@@ -16,7 +16,9 @@ const (
 	// do not report it send none.
 	ProgressUsage ProgressKind = "usage"
 	// ProgressEnded is the end of the turn: StopReason says why the agent
-	// stopped, or Error why the turn failed.
+	// stopped, or Error why the turn failed. A turn cut by the agent's usage
+	// or rate limit ends with StopLimited, the agent's words in Reason and
+	// when it may go on in ResumeAt.
 	ProgressEnded ProgressKind = "ended"
 	// ProgressPermissionDenied is a permission the agent asked for and
 	// factoryd denied: ToolCall names the call, Text the tool and Reason why.
@@ -35,6 +37,9 @@ const (
 	StopCancelled = "cancelled"
 	// StopTimedOut is a turn of a session that ran past its time limit.
 	StopTimedOut = "timed_out"
+	// StopLimited is a turn the agent ended because it hit its provider's
+	// usage or rate limit, as its adapter recognized in its answer.
+	StopLimited = "limited"
 )
 
 // AgentProgressed records what an agent working on the job reported during a
@@ -52,6 +57,7 @@ type AgentProgressed struct {
 	StopReason   string       `json:"stop_reason,omitempty"`
 	Error        string       `json:"error,omitempty"`
 	Reason       string       `json:"reason,omitempty"`
+	ResumeAt     time.Time    `json:"resume_at,omitzero"`
 	At           time.Time    `json:"at"`
 }
 
