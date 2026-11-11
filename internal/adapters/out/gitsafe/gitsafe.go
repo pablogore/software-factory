@@ -153,13 +153,15 @@ func scan(ctx context.Context, home, dir, f string, hooks, filters map[string]bo
 // includePath is the file an include in the config file f names with
 // value, resolved as git does: ~ is home, the HOME git runs with, and a
 // relative path is from f's folder. One with a %(prefix)/ is in git's own
-// install, out of the builder's reach.
+// install, out of the builder's reach. The path is joined as a string and
+// never cleaned, as git does: cleaning drops a link/.. that the OS resolves
+// through the link's target, so it would name a different file.
 func includePath(home, f, value string) (string, bool) {
 	if strings.HasPrefix(value, "%(prefix)/") {
 		return "", false
 	}
 	if strings.HasPrefix(value, "~") {
-		name, rest, _ := strings.Cut(value[1:], "/")
+		name, _, _ := strings.Cut(value[1:], "/")
 		dir := home
 		if name != "" {
 			u, err := user.Lookup(name)
@@ -168,12 +170,12 @@ func includePath(home, f, value string) (string, bool) {
 			}
 			dir = u.HomeDir
 		}
-		return filepath.Join(dir, rest), true
+		return dir + value[1+len(name):], true
 	}
 	if filepath.IsAbs(value) {
 		return value, true
 	}
-	return filepath.Join(filepath.Dir(f), value), true
+	return f[:strings.LastIndexAny(f, "/"+string(filepath.Separator))+1] + value, true
 }
 
 func sortedKeys(m map[string]bool) []string {

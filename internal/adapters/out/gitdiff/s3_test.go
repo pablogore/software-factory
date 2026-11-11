@@ -59,6 +59,17 @@ func (w s3) marked() bool {
 	return err == nil
 }
 
+// linkTarget makes dir/link a link to a folder in a new temporary folder,
+// and returns that temporary folder: the one dir/link/.. is.
+func linkTarget(ctx *specs.Context, dir string) string {
+	ctx.Testing().Helper()
+	elsewhere := ctx.Testing().TempDir()
+	inner := filepath.Join(elsewhere, "inner")
+	ctx.Expect(os.Mkdir(inner, 0o700)).To(specs.BeNil())
+	ctx.Expect(os.Symlink(inner, filepath.Join(dir, "link"))).To(specs.BeNil())
+	return elsewhere
+}
+
 type s3Row struct {
 	name string
 	arm  func(ctx *specs.Context, w s3)
@@ -80,6 +91,16 @@ func s3Rows() []s3Row {
 		{"a hook a file the config includes from HOME defines", func(ctx *specs.Context, w s3) {
 			w.configHook(ctx, filepath.Join(w.home, "evil.inc"))
 			must(ctx, w.dir, "config", "include.path", "~/evil.inc")
+		}},
+		// git doesn't clean an include's path: link/.. is the parent of the
+		// link's target, not the folder the link is in.
+		{"a hook a file the config includes from HOME through a link and .. defines", func(ctx *specs.Context, w s3) {
+			w.configHook(ctx, filepath.Join(linkTarget(ctx, w.home), "evil.inc"))
+			must(ctx, w.dir, "config", "include.path", "~/link/../evil.inc")
+		}},
+		{"a hook a file the config includes by a relative path through a link and .. defines", func(ctx *specs.Context, w s3) {
+			w.configHook(ctx, filepath.Join(linkTarget(ctx, filepath.Join(w.dir, ".git")), "evil.inc"))
+			must(ctx, w.dir, "config", "include.path", "link/../evil.inc")
 		}},
 		{"a smudge filter the commit's .gitattributes names", func(ctx *specs.Context, w s3) {
 			must(ctx, w.dir, "config", "filter.evil.smudge", w.dump()+"; cat")

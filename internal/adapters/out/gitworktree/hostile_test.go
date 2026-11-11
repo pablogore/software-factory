@@ -116,6 +116,17 @@ func dirty(ctx *specs.Context, wt string) {
 	write(ctx, wt, "new.txt", "new\n")
 }
 
+// linkTarget makes dir/link a link to a folder in a new temporary folder,
+// and returns that temporary folder: the one dir/link/.. is.
+func linkTarget(ctx *specs.Context, dir string) string {
+	ctx.Testing().Helper()
+	elsewhere := ctx.Testing().TempDir()
+	inner := filepath.Join(elsewhere, "inner")
+	ctx.Expect(os.Mkdir(inner, 0o700)).To(specs.BeNil())
+	ctx.Expect(os.Symlink(inner, filepath.Join(dir, "link"))).To(specs.BeNil())
+	return elsewhere
+}
+
 type armRow struct {
 	name string
 	arm  func(ctx *specs.Context, h hostile)
@@ -143,6 +154,16 @@ var armRows = []armRow{
 	{"a hook a file the config includes from HOME defines", func(ctx *specs.Context, h hostile) {
 		h.configHook(ctx, filepath.Join(h.home, "evil.inc"))
 		h.config(ctx, "include.path", "~/evil.inc")
+	}},
+	// git doesn't clean an include's path: link/.. is the parent of the
+	// link's target, not the folder the link is in.
+	{"a hook a file the config includes from HOME through a link and .. defines", func(ctx *specs.Context, h hostile) {
+		h.configHook(ctx, filepath.Join(linkTarget(ctx, h.home), "evil.inc"))
+		h.config(ctx, "include.path", "~/link/../evil.inc")
+	}},
+	{"a hook a file the config includes by a relative path through a link and .. defines", func(ctx *specs.Context, h hostile) {
+		h.configHook(ctx, filepath.Join(linkTarget(ctx, h.gitDir()), "evil.inc"))
+		h.config(ctx, "include.path", "link/../evil.inc")
 	}},
 	{"a smudge filter the branch's .gitattributes names", func(ctx *specs.Context, h hostile) {
 		h.config(ctx, "filter.evil.smudge", h.dump()+"; cat")
