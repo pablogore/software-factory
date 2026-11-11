@@ -92,7 +92,8 @@ type promptResult struct {
 
 // end reports the agent's answer to the turn's prompt and closes the turn.
 // A turn of a session factoryd stopped ends with factoryd's reason, also
-// when the agent had to be killed and never answered.
+// when the agent had to be killed and never answered. An error answer that
+// is the agent's usage or rate limit ends it with domain.StopLimited.
 func (s *session) end(t *turn, res json.RawMessage, err error) {
 	var r promptResult
 	if err == nil {
@@ -110,6 +111,10 @@ func (s *session) end(t *turn, res json.RawMessage, err error) {
 		}
 		s.emit(t, domain.AgentProgressed{Kind: domain.ProgressEnded, StopReason: reason})
 	case err != nil:
+		if why, until, ok := limited(err, s.agent.clock.Now()); ok {
+			s.emit(t, domain.AgentProgressed{Kind: domain.ProgressEnded, StopReason: domain.StopLimited, Reason: why, ResumeAt: until})
+			break
+		}
 		s.emit(t, domain.AgentProgressed{Kind: domain.ProgressEnded, Error: err.Error()})
 	default:
 		if r.Usage != nil {

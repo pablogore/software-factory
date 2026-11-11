@@ -31,9 +31,20 @@ type message struct {
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
+
+// refusal is the agent's error answer to a request, kept whole so a limit
+// can be read from its code, message and data.
+type refusal struct{ rpcError }
+
+func (r *refusal) Error() string {
+	return fmt.Sprintf("acp: %s (%d): %v", r.Message, r.Code, ports.ErrAgentRefused)
+}
+
+func (r *refusal) Unwrap() error { return ports.ErrAgentRefused }
 
 // reply handles the response to one request. It runs on the reading
 // goroutine, so it sees every notification sent before the response.
@@ -193,7 +204,7 @@ func (c *conn) handle(m message) {
 			return
 		}
 		if m.Error != nil {
-			r(nil, fmt.Errorf("acp: %s (%d): %w", m.Error.Message, m.Error.Code, ports.ErrAgentRefused))
+			r(nil, &refusal{*m.Error})
 			return
 		}
 		r(m.Result, nil)
