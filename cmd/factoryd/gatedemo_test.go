@@ -50,6 +50,19 @@ func TestGateDemo(t *testing.T) {
 			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
 		})
 
+		s.It("with -timeout, fails the gate of checks that never end at that limit, saying they timed out", func(ctx *specs.Context) {
+			dir := ctx.Testing().TempDir()
+			git(ctx, dir, "init", "-q", "-b", "main")
+			git(ctx, dir, "commit", "-q", "--allow-empty", "-m", "base")
+
+			var out bytes.Buffer
+			err := gateDemo(context.Background(), []string{"-dir", dir, "-checks", "sleep 60", "-timeout", "300ms"}, &out)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(out.String()).To(specs.Contain("note: timed out: the checks ran over 300ms and were stopped with their process group"))
+			ctx.Expect(out.String()).To(specs.Contain("job gate-demo: stage build, round 2"))
+		})
+
 		s.It("with -db, makes the job's worktree first, then fails a commit to the Makefile even after the base ref is moved onto it", func(ctx *specs.Context) {
 			bg := context.Background()
 			repo := ctx.Testing().TempDir()
