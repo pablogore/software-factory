@@ -89,7 +89,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	addr := fs.String("addr", "127.0.0.1:0", "address to listen on")
 	dir := fs.String("dir", ".", "the git repo every job's checks run in, as its worktree; its HEAD is the base the diff is judged against")
 	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
-	timeout := fs.Duration("gate-timeout", wiring.DefaultRunGateTimeout, "how long a run-gate may take before its checks are killed with their process group")
+	timeout := fs.Duration("gate-timeout", wiring.DefaultRunGateTimeout, "how long a whole run-gate call may take, checks, test counts and git steps included, before it is stopped with a timed out error")
 	maxOutput := fs.Int("gate-max-output", wiring.DefaultRunGateMaxOutput, "the most bytes of the checks' output a run-gate keeps and returns")
 	portBase := fs.Int("port-base", portrange.DefaultBase, "the first port of the jobs' dev server ranges")
 	portStep := fs.Int("port-step", portrange.DefaultStep, "how many ports each job's range has")
