@@ -269,6 +269,7 @@ func ignoredAtBase(ctx context.Context, home, dir, base string, paths []string) 
 // skip-worktree or assume-unchanged, one entry per flag: git diff and git
 // status skip their worktree changes. Changes sees them anyway, as its index
 // has no flags, but the flags still tell that the builder hid something.
+// dir must be the worktree's root: git looks for the repo in dir alone.
 func (d Differ) Flagged(ctx context.Context, job domain.JobID, dir string) ([]domain.FlaggedFile, error) {
 	home, err := d.home(job)
 	if err != nil {
@@ -297,7 +298,8 @@ func (d Differ) Flagged(ctx context.Context, job domain.JobID, dir string) ([]do
 }
 
 // AtBase is the content of file, by its path from the repo root, in base,
-// the full object name of a commit, as Changes takes it.
+// the full object name of a commit, as Changes takes it, from the repo of
+// the worktree whose root is dir, as Flagged takes it.
 func (d Differ) AtBase(ctx context.Context, job domain.JobID, dir, base, file string) (string, error) {
 	if !objectName(base) {
 		return "", fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
@@ -438,10 +440,18 @@ func git(ctx context.Context, home, dir string, args ...string) (string, error) 
 // HOME/.config/git even then: the job's HOME is the builder's to write, and
 // a .gitconfig there could, say, give the scratch repo of ignoredAtBase a
 // template whose core.worktree points at the job's .gitignore files.
+// GIT_CEILING_DIRECTORIES at dir's parent: with the worktree's .git deleted,
+// git would find the repo the worktree sits in, the main checkout, and read
+// its index and its files as the worktree's.
 func run(ctx context.Context, home, dir, stdin string, env []string, args ...string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("gitdiff: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.attributesFile=" + os.DevNull}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(childenv.Base(home), "GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	cmd.Env = append(childenv.Base(home), "GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CEILING_DIRECTORIES="+filepath.Dir(abs))
 	cmd.Env = append(cmd.Env, env...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
