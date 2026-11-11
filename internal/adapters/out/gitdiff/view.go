@@ -42,6 +42,9 @@ func newView(ctx context.Context, home, dir string) (view, error) {
 		return view{}, fmt.Errorf("gitdiff: unexpected git rev-parse output %q: %w", out, domain.ErrInvalidValue)
 	}
 	index, top, common, format := lines[0], lines[1], lines[2], lines[3]
+	if top, err = checkTop(dir, top); err != nil {
+		return view{}, err
+	}
 	if !filepath.IsAbs(index) {
 		index = filepath.Join(dir, index)
 	}

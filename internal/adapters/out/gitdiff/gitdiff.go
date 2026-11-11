@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -55,11 +56,19 @@ func (d Differ) Changes(ctx context.Context, job domain.JobID, dir, base string)
 		return nil, err
 	}
 	defer v.close()
+	return v.changes(ctx, dir, base)
+}
+
+// changes is Changes as the view v sees the worktree at dir.
+func (v view) changes(ctx context.Context, dir, base string) ([]domain.FileChange, error) {
 	// ^{commit} makes git refuse an object that is not a commit, or not there.
 	// --raw gives each side's mode, which tells a gitlink. .gitmodules, which
 	// the builder can write, may set submodules to be ignored;
-	// --ignore-submodules=none overrides it.
-	out, err := v.git(ctx, "diff", "--raw", "--no-renames", "--ignore-submodules=none", "-z", base+"^{commit}", "--")
+	// --ignore-submodules=dirty overrides it and still tells a submodule
+	// moved to another commit. To tell one whose files changed, git runs git
+	// status in it, with the submodule's own config, which the builder can
+	// write to run a hook or a filter; dirtySubmodules tells that instead.
+	out, err := v.git(ctx, "diff", "--raw", "--no-renames", "--ignore-submodules=dirty", "-z", base+"^{commit}", "--")
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +89,15 @@ func (d Differ) Changes(ctx context.Context, job domain.JobID, dir, base string)
 			c.Repo = domain.RepoSubmodule
 		}
 		changes = append(changes, c)
+	}
+	dirty, err := dirtySubmodules(ctx, v, changes)
+	if err != nil {
+		return nil, err
+	}
+	if len(dirty) > 0 {
+		// In the path order git diff gives.
+		changes = append(changes, dirty...)
+		slices.SortStableFunc(changes, func(a, b domain.FileChange) int { return strings.Compare(a.Path, b.Path) })
 	}
 	untracked, err := untrackedChanges(ctx, v, dir, base)
 	if err != nil {
@@ -137,7 +155,8 @@ func (d Differ) Lines(ctx context.Context, job domain.JobID, dir, base string) (
 		return 0, err
 	}
 	defer v.close()
-	out, err := v.git(ctx, "diff", "--numstat", "--no-renames", "-z", base+"^{commit}", "--")
+	// As in changes, git must not run git status in a submodule.
+	out, err := v.git(ctx, "diff", "--numstat", "--no-renames", "--ignore-submodules=dirty", "-z", base+"^{commit}", "--")
 	if err != nil {
 		return 0, err
 	}
@@ -324,11 +343,15 @@ func (d Differ) InWorktree(ctx context.Context, job domain.JobID, dir, file stri
 	if err != nil {
 		return "", err
 	}
-	top, err := git(ctx, home, dir, "rev-parse", "--show-toplevel")
+	out, err := git(ctx, home, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
-	p := filepath.Join(strings.TrimSpace(top), filepath.FromSlash(file))
+	top, err := checkTop(dir, strings.TrimSuffix(out, "\n"))
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(top, filepath.FromSlash(file))
 	info, err := os.Lstat(p)
 	if err != nil {
 		return "", fmt.Errorf("gitdiff: %w", err)
