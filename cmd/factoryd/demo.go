@@ -71,7 +71,8 @@ const newRoundPath = "/demo/jobs/{job}/new-round"
 // try `factory worker submit-result`, `factory worker run-gate` and an MCP
 // client's tools against it. Every job's worktree is -dir, whose HEAD is
 // recorded as its base, and its checks are -checks, as the gate runs them,
-// within -gate-timeout and keeping -gate-max-output bytes of output. The
+// within -gate-timeout and keeping -gate-max-output bytes of output, at most
+// -gate-max-runs calls at once. The
 // builder's dev_server runs the command -dir's .factory/devserver.yaml sets
 // at HEAD on a port of the job's range, from -port-base in ranges of
 // -port-step ports. A server is stopped once its session ends: the role
@@ -91,6 +92,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	command := fs.String("checks", strings.Join(build.DefaultCommand, " "), "the checks command, split on spaces and run without a shell")
 	timeout := fs.Duration("gate-timeout", wiring.DefaultRunGateTimeout, "how long a whole run-gate call may take, checks, test counts and git steps included, before it is stopped with a timed out error")
 	maxOutput := fs.Int("gate-max-output", wiring.DefaultRunGateMaxOutput, "the most bytes of the checks' output a run-gate keeps and returns")
+	maxRuns := fs.Int("gate-max-runs", wiring.DefaultRunGateMaxRuns, "how many run-gate calls may run at once, over every job; one more is refused at once")
 	portBase := fs.Int("port-base", portrange.DefaultBase, "the first port of the jobs' dev server ranges")
 	portStep := fs.Int("port-step", portrange.DefaultStep, "how many ports each job's range has")
 	defaultState, err := wiring.DefaultDevServerState()
@@ -146,15 +148,15 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if *timeout <= 0 || *maxOutput <= 0 {
-		return fmt.Errorf("%w: -gate-timeout and -gate-max-output must be positive", domain.ErrInvalidValue)
+	if *timeout <= 0 || *maxOutput <= 0 || *maxRuns <= 0 {
+		return fmt.Errorf("%w: -gate-timeout, -gate-max-output and -gate-max-runs must be positive", domain.ErrInvalidValue)
 	}
 	homes, err := childenv.DefaultHomes()
 	if err != nil {
 		return err
 	}
 	locks := gatelock.New()
-	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, locks, homes, strings.Fields(*command), nil, *timeout, *maxOutput)
+	gate := wiring.RunGate(store, demoPipelines{}, dirWorkspace{abs}, store, wiring.SystemClock{}, locks, homes, strings.Fields(*command), nil, *timeout, *maxOutput, *maxRuns)
 	servers, err := wiring.StartDevServers(ctx, *state)
 	if err != nil {
 		return err
@@ -171,7 +173,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 	}
 	url := "http://" + ln.Addr().String()
 	_, _ = fmt.Fprintf(out, "worker demo on %s; jobs %s wait in build for a builder's result\n", url, joinIDs(demoJobs))
-	_, _ = fmt.Fprintf(out, "run-gate runs `%s` in %s, judging the diff against %s, for at most %s, keeping at most %d bytes of output\n", strings.Join(gate.Command, " "), abs, head, *timeout, *maxOutput)
+	_, _ = fmt.Fprintf(out, "run-gate runs `%s` in %s, judging the diff against %s, for at most %s, keeping at most %d bytes of output, with at most %d calls at once\n", strings.Join(gate.Command, " "), abs, head, *timeout, *maxOutput, *maxRuns)
 	_, _ = fmt.Fprintf(out, "dev-server runs the command %s sets at %s, on ports from %d, %d per job\n", wiring.DevServerFile, head, *portBase, *portStep)
 	_, _ = fmt.Fprintf(out, "\nexport FACTORY_URL=%s\n", url)
 	for _, id := range demoJobs {

@@ -16,3 +16,7 @@ var ErrBusy = errors.New("already running")
 // ErrTimedOut means the operation ran over its time limit and was stopped:
 // it has no result, not a failed one.
 var ErrTimedOut = errors.New("timed out")
+
+// ErrTooMany means as many of the operation as may run at once are
+// running, and one more is refused rather than queued.
+var ErrTooMany = errors.New("too many running")

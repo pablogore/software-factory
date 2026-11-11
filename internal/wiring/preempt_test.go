@@ -48,7 +48,7 @@ func newSharedGate(ctx *specs.Context) sharedGate {
 	locks := gatelock.New()
 	homes := childenv.Homes{Root: ctx.Testing().TempDir()}
 	long := []string{"sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $! > " + pidFile + "; wait"}
-	runGate := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, long, nil, time.Minute, wiring.DefaultRunGateMaxOutput)
+	runGate := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, long, nil, time.Minute, wiring.DefaultRunGateMaxOutput, wiring.DefaultRunGateMaxRuns)
 	// The real gate passes only when no process of the run_gate run is left.
 	noneLeft := []string{"sh", "-c", "! kill -0 $(cat " + pidFile + ") 2>/dev/null"}
 	gate := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, noneLeft, nil)
