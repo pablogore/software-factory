@@ -152,7 +152,7 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 	if err != nil {
 		return fail("dev servers", err)
 	}
-	worktrees := gitworktree.New(cfg.Repo, cfg.Base, store)
+	worktrees := gitworktree.New(cfg.Repo, cfg.Base, store, cfg.Homes)
 	dev := &DevServers{Servers: servers, Worktrees: worktrees, Ports: ranges, Bases: store, Homes: cfg.Homes}
 	tokens := jobtoken.New()
 	handler, attempts := Worker(tokens, store, pipelines, nil, gatelock.New(), cfg.Clock, dev, &ContextPacks{Bases: store})

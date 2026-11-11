@@ -13,6 +13,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/gitworktree"
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -57,7 +58,7 @@ func newWorkspace(ctx *specs.Context, repo string) (*gitworktree.Workspace, *mem
 	ctx.Testing().Helper()
 	store, err := memstore.New()
 	ctx.Expect(err).To(specs.BeNil())
-	return gitworktree.New(repo, base, store), store
+	return gitworktree.New(repo, base, store, childenv.Homes{Root: ctx.Testing().TempDir()}), store
 }
 
 func exists(path string) bool {
@@ -168,7 +169,7 @@ func TestWorkspace(t *testing.T) {
 			store, err := memstore.New()
 			ctx.Expect(err).To(specs.BeNil())
 
-			_, err = gitworktree.New(repo, "no-such-base", store).Prepare(bg, job)
+			_, err = gitworktree.New(repo, "no-such-base", store, childenv.Homes{Root: ctx.Testing().TempDir()}).Prepare(bg, job)
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(exists(filepath.Join(repo, ".worktrees", "job-1"))).To(specs.BeFalse())
