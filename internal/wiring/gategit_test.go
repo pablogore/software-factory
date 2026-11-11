@@ -51,7 +51,7 @@ func hookedRepo(ctx *specs.Context) (string, string, string, string) {
 
 func TestDemoGateGit(t *testing.T) {
 	specs.Describe(t, "the git the gate runs on a job's worktree", func(s *specs.Spec) {
-		s.It("runs no hook from .git/hooks, and a hook the config defines only with the job's HOME and no token", func(ctx *specs.Context) {
+		s.It("runs no hook from .git/hooks, nor one the config defines", func(ctx *specs.Context) {
 			ctx.Testing().Setenv("GITHUB_TOKEN", gateToken)
 			bg := context.Background()
 			dir, base, folder, config := hookedRepo(ctx)
@@ -60,8 +60,6 @@ func TestDemoGateGit(t *testing.T) {
 			ctx.Expect(store.Create(bg, domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 			ctx.Expect(store.RecordBase(bg, "j-1", base)).To(specs.BeNil())
 			homes := childenv.Homes{Root: ctx.Testing().TempDir()}
-			home, err := homes.For("j-1")
-			ctx.Expect(err).To(specs.BeNil())
 
 			g := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), homes, []string{"true"}, nil)
 			_, err = g.Check(bg, "j-1")
@@ -69,10 +67,8 @@ func TestDemoGateGit(t *testing.T) {
 
 			_, err = os.Stat(folder)
 			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
-			env, err := os.ReadFile(config)
-			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(string(env)).To(specs.Not(specs.Contain(gateToken)))
-			ctx.Expect(strings.Split(string(env), "\n")).To(specs.Contain("HOME=" + home))
+			_, err = os.Stat(config)
+			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
 		})
 	})
 }
