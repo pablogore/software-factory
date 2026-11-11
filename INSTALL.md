@@ -177,10 +177,12 @@ Then tell the user, in a few lines:
 - To keep the orchestrator's context small, start that session clean:
 
   ```bash
-  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --strict-mcp-config --setting-sources project,local
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --model sonnet --strict-mcp-config --setting-sources project,local
   ```
 
-  It leaves out MCP servers, the user's own settings (`~/.claude/settings.json`)
+  `--model sonnet` runs the orchestrator on sonnet, which spends less of the
+  usage limit or the API budget than opus; the skill can't switch it itself.
+  The rest leaves out MCP servers, the user's own settings (`~/.claude/settings.json`)
   and automatic memory; the project's `.claude/` settings still load. It isn't
   confirmed yet whether the subagents inherit this setup; that is measured in
   spike S4.

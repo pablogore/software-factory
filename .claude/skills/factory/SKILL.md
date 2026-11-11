@@ -24,15 +24,16 @@ tell the user; never work around it.
 This session lasts the whole run, and everything it writes or reads is paid
 again on every later turn. Keep it lean:
 
-- **Model.** Run the orchestrator on sonnet unless the user asks for another
-  model. If this session runs on another model and the user didn't pick it,
-  tell them once, at the start, to switch with `/model sonnet` (or to start
-  `claude --model sonnet`), and carry on.
-- **Messages.** Tell the user only what they need to know or decide: a job
-  waiting on a human (needs-human, needs-info, a checkpoint, a pause or a cap),
-  a PR ready to merge, and the summary when the run ends. Don't report each
-  transition or each agent that finishes; when there is nothing of that kind,
-  end your turn without a message.
+- **Model.** You can't change this session's model; the user picks it when
+  they start `claude --model sonnet`. If this session runs on opus, say so in
+  one line at the start and suggest sonnet (`/model sonnet`), then carry on:
+  don't insist and don't wait for an answer.
+- **Messages.** Tell the user only what they need to know or decide: that
+  one-line model note, a job waiting on a human (needs-human, needs-info, a
+  checkpoint or a pause), a job that failed or is stuck, a run stopped by a
+  cap, a PR ready to merge, and the summary when the run ends. Don't report
+  each transition or each agent that finishes; when there is nothing of that
+  kind, end your turn without a message.
 - **Scripts.** Leave every decision that needs no judgment to the
   `factory/bin/` scripts: which stage comes next, which jobs to start, which
   reviewers and models, whether a cap is hit. Run the script and do what it

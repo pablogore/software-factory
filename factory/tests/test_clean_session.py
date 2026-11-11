@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-COMMAND = "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --strict-mcp-config --setting-sources project,local"
+COMMAND = "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --model sonnet --strict-mcp-config --setting-sources project,local"
 DOCS = ("INSTALL.md", "README.md")
 
 
