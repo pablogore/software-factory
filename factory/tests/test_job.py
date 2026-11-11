@@ -29,10 +29,17 @@ def load_job_module(repo):
     return mod
 
 
+def pin_config(cfg):
+    """The tests expect 3 rounds and the cost check on, whatever the project's config.json says."""
+    config = {k: v for k, v in json.loads(cfg.read_text()).items() if k != "cost_check"}
+    cfg.write_text(json.dumps({**config, "max_rounds": 3}, indent=2))
+
+
 class JobBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         shutil.copytree(SRC, self.tmp / "factory", ignore=shutil.ignore_patterns("tests", "jobs"))
+        pin_config(self.tmp / "factory" / "config.json")
         self.job = load_job_module(self.tmp)
         self.setUp_fakes()
 
