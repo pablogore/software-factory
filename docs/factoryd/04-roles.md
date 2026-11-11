@@ -52,6 +52,34 @@ stages:
 ```
 Y en la fábrica (`factory.yaml` o `.factory/` del repo): `pipeline: default`. Otra fábrica puede usar `pipeline: backend` sin ux/ui.
 
+### Cuándo corre un rol (`when`)
+Un rol de review con `when` corre si se cumple al menos una de las condiciones de `any`; dentro de una condición, tienen que cumplirse todas sus claves. Si ninguna se cumple, el rol se saltea en esa ronda y el historial del job registra el rol, la ronda y el motivo.
+
+```yaml
+when:
+  any:
+    - risk: [high]                 # el riesgo del intake está en la lista
+    - surfaces: [auth, payments]   # el intake comparte al menos una superficie
+    - paths: ["src/auth/**"]       # algún archivo cambiado coincide
+    - diff_lines: ">= 200"         # tamaño del diff (líneas agregadas más borradas)
+```
+
+- `risk`: lista de `low`, `medium` o `high`; otro valor es error de validación. Si el intake no dejó riesgo (jobs aceptados antes de que lo pidiera), cuenta como `high`, así el revisor corre en vez de saltearse.
+- `surfaces`: nombres libres, comparados exactos con los del intake. Un intake que dijo que no hay superficies (`[]`) no comparte ninguna. Si el intake no dejó riesgo, tampoco calificó superficies y la condición cuenta como que aplica.
+- `labels` y `deps_changed` todavía no se evalúan: cuentan como que aplica. `paths` y `diff_lines` también aplican cuando el gate no pudo leer el diff.
+
+### Campos de intake (`risk`, `surfaces`)
+Un intake ACCEPT devuelve en `submit_result`, además de la decisión, su calificación del job:
+
+```json
+{"decision": "ACCEPT", "risk": "medium", "surfaces": ["api", "auth"]}
+```
+
+- `risk`: `low`, `medium` o `high`; obligatorio en un ACCEPT.
+- `surfaces`: lista de nombres libres de las partes del producto que toca (por ejemplo `ui`, `auth`, `payments`); `[]` cuando no hay ninguna. Obligatoria en un ACCEPT: no decir nada se rechaza, y un nombre en blanco es inválido.
+- NEEDS_INFO y REJECT no los piden.
+- El job guarda los dos y el `when` de los roles los lee con `risk` y `surfaces`.
+
 ### Archivos que puede tocar un builder (`allowed_paths`)
 Un rol `build` puede declarar los únicos archivos que su diff puede agregar, modificar o borrar, relativos a la raíz del repo. Una entrada que termina en `/` cubre todo lo que está debajo; cualquier otra es un patrón de `path.Match` (por ejemplo `internal/slices/*.go`).
 
