@@ -152,6 +152,7 @@ func TestHandler(t *testing.T) {
 			{"a job saved meanwhile", fmt.Errorf("w: %w", ports.ErrVersionConflict), http.StatusConflict},
 			{"checks already running for the job", fmt.Errorf("w: run gate: %w: the checks of job %q are running", domain.ErrBusy, "j-1"), http.StatusConflict},
 			{"checks cancelled by the job's result", fmt.Errorf("w: run gate: %w", gatelock.ErrPreempted), http.StatusConflict},
+			{"a run_gate call past its time limit", fmt.Errorf("w: run gate: %w: the call ran over 15m0s", domain.ErrTimedOut), http.StatusGatewayTimeout},
 		}
 		specs.Table(s, rows, func(r statusRow) string { return fmt.Sprintf("answers %d with the error to %s", r.code, r.name) },
 			func(ctx *specs.Context, r statusRow) {

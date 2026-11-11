@@ -237,6 +237,8 @@ func status(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, domain.ErrMissingField), errors.Is(err, domain.ErrInvalidValue):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, domain.ErrTimedOut):
+		return http.StatusGatewayTimeout
 	}
 	return http.StatusInternalServerError
 }
