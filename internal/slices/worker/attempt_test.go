@@ -3,6 +3,7 @@ package worker_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/getsyntegrity/go-specs/specs"
 
@@ -15,10 +16,12 @@ import (
 // scripted is an agent session whose turns each submit one result with its
 // token, or none when the turn's entry is empty, then end. A turn past the
 // script submits nothing; closed sessions refuse every prompt. With hang
-// set, a turn never ends. Its stderr is what Stderr reports.
+// set, a turn never ends; the limited-th turn, from 1, ends on the agent's
+// rate limit. Its stderr is what Stderr reports.
 type scripted struct {
 	sub     *worker.Submitter
 	hang    bool
+	limited int
 	job     domain.JobID
 	token   string
 	turns   []string
@@ -42,6 +45,11 @@ func (s *scripted) Prompt(ctx context.Context, msg string) (<-chan domain.AgentP
 		s.answers = append(s.answers, err)
 	}
 	ch := make(chan domain.AgentProgressed, 1)
+	if i+1 == s.limited {
+		ch <- domain.AgentProgressed{Job: s.job, Role: "builder", Kind: domain.ProgressEnded, StopReason: domain.StopLimited, Reason: "rate limited", ResumeAt: resumeAt}
+		close(ch)
+		return ch, nil
+	}
 	ch <- domain.AgentProgressed{Job: s.job, Role: "builder", Kind: domain.ProgressEnded, StopReason: "end_turn"}
 	close(ch)
 	return ch, nil
@@ -81,6 +89,9 @@ func (w world) failed(ctx *specs.Context) domain.AttemptFailed {
 	return e
 }
 
+// resumeAt is when a scripted session's agent says its limit lets it go on.
+var resumeAt = at.Add(time.Hour)
+
 const (
 	ready   = `{"status":"READY","summary":"done"}`
 	invalid = `{"status":"DONE"}`
@@ -91,7 +102,7 @@ func TestAttempt(t *testing.T) {
 		s.It("asks once and moves on when the first turn hands in a valid result", func(ctx *specs.Context) {
 			w := newWorld(ctx)
 			sess := w.session(ready)
-			ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+			ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(ok).To(specs.BeTrue())
 			ctx.Expect(sess.prompts).ToEqual([]string{"build it"})
@@ -102,7 +113,7 @@ func TestAttempt(t *testing.T) {
 			s.It("asks again once, in the same session, saying no result was submitted", func(ctx *specs.Context) {
 				w := newWorld(ctx)
 				sess := w.session("", ready)
-				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeTrue())
 				ctx.Expect(sess.prompts).ToEqual([]string{"build it", worker.Retry("no result submitted")})
@@ -111,7 +122,7 @@ func TestAttempt(t *testing.T) {
 			s.It("asks again with the validation error of a refused result", func(ctx *specs.Context) {
 				w := newWorld(ctx)
 				sess := w.session(invalid, ready)
-				_, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				_, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(sess.prompts).To(specs.HaveLen(2))
 				ctx.Expect(sess.prompts[1]).To(specs.Contain(`your result was refused: worker: build result: invalid value: status "DONE"`))
@@ -120,7 +131,7 @@ func TestAttempt(t *testing.T) {
 			s.It("records a valid result of the retry as if the first turn had handed it in, with the same token", func(ctx *specs.Context) {
 				w := newWorld(ctx)
 				sess := w.session(invalid, ready)
-				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeTrue())
 				ctx.Expect(sess.answers).ToEqual([]error{sess.answers[0], nil})
@@ -135,7 +146,7 @@ func TestAttempt(t *testing.T) {
 			s.It("records a failed attempt with the reason, and asks no third time", func(ctx *specs.Context) {
 				w := newWorld(ctx)
 				sess := w.session(invalid, invalid, ready)
-				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeFalse())
 				ctx.Expect(sess.prompts).To(specs.HaveLen(2))
@@ -151,7 +162,7 @@ func TestAttempt(t *testing.T) {
 			s.It("records why when the agent never submits anything", func(ctx *specs.Context) {
 				w := newWorld(ctx)
 				sess := w.session()
-				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeFalse())
 				ctx.Expect(sess.prompts).To(specs.HaveLen(2))
@@ -163,7 +174,7 @@ func TestAttempt(t *testing.T) {
 				w := newWorld(ctx)
 				sess := w.session()
 				sess.stderr = []string{"error: model overloaded", "retrying in 5s"}
-				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeFalse())
 				ctx.Expect(w.failed(ctx).Stderr).ToEqual([]string{"error: model overloaded", "retrying in 5s"})
@@ -171,7 +182,7 @@ func TestAttempt(t *testing.T) {
 
 			s.It("records the failed attempt without stderr, and retries as before, when the agent wrote none", func(ctx *specs.Context) {
 				w := newWorld(ctx)
-				ok, err := w.attempts().Run(context.Background(), w.session(), "j-1", "builder", w.j1, "build it")
+				ok, err := w.attempts().Run(context.Background(), w.session(), "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeFalse())
 				ctx.Expect(w.failed(ctx).Stderr).To(specs.BeNil())
@@ -182,7 +193,7 @@ func TestAttempt(t *testing.T) {
 				w := newWorld(ctx)
 				sess := w.session()
 				sess.closed = true
-				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", w.j1, "build it")
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				ctx.Expect(ok).To(specs.BeFalse())
 				ctx.Expect(w.failed(ctx).Reason).To(specs.Contain("no result submitted, and the turn ended with: agent session closed"))
@@ -190,11 +201,61 @@ func TestAttempt(t *testing.T) {
 
 			s.It("revokes the token with the failure, so no result follows it", func(ctx *specs.Context) {
 				w := newWorld(ctx)
-				_, err := w.attempts().Run(context.Background(), w.session(invalid, invalid), "j-1", "builder", w.j1, "build it")
+				_, err := w.attempts().Run(context.Background(), w.session(invalid, invalid), "j-1", "builder", "claude", w.j1, "build it")
 				ctx.Expect(err).To(specs.BeNil())
 				_, err = w.sub.Submit(context.Background(), w.j1, "j-1", []byte(ready))
 				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrUnknownToken))
 				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AttemptFailed", "AttemptRetried"})
+			})
+		})
+
+		s.When("a turn ends on the agent's usage or rate limit", func(s *specs.Spec) {
+			s.It("pauses the job in its stage with the agent, the reason and when it resumes, and asks no retry", func(ctx *specs.Context) {
+				w := newWorld(ctx)
+				sess := w.session()
+				sess.limited = 1
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(ok).To(specs.BeFalse())
+				ctx.Expect(sess.prompts).ToEqual([]string{"build it"})
+				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AgentLimited"})
+				job, _, err := w.store.Load(context.Background(), "j-1")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(job.Stage).ToEqual("build")
+				ctx.Expect(job.Round).ToEqual(1)
+				ctx.Expect(job.AttemptsFailed).ToEqual(0)
+				ctx.Expect(job.Limited).ToEqual(&domain.Limited{Role: "builder", Agent: "claude", Reason: "rate limited", Until: resumeAt})
+			})
+
+			s.It("pauses the job without a failed attempt when the retry is the turn that hits it", func(ctx *specs.Context) {
+				w := newWorld(ctx)
+				sess := w.session()
+				sess.limited = 2
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(ok).To(specs.BeFalse())
+				ctx.Expect(sess.prompts).To(specs.HaveLen(2))
+				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"AgentLimited"})
+			})
+
+			s.It("keeps a result the turn saved before it hit the limit", func(ctx *specs.Context) {
+				w := newWorld(ctx)
+				sess := w.session(ready)
+				sess.limited = 1
+				ok, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(ok).To(specs.BeTrue())
+				ctx.Expect(w.history(ctx, "j-1")).ToEqual([]string{"StageEntered"})
+			})
+
+			s.It("revokes the token, so no result follows the pause", func(ctx *specs.Context) {
+				w := newWorld(ctx)
+				sess := w.session()
+				sess.limited = 1
+				_, err := w.attempts().Run(context.Background(), sess, "j-1", "builder", "claude", w.j1, "build it")
+				ctx.Expect(err).To(specs.BeNil())
+				_, err = w.sub.Submit(context.Background(), w.j1, "j-1", []byte(ready))
+				ctx.Expect(err).To(specs.MatchError(jobtoken.ErrUnknownToken))
 			})
 		})
 

@@ -69,7 +69,7 @@ func attemptDemo(ctx context.Context, out io.Writer) error {
 		_, _ = fmt.Fprintf(out, "== job %s: %s\n", a.job, a.about)
 		url := "http://" + ln.Addr().String()
 		agent := &demoAgent{out: out, job: a.job, progress: a.progress, turns: a.turns, stderr: a.stderr, mcp: mcpURL(url, a.job), client: worker.Client{URL: url, Token: token}}
-		saved, err := attempts.Run(ctx, agent, a.job, "builder", token, "Build the demo job and hand in your result with submit_result.")
+		saved, err := attempts.Run(ctx, agent, a.job, "builder", "", token, "Build the demo job and hand in your result with submit_result.")
 		if err != nil {
 			return err
 		}

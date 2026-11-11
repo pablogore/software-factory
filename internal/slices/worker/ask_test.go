@@ -162,7 +162,7 @@ func TestAskHuman(t *testing.T) {
 			token := w.token(ctx, "spec-writer", domain.KindSpec, askerTools)
 			a := &worker.Attempts{Results: w.sub, Jobs: w.store, Pipelines: pipelines{"default": askPipeline()}, Clock: stopped{}}
 
-			ok, err := a.Run(context.Background(), askingSession{sub: w.sub, token: token}, "j-1", "spec-writer", token, "write the spec")
+			ok, err := a.Run(context.Background(), askingSession{sub: w.sub, token: token}, "j-1", "spec-writer", "claude", token, "write the spec")
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(ok).To(specs.BeTrue())

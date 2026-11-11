@@ -27,15 +27,23 @@ type Attempts struct {
 // same token submits it: a refused result does not spend it. When that turn
 // misses too, it revokes token and records a domain.AttemptFailed from role
 // on job with the reason and the last lines s wrote on stderr, and reports
-// false; no third prompt is sent. A result saved with token before it was
-// revoked still counts. A session that ended counts as a turn without a
-// result.
-func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, token, prompt string) (bool, error) {
-	missed, err := a.turn(ctx, s, token, prompt)
+// false; no third prompt is sent. A turn that ends on the usage or rate
+// limit of agent, the agent role runs on, is no miss: it revokes token and
+// records a domain.AgentLimited instead, with no retry. A result saved with
+// token before it was revoked still counts. A session that ended counts as
+// a turn without a result.
+func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, agent, token, prompt string) (bool, error) {
+	missed, limit, err := a.turn(ctx, s, token, prompt)
+	if limit != nil {
+		return a.limited(ctx, job, role, agent, token, *limit)
+	}
 	if err != nil || missed == "" {
 		return err == nil, err
 	}
-	missed, err = a.turn(ctx, s, token, Retry(missed))
+	missed, limit, err = a.turn(ctx, s, token, Retry(missed))
+	if limit != nil {
+		return a.limited(ctx, job, role, agent, token, *limit)
+	}
 	if err != nil || missed == "" {
 		return err == nil, err
 	}
@@ -53,9 +61,11 @@ func Retry(reason string) string {
 }
 
 // turn runs one turn of s with msg and returns why no result was saved with
-// token during it, or "" when one was or a question was asked.
-func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (string, error) {
+// token during it, or "" when one was or a question was asked. A turn that
+// ended on the agent's limit, with nothing saved, returns its end instead.
+func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (string, *domain.AgentProgressed, error) {
 	ended := ""
+	var limit *domain.AgentProgressed
 	ch, err := s.Prompt(ctx, msg)
 	if err != nil {
 		ended = err.Error()
@@ -64,28 +74,53 @@ func (a *Attempts) turn(ctx context.Context, s session, token, msg string) (stri
 		select {
 		case ev, ok := <-ch:
 			done = !ok
+			if ok && ev.Kind == domain.ProgressEnded && ev.StopReason == domain.StopLimited {
+				limit = &ev
+			}
 			if ok && ev.Kind == domain.ProgressEnded && ev.Error != "" {
 				ended = ev.Error
 			}
 		case <-ctx.Done():
-			return "", fmt.Errorf("worker: attempt: %w", ctx.Err())
+			return "", nil, fmt.Errorf("worker: attempt: %w", ctx.Err())
 		}
 	}
 	// A turn cut by ctx is not a missed turn, even when the session's end
 	// reached ch first.
 	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("worker: attempt: %w", err)
+		return "", nil, fmt.Errorf("worker: attempt: %w", err)
 	}
 	o := a.Results.Take(token)
 	switch {
 	case o.Saved, o.Asked:
-		return "", nil
+		return "", nil, nil
+	case limit != nil:
+		return "", limit, nil
 	case o.Refused != nil:
-		return "your result was refused: " + o.Refused.Error(), nil
+		return "your result was refused: " + o.Refused.Error(), nil, nil
 	case ended != "":
-		return "no result submitted, and the turn ended with: " + ended, nil
+		return "no result submitted, and the turn ended with: " + ended, nil, nil
 	}
-	return "no result submitted", nil
+	return "no result submitted", nil, nil
+}
+
+// limited revokes token, the session's token, and once every submission it
+// made is in records that role's session at job hit agent's limit as end,
+// its turn's end, says, unless one of them saved a result or asked a
+// question. It reports whether one did.
+func (a *Attempts) limited(ctx context.Context, job domain.JobID, role, agent, token string, end domain.AgentProgressed) (bool, error) {
+	handed := false
+	err := a.Results.Settle(job, token, func(o Outcome) error {
+		if o.Saved || o.Asked {
+			handed = true
+			return nil
+		}
+		ev := domain.AgentLimited{Job: job, Role: role, Agent: agent, Reason: end.Reason, ResumeAt: end.ResumeAt, At: a.Clock.Now()}
+		if err := a.record(ctx, job, ev, nil); err != nil {
+			return fmt.Errorf("worker: agent limited: %w", err)
+		}
+		return nil
+	})
+	return handed, err
 }
 
 // failSession revokes token, the session's token, and once every submission

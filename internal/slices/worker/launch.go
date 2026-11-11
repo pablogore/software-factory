@@ -211,7 +211,7 @@ func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
 		_ = sess.Close()
 	})
 	defer stop()
-	_, err = l.Attempts.Run(run, sess, key.job, role.Name, token, prompt)
+	_, err = l.Attempts.Run(run, sess, key.job, role.Name, role.Agent, token, prompt)
 	stop()
 	if err == nil || !expired() {
 		return err
