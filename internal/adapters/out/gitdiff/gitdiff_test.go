@@ -230,12 +230,16 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
 		})
 
-		s.It("lists untracked files by their path from the repo root when dir is a subfolder", func(ctx *specs.Context) {
+		s.It("lists untracked files by their path from the repo root, and fails when dir is a subfolder", func(ctx *specs.Context) {
 			dir, fork := newRepo(ctx)
 			write(ctx, dir, "top.txt", "new\n")
 			write(ctx, dir, "sub/inner.txt", "new\n")
 
-			changes, err := differ(ctx).Changes(bg, job, filepath.Join(dir, "sub"), fork)
+			// Only dir itself can be the toplevel: a folder above it could be
+			// another repo git found because the worktree's .git is gone.
+			_, err := differ(ctx).Changes(bg, job, filepath.Join(dir, "sub"), fork)
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -427,12 +431,14 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 		})
 
-		s.It("reads a file as the worktree has it, uncommitted or untracked, by its path from the root", func(ctx *specs.Context) {
+		s.It("reads a file as the worktree has it, uncommitted or untracked, by its path from the root, which dir must be", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 			write(ctx, dir, "README.md", "changed\n")
 			write(ctx, dir, "sub/new_test.go", "t.Skip()\n")
 
-			readme, err := differ(ctx).InWorktree(bg, job, filepath.Join(dir, "sub"), "README.md")
+			_, err := differ(ctx).InWorktree(bg, job, filepath.Join(dir, "sub"), "README.md")
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			readme, err := differ(ctx).InWorktree(bg, job, dir, "README.md")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(readme).ToEqual("changed\n")
 			untracked, err := differ(ctx).InWorktree(bg, job, dir, "sub/new_test.go")

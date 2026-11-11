@@ -233,5 +233,12 @@ func movedTopRows() []movedTopRow {
 			write(ctx, dir, ".git", "gitdir: "+gitDir+"\n")
 			must(ctx, dir, "config", "core.worktree", outside)
 		}},
+		// As .worktrees/<id> sits in the main checkout: with no .git of its
+		// own, git finds the repo of the folder above, which has the base.
+		{"fails when the worktree's .git is deleted and git finds the repo the worktree sits in", func(_ *specs.Context, dir string) string {
+			return filepath.Dir(dir)
+		}, func(ctx *specs.Context, dir, outside string) {
+			ctx.Expect(os.Rename(filepath.Join(dir, ".git"), filepath.Join(outside, ".git"))).To(specs.BeNil())
+		}},
 	}
 }
