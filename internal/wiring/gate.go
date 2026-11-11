@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/out/checkrun"
@@ -53,6 +54,7 @@ func (b baseGates) CountCommand(ctx context.Context, job domain.JobID, dir, base
 const (
 	DefaultRunGateTimeout   = 15 * time.Minute
 	DefaultRunGateMaxOutput = 1 << 20
+	DefaultRunGateMaxRuns   = 4
 )
 
 // RunGateChecks is Gate as a builder's run_gate runs it: the whole call,
@@ -60,14 +62,34 @@ const (
 // passes, its commands killed with their process group, and it answers with
 // an error wrapping domain.ErrTimedOut, never a failed run. It returns only
 // once what it ran has stopped, so the job's lock is free for the next call.
-// A Timeout not set is DefaultRunGateTimeout.
+// At most MaxRuns calls run at once, over every job: one more is refused at
+// once with an error wrapping domain.ErrTooMany, neither waiting nor queued,
+// and runs nothing. A Timeout not set is DefaultRunGateTimeout, and a
+// MaxRuns not set is DefaultRunGateMaxRuns.
 type RunGateChecks struct {
 	*build.Gate
 	Timeout time.Duration
+	MaxRuns int
+
+	once  sync.Once
+	slots chan struct{}
 }
 
 // Check implements GateChecks.
 func (c *RunGateChecks) Check(ctx context.Context, id domain.JobID) (domain.ChecksRun, error) {
+	c.once.Do(func() {
+		n := c.MaxRuns
+		if n <= 0 {
+			n = DefaultRunGateMaxRuns
+		}
+		c.slots = make(chan struct{}, n)
+	})
+	select {
+	case c.slots <- struct{}{}:
+		defer func() { <-c.slots }()
+	default:
+		return domain.ChecksRun{}, fmt.Errorf("%w: %d run_gate calls are running, as many as may run at once; nothing ran, so call again once one ends", domain.ErrTooMany, cap(c.slots))
+	}
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = DefaultRunGateTimeout
@@ -82,10 +104,11 @@ func (c *RunGateChecks) Check(ctx context.Context, id domain.JobID) (domain.Chec
 }
 
 // RunGate is Gate as a builder's run_gate runs it, for the worker API: a
-// call past timeout is stopped, as RunGateChecks says, and at most
-// maxOutput bytes of each command's output are kept, the run noting it.
-func RunGate(jobs ports.JobStore, p Pipelines, worktrees ports.Workspace, bases ports.BaseLog, clock ports.Clock, locks *gatelock.Locks, homes childenv.Homes, command, countCommand []string, timeout time.Duration, maxOutput int) *RunGateChecks {
+// call past timeout is stopped and one past maxRuns at once is refused, as
+// RunGateChecks says, and at most maxOutput bytes of each command's output
+// are kept, the run noting it.
+func RunGate(jobs ports.JobStore, p Pipelines, worktrees ports.Workspace, bases ports.BaseLog, clock ports.Clock, locks *gatelock.Locks, homes childenv.Homes, command, countCommand []string, timeout time.Duration, maxOutput, maxRuns int) *RunGateChecks {
 	g := Gate(jobs, p, worktrees, bases, clock, locks, homes, command, countCommand)
 	g.Checks = checkrun.Runner{Homes: homes, MaxOutput: maxOutput}
-	return &RunGateChecks{Gate: g, Timeout: timeout}
+	return &RunGateChecks{Gate: g, Timeout: timeout, MaxRuns: maxRuns}
 }

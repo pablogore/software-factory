@@ -57,7 +57,7 @@ func newRunGate(ctx *specs.Context, command, count []string, timeout time.Durati
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(store.Create(context.Background(), domain.Job{ID: "j-1", Title: "Job", Pipeline: "default", Stage: "build", Round: 1})).To(specs.BeNil())
 	ctx.Expect(store.RecordBase(context.Background(), "j-1", base)).To(specs.BeNil())
-	return wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), childenv.Homes{Root: ctx.Testing().TempDir()}, command, count, timeout, maxOutput), store
+	return wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), childenv.Homes{Root: ctx.Testing().TempDir()}, command, count, timeout, maxOutput, wiring.DefaultRunGateMaxRuns), store
 }
 
 // checkWith runs command as run_gate does, within timeout and maxOutput.
