@@ -102,7 +102,8 @@ func ValidateRoleName(name string) error {
 }
 
 // Validate checks the role's name, kind and mode, that only a build role
-// declares allowed paths, each a well-formed pattern, and that every tool it
+// declares allowed paths, each a well-formed pattern, that its when has
+// well-formed paths and diff_lines, and that every tool it
 // lists is one of WorkerTools; the error names the role.
 func (r Role) Validate() error {
 	if err := ValidateRoleName(r.Name); err != nil {
@@ -122,6 +123,12 @@ func (r Role) Validate() error {
 	for _, p := range r.AllowedPaths {
 		if _, err := path.Match(p, ""); p == "" || err != nil {
 			return fmt.Errorf("role %s: %w: allowed path %q", r.Name, ErrInvalidValue, p)
+		}
+	}
+	// A malformed condition would only show when a review round reads it.
+	for _, c := range r.When.Any {
+		if err := c.validate(); err != nil {
+			return fmt.Errorf("role %s: %w", r.Name, err)
 		}
 	}
 	// A misspelt tool would only be denied at its first call, mid-job.
