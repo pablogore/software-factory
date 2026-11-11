@@ -35,6 +35,9 @@ func serve(ctx context.Context, args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := checkGitVersion(ctx); err != nil {
+		return err
+	}
 	homes, err := childenv.DefaultHomes()
 	if err != nil {
 		return err
