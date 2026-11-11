@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -15,28 +16,55 @@ type DiffSummary struct {
 	Lines int      `json:"lines"`
 }
 
-// Applies reports whether the role w belongs to runs on diff and, when it
-// doesn't, why. A When with no conditions always applies. A condition the
-// job can't evaluate yet applies, so a role is never skipped for want of
-// data: labels and deps_changed, and any condition when diff is nil.
-func (w When) Applies(diff *DiffSummary) (bool, string) {
-	if len(w.Any) == 0 {
-		return true, ""
-	}
+// Rating is intake's rating of a job, as a role's When reads it. An empty
+// Risk means intake never rated the job, as on jobs accepted before it did.
+type Rating struct {
+	Risk     Risk
+	Surfaces []string
+}
+
+// Applies reports whether the role w belongs to runs on diff and rating
+// and, when it doesn't, why. A When with no conditions always applies. A
+// condition the job can't evaluate yet applies, so a role is never skipped
+// for want of data: labels and deps_changed, paths and diff_lines when diff
+// is nil, and surfaces when intake never rated the job. An unrated job's
+// risk counts as high, so a role kept for risky work runs.
+func (w When) Applies(diff *DiffSummary, rating Rating) (bool, string) {
 	var why []string
+	for _, c := range w.All {
+		if ok, reason := c.holds(diff, rating); !ok {
+			why = append(why, reason)
+		}
+	}
+	if len(why) > 0 {
+		return false, "when does not apply: " + strings.Join(why, "; ")
+	}
 	for _, c := range w.Any {
-		ok, reason := c.holds(diff)
+		ok, reason := c.holds(diff, rating)
 		if ok {
 			return true, ""
 		}
 		why = append(why, reason)
 	}
-	return false, "when does not apply: " + strings.Join(why, "; ")
+	if len(why) > 0 {
+		return false, "when does not apply: " + strings.Join(why, "; ")
+	}
+	return true, ""
 }
 
-// holds reports whether every key c sets holds on diff and, when one
-// doesn't, why.
-func (c Condition) holds(diff *DiffSummary) (bool, string) {
+// holds reports whether every key c sets holds on diff and rating and,
+// when one doesn't, why.
+func (c Condition) holds(diff *DiffSummary, rating Rating) (bool, string) {
+	risk := rating.Risk
+	if risk == "" {
+		risk = RiskHigh
+	}
+	if len(c.Risk) > 0 && !slices.Contains(c.Risk, risk) {
+		return false, fmt.Sprintf("the intake risk is %s, not %s", risk, joinRisks(c.Risk))
+	}
+	if len(c.Surfaces) > 0 && rating.Risk != "" && !slices.ContainsFunc(c.Surfaces, func(s string) bool { return slices.Contains(rating.Surfaces, s) }) {
+		return false, fmt.Sprintf("no intake surface matches surfaces %s", strings.Join(c.Surfaces, ", "))
+	}
 	if diff == nil || len(c.Labels) > 0 || c.DepsChanged {
 		return true, ""
 	}
@@ -55,9 +83,19 @@ func (c Condition) holds(diff *DiffSummary) (bool, string) {
 	return true, ""
 }
 
-// validate checks that every path pattern and the diff_lines expression of
-// c are well formed.
+// validate checks that every path pattern, risk level, surface and the
+// diff_lines expression of c are well formed.
 func (c Condition) validate() error {
+	for _, r := range c.Risk {
+		if r != RiskLow && r != RiskMedium && r != RiskHigh {
+			return fmt.Errorf("%w: when risk %q, want low, medium or high", ErrInvalidValue, r)
+		}
+	}
+	for _, s := range c.Surfaces {
+		if Blank(s) {
+			return fmt.Errorf("%w: when surface %q is blank", ErrInvalidValue, s)
+		}
+	}
 	for _, p := range c.Paths {
 		if _, err := path.Match(strings.ReplaceAll(p, "**", "*"), ""); p == "" || err != nil {
 			return fmt.Errorf("%w: when path %q", ErrInvalidValue, p)
@@ -69,6 +107,14 @@ func (c Condition) validate() error {
 		}
 	}
 	return nil
+}
+
+func joinRisks(rs []Risk) string {
+	names := make([]string, len(rs))
+	for i, r := range rs {
+		names[i] = string(r)
+	}
+	return strings.Join(names, ", ")
 }
 
 // matchesAny reports whether one of paths matches one of the patterns.

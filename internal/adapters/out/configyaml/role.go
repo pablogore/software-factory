@@ -34,9 +34,12 @@ type roleFile struct {
 
 type whenFile struct {
 	Any []conditionFile `yaml:"any"`
+	All []conditionFile `yaml:"all"`
 }
 
 type conditionFile struct {
+	Risk        []string `yaml:"risk"`
+	Surfaces    []string `yaml:"surfaces"`
 	Paths       []string `yaml:"paths"`
 	Labels      []string `yaml:"labels"`
 	DepsChanged bool     `yaml:"deps_changed"`
@@ -66,14 +69,8 @@ func LoadRole(data []byte) (domain.Role, error) {
 	}
 	r.AllowedPaths = f.AllowedPaths
 	r.Tools = f.Tools
-	for _, c := range f.When.Any {
-		r.When.Any = append(r.When.Any, domain.Condition{
-			Paths:       c.Paths,
-			Labels:      c.Labels,
-			DepsChanged: c.DepsChanged,
-			DiffLines:   c.DiffLines,
-		})
-	}
+	r.When.Any = conditions(f.When.Any)
+	r.When.All = conditions(f.When.All)
 	// Validated first so a badly formed name is the error, not a later one
 	// that prints it unquoted.
 	if err := r.Validate(); err != nil {
@@ -85,6 +82,26 @@ func LoadRole(data []byte) (domain.Role, error) {
 	}
 	r.AlwaysRerun = rerun
 	return r, nil
+}
+
+// conditions converts the conditions of one when key.
+func conditions(cs []conditionFile) []domain.Condition {
+	var out []domain.Condition
+	for _, c := range cs {
+		var risk []domain.Risk
+		for _, level := range c.Risk {
+			risk = append(risk, domain.Risk(level))
+		}
+		out = append(out, domain.Condition{
+			Risk:        risk,
+			Surfaces:    c.Surfaces,
+			Paths:       c.Paths,
+			Labels:      c.Labels,
+			DepsChanged: c.DepsChanged,
+			DiffLines:   c.DiffLines,
+		})
+	}
+	return out
 }
 
 // alwaysRerun reads always_rerun: off when the key is absent, otherwise it

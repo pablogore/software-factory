@@ -37,6 +37,8 @@ one, judge risk and surfaces for that slice alone. Never reject or ask there.
   it touches auth, permissions, user input reaching queries, shells or HTML,
   secrets, or payments. Both, or none.
 - Give your best guess of risk and surfaces even when you ask or reject.
+- Submit them as `risk` (low, medium or high) and `surfaces` (a list of
+  names, `[]` when there are none); an ACCEPT without both is refused.
 
 ## Write
 - The scope is the brief the spec writer follows: specific about behaviour,

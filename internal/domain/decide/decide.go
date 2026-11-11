@@ -909,7 +909,7 @@ func gatePassed(job domain.Job, e domain.GatePassed, p domain.Pipeline) ([]domai
 
 // skipped adds to evs, the move past the gate, a ReviewSkipped for each role
 // of the round in the review stage it enters whose when does not apply to
-// the diff e names. When none of the round's roles is left, the round ends
+// the diff e names and intake's rating of the job. When none of the round's roles is left, the round ends
 // there with no verdict to wait for, so the job moves past the review stage.
 func skipped(job domain.Job, e domain.GatePassed, p domain.Pipeline, evs []domain.Event) []domain.Event {
 	entered, ok := evs[len(evs)-1].(domain.StageEntered)
@@ -928,7 +928,7 @@ func skipped(job domain.Job, e domain.GatePassed, p domain.Pipeline, evs []domai
 			left++
 			continue
 		}
-		if ok, reason := p.Roles[j].When.Applies(e.Diff); ok {
+		if ok, reason := p.Roles[j].When.Applies(e.Diff, domain.Rating{Risk: job.Risk, Surfaces: job.Surfaces}); ok {
 			left++
 		} else {
 			evs = append(evs, domain.ReviewSkipped{Job: job.ID, Round: job.Round, Role: role, Reason: reason, At: e.At})
