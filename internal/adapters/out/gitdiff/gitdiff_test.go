@@ -12,9 +12,18 @@ import (
 
 	"github.com/pablogore/software-factory/internal/adapters/out/gitdiff"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 )
 
 const base = "arch/base"
+
+// job is the job the tests run git for.
+const job domain.JobID = "job-1"
+
+// differ is a Differ with the jobs' HOMEs in the test's own directory.
+func differ(ctx *specs.Context) gitdiff.Differ {
+	return gitdiff.Differ{Homes: childenv.Homes{Root: ctx.Testing().TempDir()}}
+}
 
 // must runs git in dir with no user or system config, so the machine's
 // settings never change what a test sees, and returns its trimmed output.
@@ -71,7 +80,7 @@ func TestDiffer(t *testing.T) {
 		s.It("lists nothing for a branch that changed nothing", func(ctx *specs.Context) {
 			dir, fork := newRepo(ctx)
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).To(specs.BeEmpty())
@@ -85,7 +94,7 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "add", ".")
 			must(ctx, dir, "commit", "-q", "-m", "job")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -99,7 +108,7 @@ func TestDiffer(t *testing.T) {
 			dir, fork := newRepo(ctx)
 			write(ctx, dir, "Makefile", "changed\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
@@ -118,7 +127,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "sub/keep.log", "kept\n")
 			write(ctx, dir, "only", "kept\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -136,7 +145,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, ":(exclude)x", "new\n")
 			write(ctx, dir, "bin/y", "ignored\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -157,7 +166,7 @@ func TestDiffer(t *testing.T) {
 			// The premise: git's own exclude rules hide both.
 			ctx.Expect(must(ctx, dir, "ls-files", "--others", "--exclude-standard")).ToEqual("")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -175,7 +184,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "hidden_test.go", "t.Skip()\n")
 			write(ctx, dir, "sub/inner_test.go", "t.Skip()\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -196,7 +205,7 @@ func TestDiffer(t *testing.T) {
 			// The premise: git with the fsmonitor trusts the index and sees nothing.
 			ctx.Expect(must(ctx, dir, "diff", "--name-only", fork, "--")).ToEqual("")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
@@ -207,7 +216,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "top.txt", "new\n")
 			write(ctx, dir, "sub/inner.txt", "new\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, filepath.Join(dir, "sub"), fork)
+			changes, err := differ(ctx).Changes(bg, job, filepath.Join(dir, "sub"), fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -224,7 +233,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "deep/inner/b_test.go", "package x\n")
 			write(ctx, dir, "deep/new.txt", "new\n")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -258,7 +267,7 @@ func TestDiffer(t *testing.T) {
 			// The premise: git with that config sees neither.
 			ctx.Expect(must(ctx, dir, "diff", "--name-only", fork, "--")).ToEqual("")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -272,7 +281,7 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "mv", "Makefile", "Makefile.old")
 			must(ctx, dir, "commit", "-q", "-m", "job")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{
@@ -288,7 +297,7 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "commit", "-q", "-am", "base moves")
 			must(ctx, dir, "switch", "-q", "factory/job-1")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).To(specs.BeEmpty())
@@ -300,7 +309,7 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "commit", "-q", "-am", "job")
 			must(ctx, dir, "branch", "-f", base, "HEAD")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
@@ -312,7 +321,7 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "commit", "-q", "-am", "job")
 			must(ctx, dir, "replace", fork, "HEAD")
 
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "Makefile", Kind: domain.ChangeModified}})
@@ -321,7 +330,7 @@ func TestDiffer(t *testing.T) {
 		s.It("flags nothing in an index that hides no changes", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 
-			flagged, err := gitdiff.Differ{}.Flagged(bg, dir)
+			flagged, err := differ(ctx).Flagged(bg, job, dir)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(flagged).To(specs.BeEmpty())
@@ -336,7 +345,7 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "update-index", "--assume-unchanged", "Makefile", "README.md")
 			write(ctx, dir, "Makefile", "hidden\n")
 
-			flagged, err := gitdiff.Differ{}.Flagged(bg, filepath.Join(dir, "sub"))
+			flagged, err := differ(ctx).Flagged(bg, job, filepath.Join(dir, "sub"))
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(flagged).ToEqual([]domain.FlaggedFile{
@@ -346,7 +355,7 @@ func TestDiffer(t *testing.T) {
 				{Path: "sub/inner.txt", Flag: domain.FlagSkipWorktree},
 			})
 			// The flags are why: the diff no longer sees the Makefile's change.
-			changes, err := gitdiff.Differ{}.Changes(bg, dir, fork)
+			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "sub/inner.txt", Kind: domain.ChangeAdded}})
 		})
@@ -358,11 +367,11 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "commit", "-q", "-m", "job")
 			write(ctx, dir, "README.md", "changed\n")
 
-			readme, err := gitdiff.Differ{}.AtBase(bg, filepath.Join(dir, "sub"), fork, "README.md")
+			readme, err := differ(ctx).AtBase(bg, job, filepath.Join(dir, "sub"), fork, "README.md")
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(readme).ToEqual("README.md\n")
-			_, err = gitdiff.Differ{}.AtBase(bg, dir, fork, "sub/a_test.go")
+			_, err = differ(ctx).AtBase(bg, job, dir, fork, "sub/a_test.go")
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 		})
 
@@ -373,23 +382,23 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "add", ".")
 			must(ctx, dir, "commit", "-q", "-m", "job")
 
-			gates, ok, err := gitdiff.Differ{}.AtBaseIfAny(bg, filepath.Join(dir, ".factory"), fork, ".factory/gates.yaml")
+			gates, ok, err := differ(ctx).AtBaseIfAny(bg, job, filepath.Join(dir, ".factory"), fork, ".factory/gates.yaml")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(ok).To(specs.BeTrue())
 			ctx.Expect(gates).ToEqual("count_command: go test ./...\n")
-			_, ok, err = gitdiff.Differ{}.AtBaseIfAny(bg, dir, fork, "new.txt")
+			_, ok, err = differ(ctx).AtBaseIfAny(bg, job, dir, fork, "new.txt")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(ok).To(specs.BeFalse())
-			_, _, err = gitdiff.Differ{}.AtBaseIfAny(bg, dir, fork, ".factory")
+			_, _, err = differ(ctx).AtBaseIfAny(bg, job, dir, fork, ".factory")
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
-			_, _, err = gitdiff.Differ{}.AtBaseIfAny(bg, dir, "HEAD", "README.md")
+			_, _, err = differ(ctx).AtBaseIfAny(bg, job, dir, "HEAD", "README.md")
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 		})
 
 		s.It("refuses a ref as the base to read a file at", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 
-			_, err := gitdiff.Differ{}.AtBase(bg, dir, "HEAD", "README.md")
+			_, err := differ(ctx).AtBase(bg, job, dir, "HEAD", "README.md")
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 		})
@@ -399,10 +408,10 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "README.md", "changed\n")
 			write(ctx, dir, "sub/new_test.go", "t.Skip()\n")
 
-			readme, err := gitdiff.Differ{}.InWorktree(bg, filepath.Join(dir, "sub"), "README.md")
+			readme, err := differ(ctx).InWorktree(bg, job, filepath.Join(dir, "sub"), "README.md")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(readme).ToEqual("changed\n")
-			untracked, err := gitdiff.Differ{}.InWorktree(bg, dir, "sub/new_test.go")
+			untracked, err := differ(ctx).InWorktree(bg, job, dir, "sub/new_test.go")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(untracked).ToEqual("t.Skip()\n")
 		})
@@ -413,7 +422,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, filepath.Dir(outside), "outside_test.go", "t.Skip()\n")
 			ctx.Expect(os.Symlink(outside, filepath.Join(dir, "link_test.go"))).To(specs.BeNil())
 
-			got, err := gitdiff.Differ{}.InWorktree(bg, dir, "link_test.go")
+			got, err := differ(ctx).InWorktree(bg, job, dir, "link_test.go")
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(got).ToEqual(outside)
@@ -422,7 +431,7 @@ func TestDiffer(t *testing.T) {
 		s.It("fails for a base commit the repo does not have", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 
-			_, err := gitdiff.Differ{}.Changes(bg, dir, strings.Repeat("0", 40))
+			_, err := differ(ctx).Changes(bg, job, dir, strings.Repeat("0", 40))
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err.Error()).To(specs.Contain("git diff"))
@@ -432,7 +441,7 @@ func TestDiffer(t *testing.T) {
 			dir, fork := newRepo(ctx)
 			tree := must(ctx, dir, "rev-parse", fork+"^{tree}")
 
-			_, err := gitdiff.Differ{}.Changes(bg, dir, tree)
+			_, err := differ(ctx).Changes(bg, job, dir, tree)
 
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(err.Error()).To(specs.Contain("git diff"))
@@ -442,7 +451,7 @@ func TestDiffer(t *testing.T) {
 			dir, fork := newRepo(ctx)
 
 			for _, ref := range []string{base, "HEAD", fork[:12], strings.ToUpper(fork)} {
-				_, err := gitdiff.Differ{}.Changes(bg, dir, ref)
+				_, err := differ(ctx).Changes(bg, job, dir, ref)
 
 				ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 			}
@@ -451,7 +460,7 @@ func TestDiffer(t *testing.T) {
 		s.It("refuses an empty base", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 
-			_, err := gitdiff.Differ{}.Changes(bg, dir, "")
+			_, err := differ(ctx).Changes(bg, job, dir, "")
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrMissingField))
 		})

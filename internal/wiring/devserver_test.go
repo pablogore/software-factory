@@ -20,6 +20,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/memstore"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/bus"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/platform/portrange"
@@ -68,7 +69,7 @@ func newDevWorld(ctx *specs.Context, job domain.Job) devWorld {
 	ctx.Cleanup(func() { _ = servers.StopJob(bg, job.ID) })
 	ranges, err := portrange.New(portrange.DefaultBase, portrange.DefaultStep)
 	ctx.Expect(err).To(specs.BeNil())
-	dev := &wiring.DevServers{Servers: servers, Worktrees: oneDir(dir), Ports: ranges, Bases: store}
+	dev := &wiring.DevServers{Servers: servers, Worktrees: oneDir(dir), Ports: ranges, Bases: store, Homes: childenv.Homes{Root: ctx.Testing().TempDir()}}
 	tokens := jobtoken.New()
 	srv := httptest.NewServer(wiring.WorkerAPI(tokens, store, onePipeline{}, nil, gatelock.New(), fixedClock{}, dev, nil))
 	ctx.Cleanup(srv.Close)

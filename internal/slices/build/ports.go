@@ -41,28 +41,29 @@ type bases interface {
 // diffs lists the files a worktree changed against base, the commit its
 // branch was made from, and the files its index marks so that no diff shows
 // their changes, and reads a file as base has it and as the worktree has it,
-// by its path from the repo root.
+// by its path from the repo root; the job picks the environment git runs
+// with, as it does the checks'.
 type diffs interface {
-	Changes(ctx context.Context, dir, base string) ([]domain.FileChange, error)
-	Flagged(ctx context.Context, dir string) ([]domain.FlaggedFile, error)
-	AtBase(ctx context.Context, dir, base, file string) (string, error)
-	InWorktree(ctx context.Context, dir, file string) (string, error)
+	Changes(ctx context.Context, job domain.JobID, dir, base string) ([]domain.FileChange, error)
+	Flagged(ctx context.Context, job domain.JobID, dir string) ([]domain.FlaggedFile, error)
+	AtBase(ctx context.Context, job domain.JobID, dir, base, file string) (string, error)
+	InWorktree(ctx context.Context, job domain.JobID, dir, file string) (string, error)
 }
 
 // snapshots checks out a commit, by its full object name, in a directory of
 // its own apart from the worktree at dir, from the repo dir is in, and
 // removes it, so the gate counts the base's tests on files the builder never
-// had.
+// had; the job picks the environment git runs with.
 type snapshots interface {
-	Checkout(ctx context.Context, dir, commit string) (string, error)
-	Remove(ctx context.Context, dir, path string) error
+	Checkout(ctx context.Context, job domain.JobID, dir, commit string) (string, error)
+	Remove(ctx context.Context, job domain.JobID, dir, path string) error
 }
 
 // repoConfig is the test count command the repo configures at base, the
 // full object name of a commit, read from the repo dir is in; none when it
-// configures none.
+// configures none; the job picks the environment git runs with.
 type repoConfig interface {
-	CountCommand(ctx context.Context, dir, base string) ([]string, error)
+	CountCommand(ctx context.Context, job domain.JobID, dir, base string) ([]string, error)
 }
 
 // locks is the per-job lock a job's checks run under, shared with a
