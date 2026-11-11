@@ -174,6 +174,16 @@ Then tell the user, in a few lines:
 
 - Label one or two small issues `factory`, then run `/factory run` in Claude
   Code from the project root.
+- To keep the orchestrator's context small, start that session clean:
+
+  ```bash
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --strict-mcp-config --setting-sources project,local
+  ```
+
+  It leaves out MCP servers, the user's own settings (`~/.claude/settings.json`)
+  and automatic memory; the project's `.claude/` settings still load. It isn't
+  confirmed yet whether the subagents inherit this setup; that is measured in
+  spike S4.
 - Every job ends as a PR. The approver merges what it approves; the rest wait
   labeled `factory:needs-human`. Approve one by merging it on GitHub, or tell
   the factory what to change with `/factory <anything>`.
