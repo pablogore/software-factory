@@ -117,9 +117,20 @@ func (w *Workspace) Clean(ctx context.Context, job domain.JobID) error {
 // gets no backup. It stages into a scratch index, so a failure leaves the
 // worktree and its index as they were. A submodule's own changes count for
 // none: git add can't save them, and to tell them git status would run git
-// in the submodule, with the submodule's config.
+// in the submodule, with the submodule's config. git runs with the
+// worktree's git folder and the worktree itself given: core.worktree, in the
+// config or in config.worktree, is the builder's to set, and would have git
+// status and git add take another folder's files as the worktree's, and
+// save them where every job can read them.
 func (w *Workspace) backup(ctx context.Context, wt ports.Worktree) error {
-	status, err := w.git(ctx, wt.Job, wt.Path, "status", "--porcelain", "--ignore-submodules=dirty")
+	// The ceiling keeps git from finding the main checkout's git folder when
+	// the worktree's .git is gone.
+	gitDir, err := w.gitEnv(ctx, wt.Job, wt.Path, []string{"GIT_CEILING_DIRECTORIES=" + filepath.Dir(wt.Path)}, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return err
+	}
+	at := []string{"--git-dir=" + gitDir, "--work-tree=" + wt.Path}
+	status, err := w.git(ctx, wt.Job, wt.Path, append(at, "status", "--porcelain", "--ignore-submodules=dirty")...)
 	if err != nil || status == "" {
 		return err
 	}
@@ -129,24 +140,24 @@ func (w *Workspace) backup(ctx context.Context, wt ports.Worktree) error {
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
 	index := []string{"GIT_INDEX_FILE=" + filepath.Join(scratch, "index")}
-	if _, err := w.gitEnv(ctx, wt.Job, wt.Path, index, "read-tree", "HEAD"); err != nil {
+	if _, err := w.gitEnv(ctx, wt.Job, wt.Path, index, append(at, "read-tree", "HEAD")...); err != nil {
 		return err
 	}
-	if _, err := w.gitEnv(ctx, wt.Job, wt.Path, index, "add", "--all"); err != nil {
+	if _, err := w.gitEnv(ctx, wt.Job, wt.Path, index, append(at, "add", "--all")...); err != nil {
 		return err
 	}
-	tree, err := w.gitEnv(ctx, wt.Job, wt.Path, index, "write-tree")
+	tree, err := w.gitEnv(ctx, wt.Job, wt.Path, index, append(at, "write-tree")...)
 	if err != nil {
 		return err
 	}
 	// A fixed identity, so a machine without git's user.name and user.email
 	// can still save the backup.
-	commit, err := w.git(ctx, wt.Job, wt.Path, "-c", "user.name=factoryd", "-c", "user.email=factoryd@localhost",
-		"commit-tree", tree, "-p", "HEAD", "-m", "backup of uncommitted changes in "+wt.Branch)
+	commit, err := w.git(ctx, wt.Job, wt.Path, append(at, "-c", "user.name=factoryd", "-c", "user.email=factoryd@localhost",
+		"commit-tree", tree, "-p", "HEAD", "-m", "backup of uncommitted changes in "+wt.Branch)...)
 	if err != nil {
 		return err
 	}
-	_, err = w.git(ctx, wt.Job, wt.Path, "update-ref", backupRef(wt.Job), commit)
+	_, err = w.git(ctx, wt.Job, wt.Path, append(at, "update-ref", backupRef(wt.Job), commit)...)
 	return err
 }
 
