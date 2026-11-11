@@ -399,8 +399,9 @@ func git(ctx context.Context, home, dir string, args ...string) (string, error) 
 }
 
 // run is git with stdin as its input, with childenv.Base, home as its HOME
-// and env as its environment: whatever git runs from the config the worktree shares, such
-// as a hook it defines or a filter, gets no token factoryd holds.
+// and env as its environment: whatever git runs from the config the
+// worktree shares, such as a hook it defines or a filter, gets no token
+// factoryd holds.
 // --no-replace-objects: the refs/replace/ refs are shared with the
 // worktree, so a builder could make the base commit stand for one of its
 // own and hide what it changed. No fsmonitor: it is set in the config the
