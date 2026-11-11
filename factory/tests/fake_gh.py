@@ -116,7 +116,20 @@ def main(argv):
         print(json.dumps(out))
     elif group == "pr" and cmd == "view":
         p = find_pr(s, pos[0])
-        print(json.dumps(pick({**p, "baseRefName": p["base"]}, o["json"][0])))
+        rollup = [{"name": c["name"], "state": c["state"]} for c in p.get("checks", [])]
+        print(json.dumps(pick({**p, "baseRefName": p["base"], "statusCheckRollup": rollup}, o["json"][0])))
+    elif group == "pr" and cmd == "checks":  # like gh: --json exits 0, the table exits 1 failing, 8 pending
+        p = find_pr(s, pos[0])
+        checks = p.get("checks", [])
+        if not checks:
+            sys.exit(f"no checks reported on the {p['head']!r} branch")
+        if "json" in o:
+            print(json.dumps([pick(c, o["json"][0]) for c in checks]))
+            return
+        for c in checks:
+            print(f"{c['name']}\t{c['bucket']}\t1s\t{URL}/actions")
+        buckets = {c["bucket"] for c in checks}
+        sys.exit(1 if buckets & {"fail", "cancel"} else 8 if "pending" in buckets else 0)
     elif group == "pr" and cmd == "ready":
         find_pr(s, pos[0])["isDraft"] = "undo" in o
     elif group == "pr" and cmd == "comment":
