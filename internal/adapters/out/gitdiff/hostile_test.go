@@ -59,10 +59,10 @@ func (h hostile) changes(ctx *specs.Context) {
 	ctx.Expect(err).To(specs.BeNil())
 }
 
-// changesFailing is changes for a repo that makes git diff fail.
-func (h hostile) changesFailing(ctx *specs.Context) {
-	_, err := h.differ.Changes(context.Background(), job, h.dir, h.fork)
-	ctx.Expect(err).To(specs.Not(specs.BeNil()))
+// changesAnyway is changes for a repo where git diff may or may not fail:
+// only what the repo's commands saw matters.
+func (h hostile) changesAnyway() {
+	_, _ = h.differ.Changes(context.Background(), job, h.dir, h.fork)
 }
 
 func (h hostile) marked() bool {
@@ -135,8 +135,9 @@ func TestDemoHostileRepo(t *testing.T) {
 			write(ctx, h.dir, ".git/info/attributes", "data.txt filter=evil\n")
 			must(ctx, h.dir, "config", "filter.evil.process", h.dump())
 
-			// git gives up once the filter quits without its handshake.
-			h.changesFailing(ctx)
+			// The filter quits without its handshake: git 2.54 gives up
+			// on it with an error, git 2.56 goes on without it.
+			h.changesAnyway()
 
 			h.expectJobEnv(ctx)
 		})
