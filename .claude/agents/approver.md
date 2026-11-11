@@ -73,6 +73,17 @@ APPROVE only if all of these hold:
 - It brings the initiative closer to `vision.md`'s "Resultado buscado".
 - The final round's `checks.md` says `GATE: PASS`, the newest review of every
   reviewer is `VERDICT: PASS`, and no Note in them describes a real problem.
+- The PR's CI checks on its last commit are green. Run
+  `cd <worktree> && gh pr checks <pr> --json name,state,bucket`; it reports
+  the checks of the PR's head commit:
+  - It fails with `no checks reported`: the PR has no CI checks (`gh pr view
+    <pr> --json statusCheckRollup` shows `[]`). That is not a failure: this
+    point holds and you decide as you would without it.
+  - Every check's `bucket` is `pass` or `skipping`: this point holds.
+  - Any check's `bucket` is `fail`, `cancel` or `pending`: ESCALATE, and name
+    each of those checks with its `state` under `## Why` and `## For the
+    human`. Don't wait for pending checks.
+  - Any other error: ESCALATE, saying the checks could not be read and why.
 - The change stays inside the slice's spec: nothing from its **Fuera de alcance**
   was built. If build.md has a `## Propuesta de cambio al spec`, the builder
   built the spec as written; the replan decides the proposal. Don't approve or
