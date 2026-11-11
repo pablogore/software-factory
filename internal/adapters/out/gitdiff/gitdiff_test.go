@@ -236,9 +236,11 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "sub/inner.txt", "new\n")
 
 			// Only dir itself can be the toplevel: a folder above it could be
-			// another repo git found because the worktree's .git is gone.
+			// another repo git found because the worktree's .git is gone, so
+			// git doesn't look there.
 			_, err := differ(ctx).Changes(bg, job, filepath.Join(dir, "sub"), fork)
-			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			ctx.Expect(err.Error()).To(specs.Contain("not a git repository"))
 			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
@@ -359,7 +361,7 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(flagged).To(specs.BeEmpty())
 		})
 
-		s.It("flags each file the index marks skip-worktree or assume-unchanged, by its path from the root", func(ctx *specs.Context) {
+		s.It("flags each file the index marks skip-worktree or assume-unchanged, by its path from the root, which dir must be", func(ctx *specs.Context) {
 			dir, fork := newRepo(ctx)
 			write(ctx, dir, "sub/inner.txt", "inner\n")
 			must(ctx, dir, "add", ".")
@@ -368,7 +370,9 @@ func TestDiffer(t *testing.T) {
 			must(ctx, dir, "update-index", "--assume-unchanged", "Makefile", "README.md")
 			write(ctx, dir, "Makefile", "hidden\n")
 
-			flagged, err := differ(ctx).Flagged(bg, job, filepath.Join(dir, "sub"))
+			_, err := differ(ctx).Flagged(bg, job, filepath.Join(dir, "sub"))
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			flagged, err := differ(ctx).Flagged(bg, job, dir)
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(flagged).ToEqual([]domain.FlaggedFile{
@@ -388,14 +392,16 @@ func TestDiffer(t *testing.T) {
 			})
 		})
 
-		s.It("reads a file as the base commit has it, whatever the worktree did to it", func(ctx *specs.Context) {
+		s.It("reads a file as the base commit has it, whatever the worktree did to it, from the worktree's root", func(ctx *specs.Context) {
 			dir, fork := newRepo(ctx)
 			write(ctx, dir, "sub/a_test.go", "committed\n")
 			must(ctx, dir, "add", ".")
 			must(ctx, dir, "commit", "-q", "-m", "job")
 			write(ctx, dir, "README.md", "changed\n")
 
-			readme, err := differ(ctx).AtBase(bg, job, filepath.Join(dir, "sub"), fork, "README.md")
+			_, err := differ(ctx).AtBase(bg, job, filepath.Join(dir, "sub"), fork, "README.md")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			readme, err := differ(ctx).AtBase(bg, job, dir, fork, "README.md")
 
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(readme).ToEqual("README.md\n")
@@ -403,14 +409,16 @@ func TestDiffer(t *testing.T) {
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 		})
 
-		s.It("reads a file the base commit may not have, and says when it has none", func(ctx *specs.Context) {
+		s.It("reads a file the base commit may not have, from the worktree's root, and says when it has none", func(ctx *specs.Context) {
 			dir, fork := newRepoWith(ctx, map[string]string{".factory/gates.yaml": "count_command: go test ./...\n"})
 			write(ctx, dir, ".factory/gates.yaml", "count_command: true\n")
 			write(ctx, dir, "new.txt", "new\n")
 			must(ctx, dir, "add", ".")
 			must(ctx, dir, "commit", "-q", "-m", "job")
 
-			gates, ok, err := differ(ctx).AtBaseIfAny(bg, job, filepath.Join(dir, ".factory"), fork, ".factory/gates.yaml")
+			_, _, err := differ(ctx).AtBaseIfAny(bg, job, filepath.Join(dir, ".factory"), fork, ".factory/gates.yaml")
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
+			gates, ok, err := differ(ctx).AtBaseIfAny(bg, job, dir, fork, ".factory/gates.yaml")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(ok).To(specs.BeTrue())
 			ctx.Expect(gates).ToEqual("count_command: go test ./...\n")
@@ -437,7 +445,7 @@ func TestDiffer(t *testing.T) {
 			write(ctx, dir, "sub/new_test.go", "t.Skip()\n")
 
 			_, err := differ(ctx).InWorktree(bg, job, filepath.Join(dir, "sub"), "README.md")
-			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			readme, err := differ(ctx).InWorktree(bg, job, dir, "README.md")
 			ctx.Expect(err).To(specs.BeNil())
 			ctx.Expect(readme).ToEqual("changed\n")
