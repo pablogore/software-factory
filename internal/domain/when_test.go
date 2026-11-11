@@ -23,6 +23,14 @@ type appliesRow struct {
 	reason string
 }
 
+type ratingRow struct {
+	name   string
+	when   domain.When
+	rating domain.Rating
+	want   bool
+	reason string
+}
+
 type whenErrRow struct {
 	name string
 	cond domain.Condition
@@ -32,6 +40,10 @@ type whenErrRow struct {
 func paths(p ...string) domain.Condition { return domain.Condition{Paths: p} }
 
 func lines(expr string) domain.Condition { return domain.Condition{DiffLines: expr} }
+
+func risk(levels ...domain.Risk) domain.Condition { return domain.Condition{Risk: levels} }
+
+func surfaces(names ...string) domain.Condition { return domain.Condition{Surfaces: names} }
 
 func TestWhen(t *testing.T) {
 	specs.Describe(t, "MatchGlob", func(s *specs.Spec) {
@@ -68,7 +80,39 @@ func TestWhen(t *testing.T) {
 				"when does not apply: the diff has 120 lines, not >= 500"},
 		}
 		specs.Table(s, rows, func(r appliesRow) string { return r.name }, func(ctx *specs.Context, r appliesRow) {
-			ok, reason := r.when.Applies(r.diff)
+			ok, reason := r.when.Applies(r.diff, domain.Rating{Risk: domain.RiskMedium})
+
+			ctx.Expect(ok).ToEqual(r.want)
+			ctx.Expect(reason).ToEqual(r.reason)
+		})
+	})
+
+	specs.Describe(t, "When.Applies on intake's rating", func(s *specs.Spec) {
+		diff := &domain.DiffSummary{Paths: []string{"internal/a.go"}, Lines: 120}
+		low := domain.Rating{Risk: domain.RiskLow, Surfaces: []string{"api"}}
+		high := domain.Rating{Risk: domain.RiskHigh, Surfaces: []string{"api", "ui"}}
+		none := domain.Rating{Risk: domain.RiskMedium, Surfaces: []string{}}
+		rows := []ratingRow{
+			{"applies when the intake risk is listed", domain.When{Any: []domain.Condition{risk(domain.RiskHigh)}}, high, true, ""},
+			{"does not apply when the intake risk is not listed, and says which", domain.When{Any: []domain.Condition{risk(domain.RiskMedium, domain.RiskHigh)}}, low, false,
+				"when does not apply: the intake risk is low, not medium, high"},
+			{"counts a job intake never rated as high risk", domain.When{Any: []domain.Condition{risk(domain.RiskHigh)}}, domain.Rating{}, true, ""},
+			{"does not apply to a job intake never rated when high is not listed", domain.When{Any: []domain.Condition{risk(domain.RiskLow)}}, domain.Rating{}, false,
+				"when does not apply: the intake risk is high, not low"},
+			{"applies when the intake shares a surface", domain.When{Any: []domain.Condition{surfaces("security", "ui")}}, high, true, ""},
+			{"does not apply when the intake shares no surface, and says which", domain.When{Any: []domain.Condition{surfaces("security", "ui")}}, low, false,
+				"when does not apply: no intake surface matches surfaces security, ui"},
+			{"does not apply when the intake left no surface", domain.When{Any: []domain.Condition{surfaces("ui")}}, none, false,
+				"when does not apply: no intake surface matches surfaces ui"},
+			{"applies on surfaces of a job intake never rated, which it can't evaluate", domain.When{Any: []domain.Condition{surfaces("ui")}}, domain.Rating{}, true, ""},
+			{"applies when either risk or surfaces holds under any", domain.When{Any: []domain.Condition{risk(domain.RiskHigh), surfaces("api")}}, low, true, ""},
+			{"needs both risk and paths of one condition to hold", domain.When{Any: []domain.Condition{{Risk: []domain.Risk{domain.RiskLow}, Paths: []string{"ui/**"}}}}, low, false,
+				"when does not apply: no changed file matches paths ui/**"},
+			{"checks risk even beside a key the job can't evaluate yet", domain.When{Any: []domain.Condition{{Risk: []domain.Risk{domain.RiskHigh}, Labels: []string{"security"}}}}, low, false,
+				"when does not apply: the intake risk is low, not high"},
+		}
+		specs.Table(s, rows, func(r ratingRow) string { return r.name }, func(ctx *specs.Context, r ratingRow) {
+			ok, reason := r.when.Applies(diff, r.rating)
 
 			ctx.Expect(ok).ToEqual(r.want)
 			ctx.Expect(reason).ToEqual(r.reason)
@@ -81,6 +125,8 @@ func TestWhen(t *testing.T) {
 			{"rejects diff_lines with no number", lines(">= many"), `role reviewer-big: invalid value: diff_lines ">= many", want an operator (>=, <=, ==, >, <) and a number`},
 			{"rejects a malformed path pattern", paths("src/[a"), `role reviewer-big: invalid value: when path "src/[a"`},
 			{"rejects an empty path pattern", paths(""), `role reviewer-big: invalid value: when path ""`},
+			{"rejects an unknown risk level", risk("critical"), `role reviewer-big: invalid value: when risk "critical", want low, medium or high`},
+			{"rejects a blank surface", surfaces(" "), `role reviewer-big: invalid value: when surface " " is blank`},
 		}
 		specs.Table(s, rows, func(r whenErrRow) string { return r.name }, func(ctx *specs.Context, r whenErrRow) {
 			role := domain.Role{Name: "reviewer-big", Kind: domain.KindReview, Mode: domain.ModeBlocking, When: domain.When{Any: []domain.Condition{r.cond}}}

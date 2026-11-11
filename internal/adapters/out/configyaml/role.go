@@ -37,6 +37,8 @@ type whenFile struct {
 }
 
 type conditionFile struct {
+	Risk        []string `yaml:"risk"`
+	Surfaces    []string `yaml:"surfaces"`
 	Paths       []string `yaml:"paths"`
 	Labels      []string `yaml:"labels"`
 	DepsChanged bool     `yaml:"deps_changed"`
@@ -67,7 +69,13 @@ func LoadRole(data []byte) (domain.Role, error) {
 	r.AllowedPaths = f.AllowedPaths
 	r.Tools = f.Tools
 	for _, c := range f.When.Any {
+		var risk []domain.Risk
+		for _, level := range c.Risk {
+			risk = append(risk, domain.Risk(level))
+		}
 		r.When.Any = append(r.When.Any, domain.Condition{
+			Risk:        risk,
+			Surfaces:    c.Surfaces,
 			Paths:       c.Paths,
 			Labels:      c.Labels,
 			DepsChanged: c.DepsChanged,

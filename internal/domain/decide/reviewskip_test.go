@@ -76,6 +76,45 @@ func TestReviewSkip(t *testing.T) {
 			ctx.Expect(evs).ToEqual([]domain.Event{ran(1, 1, passingRun), entered("review", 1)})
 		})
 
+		s.It("skips a role whose risk the intake rating doesn't meet, with its reason, and runs it on a job intake never rated", func(ctx *specs.Context) {
+			p := whenPipeline()
+			p.Roles[0].When.Any = []domain.Condition{{Risk: []domain.Risk{domain.RiskHigh}}}
+			diff := &domain.DiffSummary{Paths: []string{"ui/a.tsx"}, Lines: 250}
+			low := atGate(1, nil)
+			low.Risk = domain.RiskLow
+
+			evs, err := decide.Decide(low, gatePassed(1, diff), p)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(evs).ToEqual([]domain.Event{ran(1, 1, passingRun), entered("review", 1),
+				skippedRole("reviewer-code", "when does not apply: the intake risk is low, not high", 1, 1)})
+
+			evs, err = decide.Decide(atGate(1, nil), gatePassed(1, diff), p)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(evs).ToEqual([]domain.Event{ran(1, 1, passingRun), entered("review", 1)})
+		})
+
+		s.It("skips a role whose surfaces the intake shares none of, and runs it when it shares one", func(ctx *specs.Context) {
+			p := whenPipeline()
+			p.Roles[0].When.Any = []domain.Condition{{Surfaces: []string{"auth"}}}
+			diff := &domain.DiffSummary{Paths: []string{"ui/a.tsx"}, Lines: 250}
+			job := atGate(1, nil)
+			job.Risk, job.Surfaces = domain.RiskMedium, []string{"ui"}
+
+			evs, err := decide.Decide(job, gatePassed(1, diff), p)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(evs).ToEqual([]domain.Event{ran(1, 1, passingRun), entered("review", 1),
+				skippedRole("reviewer-code", "when does not apply: no intake surface matches surfaces auth", 1, 1)})
+
+			job.Surfaces = []string{"ui", "auth"}
+			evs, err = decide.Decide(job, gatePassed(1, diff), p)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(evs).ToEqual([]domain.Event{ran(1, 1, passingRun), entered("review", 1)})
+		})
+
 		s.It("judges only the round's reviewers in a later round", func(ctx *specs.Context) {
 			evs, err := decide.Decide(atGate(2, []string{"reviewer-code", "reviewer-ui"}), gatePassed(1, &domain.DiffSummary{Paths: []string{"a.go"}, Lines: 1}), whenPipeline())
 

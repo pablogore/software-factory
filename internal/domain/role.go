@@ -41,8 +41,12 @@ type When struct {
 	Any []Condition `json:"any,omitempty"`
 }
 
-// Condition is one entry of When.Any.
+// Condition is one entry of When.Any. Risk and Surfaces read intake's
+// rating of the job: Risk holds when its risk is one of them, Surfaces when
+// it shares at least one surface with them.
 type Condition struct {
+	Risk        []Risk   `json:"risk,omitempty"`
+	Surfaces    []string `json:"surfaces,omitempty"`
 	Paths       []string `json:"paths,omitempty"`
 	Labels      []string `json:"labels,omitempty"`
 	DepsChanged bool     `json:"deps_changed,omitempty"`
@@ -103,7 +107,7 @@ func ValidateRoleName(name string) error {
 
 // Validate checks the role's name, kind and mode, that only a build role
 // declares allowed paths, each a well-formed pattern, that its when has
-// well-formed paths and diff_lines, and that every tool it
+// well-formed paths, risk, surfaces and diff_lines, and that every tool it
 // lists is one of WorkerTools; the error names the role.
 func (r Role) Validate() error {
 	if err := ValidateRoleName(r.Name); err != nil {

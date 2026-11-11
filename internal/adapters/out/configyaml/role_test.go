@@ -212,6 +212,23 @@ func TestLoadRole(t *testing.T) {
 			})
 		})
 
+		s.It("loads when conditions on intake's risk and surfaces", func(ctx *specs.Context) {
+			r, err := configyaml.LoadRole([]byte("name: security-deep\nkind: review\nmode: shadow\nwhen:\n  any:\n    - risk: [medium, high]\n    - surfaces: [auth, payments]\n"))
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(r.When.Any).ToEqual([]domain.Condition{
+				{Risk: []domain.Risk{domain.RiskMedium, domain.RiskHigh}},
+				{Surfaces: []string{"auth", "payments"}},
+			})
+		})
+
+		s.It("rejects a when risk level that doesn't exist, naming the role", func(ctx *specs.Context) {
+			_, err := configyaml.LoadRole([]byte("name: security-deep\nkind: review\nmode: shadow\nwhen:\n  any:\n    - risk: [severe]\n"))
+
+			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
+			ctx.Expect(err.Error()).ToEqual(`role security-deep: invalid value: when risk "severe", want low, medium or high`)
+		})
+
 		s.It("loads the paths a build role may touch", func(ctx *specs.Context) {
 			r, err := configyaml.LoadRole([]byte("name: builder\nkind: build\nmode: blocking\nallowed_paths: [internal/slices/build/, \"docs/*.md\"]\n"))
 
