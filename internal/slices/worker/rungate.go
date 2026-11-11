@@ -49,6 +49,14 @@ func (s *Submitter) RunGate(ctx context.Context, token string, job domain.JobID)
 	return checks, nil
 }
 
+// MayRunGate tells whether token's role may run job's checks, as RunGate
+// authorizes it, so a role that may not, a reviewer's, is not shown
+// run_gate. It runs nothing and leaves RunGate to refuse a call anyway.
+func (s *Submitter) MayRunGate(token string, job domain.JobID) bool {
+	_, err := s.Tokens.Authorize(token, jobtoken.OpRunGate, job)
+	return err == nil
+}
+
 // startGate checks token may run job's checks now and takes the job's lock
 // in Locks, under the job's lock Submit revokes tokens under, so a token
 // whose result was saved runs none, and no run starts while a submission

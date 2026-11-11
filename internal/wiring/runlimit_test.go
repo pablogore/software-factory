@@ -169,6 +169,9 @@ func TestRunGateMaxRuns(t *testing.T) {
 			l := newLimitedGate(ctx, 2, 1, 300*time.Millisecond)
 			_, err := l.gate.Check(context.Background(), "j-1")
 			ctx.Expect(err).To(specs.MatchError(domain.ErrTimedOut))
+			// The next call has a deadline no load reaches, so only a place
+			// still held can fail it.
+			l.gate.Timeout = time.Minute
 			l.releaseRuns(ctx)
 			run, err := l.gate.Check(context.Background(), "j-2")
 			ctx.Expect(err).To(specs.BeNil())

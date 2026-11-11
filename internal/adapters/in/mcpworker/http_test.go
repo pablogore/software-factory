@@ -64,6 +64,14 @@ func (s *submitter) RunGate(_ context.Context, token string, job domain.JobID) (
 	return s.run, nil
 }
 
+// MayRunGate lets every token but noGate run the checks.
+func (s *submitter) MayRunGate(token string, _ domain.JobID) bool {
+	return token != noGate
+}
+
+// noGate is the token of a role that may not run the checks, a reviewer's.
+const noGate = "reviewer-tok"
+
 func (s *submitter) DevServer(_ context.Context, token string, job domain.JobID) (int, error) {
 	s.devs = append(s.devs, call{token, job, "start"})
 	if s.err != nil {

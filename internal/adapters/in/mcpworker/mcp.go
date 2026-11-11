@@ -90,13 +90,20 @@ var devServerSchema = map[string]any{
 }
 
 // mcpHandler serves, at MCPPath, an MCP server whose only tools are
-// submit_result, progress, run_gate, dev_server, ask_human and context_pack.
+// submit_result, progress, run_gate, dev_server, ask_human and context_pack;
+// it lists run_gate only to a token that may run the job's checks, so a
+// reviewer never sees it.
 // It is stateless: every request names the job by its path
 // and brings its token, so no session outlives a request or carries a job
 // or a token from one request to the next.
 func mcpHandler(s Submitter) http.Handler {
 	return mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		return mcpServer(s, domain.JobID(r.PathValue("job")))
+		job := domain.JobID(r.PathValue("job"))
+		srv := mcpServer(s, job)
+		if !s.MayRunGate(bearer(r.Header), job) {
+			srv.AddReceivingMiddleware(unlisted(ToolRunGate))
+		}
+		return srv
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 2 * MaxResultBytes})
 }
 
@@ -156,6 +163,30 @@ func mcpServer(s Submitter, job domain.JobID) *mcp.Server {
 		return packTool(ctx, s, job, req), nil
 	})
 	return srv
+}
+
+// unlisted leaves tool out of the tools a tools/list call answers, and still
+// serves a call to it: a role that may not use it never sees it listed, and
+// one that calls it anyway is refused by the Submitter with the error naming
+// the tool and the role, running nothing.
+func unlisted(tool string) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			list, ok := res.(*mcp.ListToolsResult)
+			if err != nil || !ok {
+				return res, err
+			}
+			shown := *list
+			shown.Tools = make([]*mcp.Tool, 0, len(list.Tools))
+			for _, t := range list.Tools {
+				if t.Name != tool {
+					shown.Tools = append(shown.Tools, t)
+				}
+			}
+			return &shown, nil
+		}
+	}
 }
 
 // packTool gives job's context pack. The call's arguments are never read,
