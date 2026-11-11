@@ -21,7 +21,7 @@ func raiseCap(job domain.JobID, kind domain.AuthorKind, allowed bool, c domain.I
 
 // stoppedAt is a starter whose issue #1, worked as the slices of usd, is
 // stopped before slice "1-s9", whose work counts its runs in ran.
-func stoppedAt(ctx *specs.Context, ran *atomic.Int32, usd ...float64) *runmode.Starter {
+func stoppedAt(ctx *specs.Context, ran *atomic.Int32, usd ...float64) starter {
 	st := newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.DefaultCaps, reports{}.add(sliced(1, usd...)), &outbox{}, &stops{})
 	_, err := st.Start(context.Background(), domain.NextSliceRequested{Job: "1-s1", Initiative: "1", At: epoch}, "1-s9", func(context.Context) error {
 		ran.Add(1)
@@ -142,6 +142,18 @@ func TestStarterRaise(t *testing.T) {
 				ctx.Expect(done).To(specs.BeNil())
 				code, _ := domain.RaiseRefusalOf(err)
 				ctx.Expect(code).ToEqual(domain.RaiseNotStopped)
+			})
+
+			s.It("when the raise cannot be saved it starts nothing and returns the error", func(ctx *specs.Context) {
+				var ran atomic.Int32
+				st := stoppedAt(ctx, &ran, 1, 1, 1, 1, 1)
+				st.log.fail = errSaveFailed
+
+				done, err := st.Raise(context.Background(), raiseCap("1-s1", domain.AuthorPerson, true, domain.CapSlices, 6, 1))
+
+				ctx.Expect(done).To(specs.BeNil())
+				ctx.Expect(errors.Is(err, errSaveFailed)).To(specs.BeTrue())
+				ctx.Expect(ran.Load()).ToEqual(int32(0))
 			})
 
 			s.It("once accepted, the same raise delivered again starts nothing more", func(ctx *specs.Context) {

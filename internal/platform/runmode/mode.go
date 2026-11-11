@@ -16,7 +16,9 @@
 //
 // In every mode, Starter keeps an issue past its caps (Caps) from starting
 // another slice, and tells why the same way; the other issues go on. Only an
-// allowed person's raise of the cap it stopped at starts it again.
+// allowed person's raise of the cap it stopped at starts it again. The stops,
+// their waits and the raised caps are saved in factoryd's store (CapLog), so
+// a restart neither starts a stopped issue nor stops it again at a raised cap.
 //
 // The brake is saved in factoryd's store (BrakeLog), so after a restart it is
 // on again if it was, until a person releases it, and no summary is

@@ -1,6 +1,6 @@
 // Package memstore is the in-memory fake of ports.JobStore, ports.EventLog,
 // ports.EventFeed, ports.DeadEvents, ports.Outbox, ports.DiscardLog,
-// ports.BaseLog and ports.BrakeLog for slice tests. It passes the same
+// ports.BaseLog, ports.BrakeLog and ports.CapLog for slice tests. It passes the same
 // contract suite as the SQLite store (internal/adapters/out/sqlite).
 package memstore
 
@@ -37,6 +37,7 @@ type Store struct {
 	discarded []ports.Discarded
 	bases     map[domain.JobID]string
 	brake     bool
+	caps      map[int]ports.IssueCaps
 	maxReason int
 }
 
@@ -64,6 +65,7 @@ func New(opts ...Option) (*Store, error) {
 		failed:    map[string]map[ports.Seq]ports.Delivery{},
 		queued:    map[string]int{},
 		bases:     map[domain.JobID]string{},
+		caps:      map[int]ports.IssueCaps{},
 		maxReason: eventjson.DefaultMaxReason,
 	}
 	for _, opt := range opts {

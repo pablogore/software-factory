@@ -92,71 +92,99 @@ func Capped(r IssueReport, c Caps) (Stop, bool) {
 	return stop, true
 }
 
+// Slicer builds the work of a slice job, so a slice an issue held across a
+// restart of factoryd can start once a person raises its cap.
+type Slicer interface {
+	// Work is job's work as a slice of its initiative.
+	Work(ctx context.Context, job domain.JobID) (scheduler.Work, error)
+}
+
+// CapLog keeps each issue's raised caps and stop across restarts of
+// factoryd.
+type CapLog interface {
+	// SaveIssueCaps saves c for issue c.Issue, replacing what was saved.
+	SaveIssueCaps(ctx context.Context, c ports.IssueCaps) error
+	// IssueCaps is what SaveIssueCaps saved last for issue n, or n with
+	// nothing raised and not stopped.
+	IssueCaps(ctx context.Context, n int) (ports.IssueCaps, error)
+}
+
 // Starter starts an initiative's next slice unless its issue is past a cap.
 // Slices go to the scheduler directly, never through the brake, and a capped
 // issue stops only itself: every other issue goes on. A stopped issue starts
 // slices again only when an allowed person raises the cap it stopped at
-// (Raise).
+// (Raise). The stops, their waits and the raised caps are saved in
+// factoryd's store (CapLog), so a restart changes none of them.
 type Starter struct {
 	slots   Slots
+	slicer  Slicer
 	caps    Caps
 	reports Reports
 	outbox  Outbox
 	inbox   StopInbox
+	log     CapLog
 
-	// mu guards the maps, by issue number, so starts and raises may come
-	// from several goroutines.
-	mu      sync.Mutex
-	raised  map[int]Caps
-	stopped map[int]held
-	seqs    map[int]int
+	// mu orders each issue's reads and saves of its caps, so starts and
+	// raises may come from several goroutines.
+	mu sync.Mutex
 }
 
-// held is the slice a stopped issue did not start, kept for a raise.
-type held struct {
-	ev   domain.NextSliceRequested
-	job  domain.JobID
-	work scheduler.Work
-	stop Stop
-}
-
-// NewStarter returns a starter that runs slices in slots under caps, or an
-// error when caps does not validate.
-func NewStarter(slots Slots, caps Caps, reports Reports, outbox Outbox, inbox StopInbox) (*Starter, error) {
+// NewStarter returns a starter that runs slices, as slicer builds them, in
+// slots under caps, keeping each issue's caps in log, or an error when caps
+// does not validate.
+func NewStarter(slots Slots, slicer Slicer, caps Caps, reports Reports, outbox Outbox, inbox StopInbox, log CapLog) (*Starter, error) {
 	if err := caps.Validate(); err != nil {
 		return nil, err
 	}
-	return &Starter{slots: slots, caps: caps, reports: reports, outbox: outbox, inbox: inbox,
-		raised: map[int]Caps{}, stopped: map[int]held{}, seqs: map[int]int{}}, nil
+	return &Starter{slots: slots, slicer: slicer, caps: caps, reports: reports, outbox: outbox, inbox: inbox, log: log}, nil
 }
 
-// Start hands w, job's work as the slice ev asks for, to the scheduler, as
+// Start hands job's work, as the slice ev asks for, to the scheduler, as
 // Submit does. When ev's issue is past a cap it starts nothing, publishes
 // the stop to the issue's origin thread, through the outbox, and to the
 // inbox, and returns ErrCapped. It is idempotent: a stop published again is
-// kept once.
-func (s *Starter) Start(ctx context.Context, ev domain.NextSliceRequested, job domain.JobID, w scheduler.Work) (<-chan error, error) {
+// kept once, under the same wait.
+func (s *Starter) Start(ctx context.Context, ev domain.NextSliceRequested, job domain.JobID) (<-chan error, error) {
 	r, err := s.reports.Report(ctx, ev.Job)
 	if err != nil {
 		return nil, fmt.Errorf("runmode: report of %q: %w", ev.Job, err)
 	}
 	n := r.Issue.Number
 	s.mu.Lock()
-	stop, capped := Capped(r, s.capsOf(n))
-	if !capped {
-		delete(s.stopped, n)
+	ic, err := s.log.IssueCaps(ctx, n)
+	if err != nil {
 		s.mu.Unlock()
+		return nil, fmt.Errorf("runmode: caps of issue #%d: %w", n, err)
+	}
+	stop, capped := Capped(r, s.capsOf(ic))
+	if !capped {
+		if ic.Stop != nil {
+			ic.Stop = nil
+			if err := s.log.SaveIssueCaps(ctx, ic); err != nil {
+				s.mu.Unlock()
+				return nil, fmt.Errorf("runmode: caps of issue #%d: %w", n, err)
+			}
+		}
+		s.mu.Unlock()
+		w, err := s.slicer.Work(ctx, job)
+		if err != nil {
+			return nil, fmt.Errorf("runmode: work of %q: %w", job, err)
+		}
 		return s.slots.Submit(ctx, job, w), nil
 	}
 	// The same stop published again keeps its wait, so the outbox and the
 	// inbox keep one entry that agree.
-	if h, ok := s.stopped[n]; ok && h.ev == ev && h.stop.Cap == stop.Cap {
-		stop.WaitSeq = h.stop.WaitSeq
+	if h := ic.Stop; h != nil && h.Next.Job == ev.Job && h.Next.Initiative == ev.Initiative && h.Next.At.Equal(ev.At) && h.Job == job && h.Cap == stop.Cap {
+		stop.WaitSeq = h.WaitSeq
 	} else {
-		s.seqs[n]++
-		stop.WaitSeq = s.seqs[n]
+		ic.Waits++
+		stop.WaitSeq = ic.Waits
 	}
-	s.stopped[n] = held{ev: ev, job: job, work: w, stop: stop}
+	ic.Stop = &ports.CapStop{Next: ev, Job: job, Cap: stop.Cap, Reached: stop.Reached, WaitSeq: stop.WaitSeq}
+	if err := s.log.SaveIssueCaps(ctx, ic); err != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("runmode: stop of issue #%d: %w", n, err)
+	}
 	s.mu.Unlock()
 	i := slices.IndexFunc(r.Jobs, func(j JobReport) bool { return j.Job.ID == ev.Job })
 	if i < 0 {
@@ -179,13 +207,17 @@ func (s *Starter) Start(ctx context.Context, ev domain.NextSliceRequested, job d
 	return nil, fmt.Errorf("issue #%d, %s %v of %v: %w", stop.Issue, stop.Cap, stop.Reached, stop.Limit, ErrCapped)
 }
 
-// capsOf is the caps issue n starts slices under: the run's, with the ones a
-// person raised for it. s.mu must be held.
-func (s *Starter) capsOf(n int) Caps {
-	if c, ok := s.raised[n]; ok {
-		return c
+// capsOf is the caps an issue starts slices under: the run's, with the ones
+// a person raised for it.
+func (s *Starter) capsOf(ic ports.IssueCaps) Caps {
+	c := s.caps
+	if ic.Slices > 0 {
+		c.Slices = ic.Slices
 	}
-	return s.caps
+	if ic.USD > 0 {
+		c.USD = ic.USD
+	}
+	return c
 }
 
 // Raise acts on a person's raise of a cap of e.Job's issue. An allowed
@@ -215,29 +247,36 @@ func (s *Starter) Raise(ctx context.Context, e domain.CapRaiseRequested) (<-chan
 	}
 	n := r.Issue.Number
 	s.mu.Lock()
-	h, ok := s.stopped[n]
+	ic, err := s.log.IssueCaps(ctx, n)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("runmode: caps of issue #%d: %w", n, err)
+	}
+	h := ic.Stop
 	switch {
-	case !ok:
+	case h == nil:
 		s.mu.Unlock()
 		return nil, domain.RefuseRaise(domain.RaiseNotStopped, "issue #%d is not stopped", n)
-	case e.WaitSeq == 0 || e.WaitSeq != h.stop.WaitSeq:
+	case e.WaitSeq == 0 || e.WaitSeq != h.WaitSeq:
 		s.mu.Unlock()
-		return nil, domain.RefuseRaise(domain.RaiseStaleWait, "raise for wait %d, expected wait %d", e.WaitSeq, h.stop.WaitSeq)
-	case e.Cap != h.stop.Cap:
+		return nil, domain.RefuseRaise(domain.RaiseStaleWait, "raise for wait %d, expected wait %d", e.WaitSeq, h.WaitSeq)
+	case e.Cap != h.Cap:
 		s.mu.Unlock()
-		return nil, domain.RefuseRaise(domain.RaiseNotStopped, "issue #%d is stopped at %s, not %s", n, h.stop.Cap, e.Cap)
-	case e.Value <= h.stop.Reached:
+		return nil, domain.RefuseRaise(domain.RaiseNotStopped, "issue #%d is stopped at %s, not %s", n, h.Cap, e.Cap)
+	case e.Value <= h.Reached:
 		s.mu.Unlock()
-		return nil, domain.RefuseRaise(domain.RaiseNotAbove, "%s to %v, reached %v", e.Cap, e.Value, h.stop.Reached)
+		return nil, domain.RefuseRaise(domain.RaiseNotAbove, "%s to %v, reached %v", e.Cap, e.Value, h.Reached)
 	}
-	c := s.capsOf(n)
 	if e.Cap == domain.CapSlices {
-		c.Slices = int(e.Value)
+		ic.Slices = int(e.Value)
 	} else {
-		c.USD = e.Value
+		ic.USD = e.Value
 	}
-	s.raised[n] = c
-	delete(s.stopped, n)
+	ic.Stop = nil
+	if err := s.log.SaveIssueCaps(ctx, ic); err != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("runmode: raise of issue #%d: %w", n, err)
+	}
 	s.mu.Unlock()
-	return s.Start(ctx, h.ev, h.job, h.work)
+	return s.Start(ctx, h.Next, h.Job)
 }

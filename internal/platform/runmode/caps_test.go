@@ -15,6 +15,7 @@ import (
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/queue"
 	"github.com/pablogore/software-factory/internal/platform/runmode"
+	"github.com/pablogore/software-factory/internal/platform/scheduler"
 	"github.com/pablogore/software-factory/internal/ports"
 )
 
@@ -71,10 +72,81 @@ var stopWords = map[string]map[domain.IssueCap]string{
 	},
 }
 
-func newStarter(ctx *specs.Context, slots runmode.Slots, caps runmode.Caps, reps runmode.Reports, out runmode.Outbox, in runmode.StopInbox) *runmode.Starter {
-	st, err := runmode.NewStarter(slots, caps, reps, out, in)
+// works is a fake runmode.Slicer: the work each slice job was handed over
+// with.
+type works struct {
+	mu sync.Mutex
+	m  map[domain.JobID]scheduler.Work
+}
+
+func (w *works) Work(_ context.Context, job domain.JobID) (scheduler.Work, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	work, ok := w.m[job]
+	if !ok {
+		return nil, fmt.Errorf("work of %q: %w", job, ports.ErrJobNotFound)
+	}
+	return work, nil
+}
+
+// capLog is a fake runmode.CapLog; fail, when set, fails every save.
+type capLog struct {
+	mu   sync.Mutex
+	m    map[int]ports.IssueCaps
+	fail error
+}
+
+func (l *capLog) SaveIssueCaps(_ context.Context, c ports.IssueCaps) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.fail != nil {
+		return l.fail
+	}
+	if l.m == nil {
+		l.m = map[int]ports.IssueCaps{}
+	}
+	if c.Stop != nil {
+		stop := *c.Stop
+		c.Stop = &stop
+	}
+	l.m[c.Issue] = c
+	return nil
+}
+
+func (l *capLog) IssueCaps(_ context.Context, n int) (ports.IssueCaps, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, ok := l.m[n]
+	if !ok {
+		return ports.IssueCaps{Issue: n}, nil
+	}
+	if c.Stop != nil {
+		stop := *c.Stop
+		c.Stop = &stop
+	}
+	return c, nil
+}
+
+// starter is a runmode.Starter whose Start is handed the slice's work, which
+// its slicer then builds.
+type starter struct {
+	*runmode.Starter
+	works *works
+	log   *capLog
+}
+
+func (s starter) Start(ctx context.Context, ev domain.NextSliceRequested, job domain.JobID, w scheduler.Work) (<-chan error, error) {
+	s.works.mu.Lock()
+	s.works.m[job] = w
+	s.works.mu.Unlock()
+	return s.Starter.Start(ctx, ev, job)
+}
+
+func newStarter(ctx *specs.Context, slots runmode.Slots, caps runmode.Caps, reps runmode.Reports, out runmode.Outbox, in runmode.StopInbox) starter {
+	w, log := &works{m: map[domain.JobID]scheduler.Work{}}, &capLog{}
+	st, err := runmode.NewStarter(slots, w, caps, reps, out, in, log)
 	ctx.Expect(err).To(specs.BeNil())
-	return st
+	return starter{Starter: st, works: w, log: log}
 }
 
 func await(ctx *specs.Context, done <-chan error) error {
@@ -176,7 +248,7 @@ func TestStarter(t *testing.T) {
 					{runmode.Caps{Slices: 5, USD: 0}, "cap usd is 0"},
 					{runmode.Caps{Slices: 5, USD: 0.5}, "cap usd is 0.5"},
 				} {
-					st, err := runmode.NewStarter(newScheduler(ctx, 1, costs{}), c.caps, reports{}, &outbox{}, &stops{})
+					st, err := runmode.NewStarter(newScheduler(ctx, 1, costs{}), &works{}, c.caps, reports{}, &outbox{}, &stops{}, &capLog{})
 					ctx.Expect(st).To(specs.BeNil())
 					ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 					ctx.Expect(err.Error()).To(specs.Contain(c.key))
@@ -195,6 +267,39 @@ func TestStarter(t *testing.T) {
 				}
 				ctx.Expect(len(out.saved())).ToEqual(1)
 				ctx.Expect(len(in.all())).ToEqual(1)
+			})
+		})
+
+		s.When("the stop cannot be saved", func(s *specs.Spec) {
+			s.It("starts nothing, publishes nothing and returns the error", func(ctx *specs.Context) {
+				out, in := &outbox{}, &stops{}
+				st := newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.DefaultCaps, reports{}.add(sliced(1, 1, 1, 1, 1, 1)), out, in)
+				st.log.fail = errSaveFailed
+				_, err := st.Start(context.Background(), domain.NextSliceRequested{Job: "1-s5", Initiative: "1", At: epoch}, "1-s6", func(context.Context) error {
+					ctx.Errorf("the slice started")
+					return nil
+				})
+				ctx.Expect(errors.Is(err, errSaveFailed)).To(specs.BeTrue())
+				ctx.Expect(out.saved()).To(specs.BeEmpty())
+				ctx.Expect(in.all()).To(specs.BeEmpty())
+			})
+		})
+
+		s.When("a starter is built again on the same log", func(s *specs.Spec) {
+			s.It("finds the issue stopped under the same wait", func(ctx *specs.Context) {
+				reps := reports{}.add(sliced(1, 1, 1, 1, 1, 1))
+				st := newStarter(ctx, newScheduler(ctx, 1, costs{}), runmode.DefaultCaps, reps, &outbox{}, &stops{})
+				_, err := st.Start(context.Background(), domain.NextSliceRequested{Job: "1-s5", Initiative: "1", At: epoch}, "1-s6", func(context.Context) error { return nil })
+				ctx.Expect(errors.Is(err, runmode.ErrCapped)).To(specs.BeTrue())
+
+				again, err := runmode.NewStarter(newScheduler(ctx, 1, costs{}), st.works, runmode.DefaultCaps, reps, &outbox{}, &stops{}, st.log)
+				ctx.Expect(err).To(specs.BeNil())
+				_, err = again.Raise(context.Background(), domain.CapRaiseRequested{Job: "1-s5", By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Cap: domain.CapSlices, Value: 6, WaitSeq: 2, At: epoch})
+				code, _ := domain.RaiseRefusalOf(err)
+				ctx.Expect(code).ToEqual(domain.RaiseStaleWait)
+				done, err := again.Raise(context.Background(), domain.CapRaiseRequested{Job: "1-s5", By: "pablogore", AuthorKind: domain.AuthorPerson, Allowed: true, Cap: domain.CapSlices, Value: 6, WaitSeq: 1, At: epoch})
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(await(ctx, done)).To(specs.BeNil())
 			})
 		})
 
