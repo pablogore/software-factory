@@ -59,12 +59,6 @@ func (h hostile) changes(ctx *specs.Context) {
 	ctx.Expect(err).To(specs.BeNil())
 }
 
-// changesAnyway is changes for a repo where git diff may or may not fail:
-// only what the repo's commands saw matters.
-func (h hostile) changesAnyway() {
-	_, _ = h.differ.Changes(context.Background(), job, h.dir, h.fork)
-}
-
 func (h hostile) marked() bool {
 	_, err := os.Stat(h.marker)
 	return err == nil
@@ -75,13 +69,6 @@ func (h hostile) markerEnv(ctx *specs.Context) string {
 	data, err := os.ReadFile(h.marker)
 	ctx.Expect(err).To(specs.BeNil())
 	return string(data)
-}
-
-// expectJobEnv checks the marker recorded the job's HOME and no token.
-func (h hostile) expectJobEnv(ctx *specs.Context) {
-	env := h.markerEnv(ctx)
-	ctx.Expect(env).To(specs.Not(specs.Contain(token)))
-	ctx.Expect(strings.Split(env, "\n")).To(specs.Contain("HOME=" + h.home))
 }
 
 func TestDemoHostileRepo(t *testing.T) {
@@ -108,38 +95,36 @@ func TestDemoHostileRepo(t *testing.T) {
 			ctx.Expect(h.marked()).To(specs.BeFalse())
 		})
 
-		// core.hooksPath doesn't turn these off: they run, but get the
-		// job's environment, not factoryd's.
-		s.It("runs a hook the config defines with the job's HOME and no token", func(ctx *specs.Context) {
+		// core.hooksPath doesn't turn these off; the view of the worktree,
+		// which has none of its config, does.
+		s.It("runs no hook the config defines", func(ctx *specs.Context) {
 			h := newHostile(ctx)
 			must(ctx, h.dir, "config", "hook.evil.command", h.dump())
 			must(ctx, h.dir, "config", "hook.evil.event", "post-index-change")
 
 			h.changes(ctx)
 
-			h.expectJobEnv(ctx)
+			ctx.Expect(h.marked()).To(specs.BeFalse())
 		})
 
-		s.It("runs a clean filter with the job's HOME and no token", func(ctx *specs.Context) {
+		s.It("runs no clean filter", func(ctx *specs.Context) {
 			h := newHostile(ctx)
 			write(ctx, h.dir, ".git/info/attributes", "data.txt filter=evil\n")
 			must(ctx, h.dir, "config", "filter.evil.clean", h.dump()+"; cat")
 
 			h.changes(ctx)
 
-			h.expectJobEnv(ctx)
+			ctx.Expect(h.marked()).To(specs.BeFalse())
 		})
 
-		s.It("runs a process filter with the job's HOME and no token", func(ctx *specs.Context) {
+		s.It("runs no process filter", func(ctx *specs.Context) {
 			h := newHostile(ctx)
 			write(ctx, h.dir, ".git/info/attributes", "data.txt filter=evil\n")
 			must(ctx, h.dir, "config", "filter.evil.process", h.dump())
 
-			// The filter quits without its handshake: git 2.54 gives up
-			// on it with an error, git 2.56 goes on without it.
-			h.changesAnyway()
+			h.changes(ctx)
 
-			h.expectJobEnv(ctx)
+			ctx.Expect(h.marked()).To(specs.BeFalse())
 		})
 
 		s.It("fetches no object missing from the store from a promisor remote", func(ctx *specs.Context) {
@@ -186,8 +171,6 @@ func TestDemoHostileRepo(t *testing.T) {
 			ctx.Expect(paths).To(specs.ContainAllOf("sub/.gitignore", "sub/evil"))
 		})
 
-		// A filter the repo's own attributes name still runs (S1c), but the
-		// job's HOME adds none.
 		s.It("reads no attributes file from the job's HOME", func(ctx *specs.Context) {
 			h := newHostile(ctx)
 			write(ctx, h.home, ".config/git/attributes", "data.txt filter=evil\n")

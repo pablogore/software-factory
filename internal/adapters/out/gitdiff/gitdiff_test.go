@@ -373,10 +373,15 @@ func TestDiffer(t *testing.T) {
 				{Path: "README.md", Flag: domain.FlagAssumeUnchanged},
 				{Path: "sub/inner.txt", Flag: domain.FlagSkipWorktree},
 			})
-			// The flags are why: the diff no longer sees the Makefile's change.
+			// The flags hide the Makefile's change from git diff on this index,
+			// but not from Changes, whose own index has no flags.
+			ctx.Expect(must(ctx, dir, "diff", "--name-only", fork, "--")).To(specs.Not(specs.Contain("Makefile")))
 			changes, err := differ(ctx).Changes(bg, job, dir, fork)
 			ctx.Expect(err).To(specs.BeNil())
-			ctx.Expect(changes).ToEqual([]domain.FileChange{{Path: "sub/inner.txt", Kind: domain.ChangeAdded}})
+			ctx.Expect(changes).ToEqual([]domain.FileChange{
+				{Path: "Makefile", Kind: domain.ChangeModified},
+				{Path: "sub/inner.txt", Kind: domain.ChangeAdded},
+			})
 		})
 
 		s.It("reads a file as the base commit has it, whatever the worktree did to it", func(ctx *specs.Context) {
