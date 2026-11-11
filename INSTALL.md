@@ -180,8 +180,8 @@ Then tell the user, in a few lines:
   CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --model sonnet --strict-mcp-config --setting-sources project,local
   ```
 
-  `--model sonnet` runs the orchestrator on sonnet, which spends less of the
-  usage limit or the API budget than opus; the skill can't switch it itself.
+  `--model sonnet` is a recommendation: the orchestrator on sonnet spends less
+  of the usage limit or the API budget than on opus.
   The rest leaves out MCP servers, the user's own settings (`~/.claude/settings.json`)
   and automatic memory; the project's `.claude/` settings still load. It isn't
   confirmed yet whether the subagents inherit this setup; that is measured in

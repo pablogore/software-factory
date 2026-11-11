@@ -1,10 +1,9 @@
 """The factory skill keeps the orchestrator lean. Run: python3 -m pytest factory/tests -k lean_orchestrator
 
-README.md and INSTALL.md must start the orchestrator with `claude --model sonnet`
-(the skill can't change its own session's model). SKILL.md must say in one line
-when it runs on opus and suggest sonnet, tell the user only what they need to
-know or decide (not one line per transition), and leave the decisions that need
-no judgment to the scripts.
+SKILL.md must ask the orchestrator to pass agents paths instead of pasted files,
+to ask agents for a reply of 5 lines at most, not to reread files that didn't
+change, to tell the user only what they need to know or decide (not one line
+per transition), and to leave the decisions that need no judgment to the scripts.
 """
 
 import re
@@ -16,13 +15,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SKILL = Path(".claude/skills/factory/SKILL.md")
 DIRECTIVES = {
-    "readme-sonnet": (Path("README.md"), "claude --model sonnet"),
-    "install-sonnet": (Path("INSTALL.md"), "claude --model sonnet"),
-    "model": (SKILL, "If this session runs on opus, say so in one line at the start and suggest sonnet"),
-    "messages": (SKILL, "Tell the user only what they need to know or decide"),
-    "messages-failed": (SKILL, "a job that failed or is stuck"),
-    "messages-cap": (SKILL, "a run stopped by a cap"),
-    "scripts": (SKILL, "Leave every decision that needs no judgment to the `factory/bin/` scripts"),
+    "paths": "Give each agent the paths to its files (spec, build, reviews), never their content pasted into the prompt",
+    "short-replies": "Ask each agent for a final reply of 5 lines at most",
+    "reply-trailer": "Reply in 5 lines at most: your verdict and the file with the detail.",
+    "no-rereads": "Don't read a file again once you have read it, unless it changed since",
+    "no-transitions": "Don't report each transition",
+    "messages": "Tell the user only what they need to know or decide",
+    "messages-failed": "a job that failed or is stuck",
+    "messages-cap": "a run stopped by a cap",
+    "scripts": "Leave every decision that needs no judgment to the `factory/bin/` scripts",
 }
 PER_TRANSITION = "short line per transition"
 
@@ -32,9 +33,10 @@ def flat(text):
 
 
 def missing_lean_directives(root):
-    """The directives missing under root, plus "per-transition" if the skill still asks for it."""
-    missing = [k for k, (path, d) in DIRECTIVES.items() if d not in flat((root / path).read_text())]
-    if PER_TRANSITION in flat((root / SKILL).read_text()):
+    """The directives the skill under root lacks, plus "per-transition" if it still asks for it."""
+    text = flat((root / SKILL).read_text())
+    missing = [k for k, d in DIRECTIVES.items() if d not in text]
+    if PER_TRANSITION in text:
         missing.append("per-transition")
     return missing
 
@@ -46,18 +48,12 @@ class LeanOrchestratorTest(unittest.TestCase):
     def test_demo_lean_orchestrator_check_fails_without_each_directive(self):
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
-        paths = {path for path, _ in DIRECTIVES.values()}
-        texts = {path: flat((ROOT / path).read_text()) for path in paths}
-
-        def write(changed=None, text=None):
-            for path in paths:
-                (tmp / path).parent.mkdir(parents=True, exist_ok=True)
-                (tmp / path).write_text(text if path == changed else texts[path])
-
-        for key, (path, directive) in DIRECTIVES.items():
-            write(path, texts[path].replace(directive, ""))
+        (tmp / SKILL).parent.mkdir(parents=True)
+        text = flat((ROOT / SKILL).read_text())
+        for key, directive in DIRECTIVES.items():
+            (tmp / SKILL).write_text(text.replace(directive, ""))
             self.assertEqual(missing_lean_directives(tmp), [key])
-        write(SKILL, texts[SKILL] + "\nReport one short line per transition.\n")
+        (tmp / SKILL).write_text(text + "\nReport one short line per transition.\n")
         self.assertEqual(missing_lean_directives(tmp), ["per-transition"])
 
 
