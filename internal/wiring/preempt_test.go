@@ -51,7 +51,7 @@ func newSharedGate(ctx *specs.Context) sharedGate {
 	runGate := wiring.RunGate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, long, nil, time.Minute, wiring.DefaultRunGateMaxOutput, wiring.DefaultRunGateMaxRuns)
 	// The real gate passes only when no process of the run_gate run is left.
 	noneLeft := []string{"sh", "-c", "! kill -0 $(cat " + pidFile + ") 2>/dev/null"}
-	gate := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, noneLeft, nil)
+	gate := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, locks, homes, noneLeft, nil, 0)
 	tokens := jobtoken.New()
 	token, err := tokens.Issue(jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: []string{"submit_result", "progress", "run_gate"}, Round: 1})
 	ctx.Expect(err).To(specs.BeNil())

@@ -72,7 +72,8 @@ type gateStore interface {
 // -role, such as one declaring allowed_paths, is the build stage's role.
 // With -count, or with none and a count command in .factory/gates.yaml as the
 // base commit has it, the gate also fails a package with fewer tests than at
-// the base commit.
+// the base commit. A check running past -timeout is stopped with its
+// process group and fails the gate, its run noting it timed out.
 //
 // With no -db the job is made in memory with dir as its worktree, recording
 // the commit base is at as it starts. With -db the job is kept in that SQLite
@@ -89,6 +90,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	count := fs.String("count", "", "the test count command, such as go test -json -count=1 ./... (or go test -list . ./..., which sees no subtests), split and run like -checks in the worktree and in a copy of the base commit; with none the one .factory/gates.yaml sets at the base commit, and with neither the rule doesn't run")
 	base := fs.String("base", "HEAD", "the base whose commit, recorded when the job is made, the job's diff is taken against; HEAD judges only uncommitted changes")
 	roleFile := fs.String("role", "", "a build role file (roles/<name>.yaml) for the build stage, e.g. one with allowed_paths")
+	timeout := fs.Duration("timeout", wiring.DefaultGateTimeout, "how long each command of the gate may run before it is stopped with its process group and the gate fails, saying it timed out")
 	db := fs.String("db", "", "a SQLite file keeping the job between runs: the first makes its worktree in -dir off -base, the next gates it")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -159,7 +161,7 @@ func gateDemo(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	g := wiring.Gate(store, rolePipelines{role}, ws, store, wiring.SystemClock{}, gatelock.New(), homes, strings.Fields(*command), strings.Fields(*count))
+	g := wiring.Gate(store, rolePipelines{role}, ws, store, wiring.SystemClock{}, gatelock.New(), homes, strings.Fields(*command), strings.Fields(*count), *timeout)
 	_, _ = fmt.Fprintf(out, "job %s at the gate in round %d; running `%s` in %s and judging its diff against the base commit recorded for it: %s\n", job.ID, job.Round, strings.Join(g.Command, " "), wt.Path, commit)
 	if len(role.AllowedPaths) > 0 {
 		_, _ = fmt.Fprintf(out, "build role %s may touch only [%s]\n", role.Name, strings.Join(role.AllowedPaths, ", "))

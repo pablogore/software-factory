@@ -61,7 +61,7 @@ func TestDemoGateGit(t *testing.T) {
 			ctx.Expect(store.RecordBase(bg, "j-1", base)).To(specs.BeNil())
 			homes := childenv.Homes{Root: ctx.Testing().TempDir()}
 
-			g := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), homes, []string{"true"}, nil)
+			g := wiring.Gate(store, onePipeline{}, oneDir(dir), store, fixedClock{}, gatelock.New(), homes, []string{"true"}, nil, 0)
 			_, err = g.Check(bg, "j-1")
 			ctx.Expect(err).To(specs.BeNil())
 
