@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/pablogore/software-factory/internal/adapters/out/gitsafe"
 	"github.com/pablogore/software-factory/internal/domain"
 )
 
 // Checkout checks out commit, a full object name, detached in a new
 // directory of its own, from the repo the worktree at dir is in, and returns
-// its path, with git run for job as Changes runs it. Hooks don't run: the
-// hooks directory is shared with the job's worktree, so the builder could
-// have put one there to change the copy.
+// its path, with git run for job as gitsafe runs it. No hook or filter
+// runs: the hooks directory, the config and the commit's .gitattributes are
+// the builder's to write, so it could have one change the copy or run its
+// commands.
 func (d Differ) Checkout(ctx context.Context, job domain.JobID, dir, commit string) (string, error) {
 	if !objectName(commit) {
 		return "", fmt.Errorf("gitdiff: commit %q is not a full commit hash: %w", commit, domain.ErrInvalidValue)
@@ -25,9 +27,9 @@ func (d Differ) Checkout(ctx context.Context, job domain.JobID, dir, commit stri
 	if err != nil {
 		return "", fmt.Errorf("gitdiff: %w", err)
 	}
-	if _, err := git(ctx, home, dir, "worktree", "add", "-q", "--detach", path, commit+"^{commit}"); err != nil {
+	if _, err := gitsafe.Run(ctx, home, dir, nil, "worktree", "add", "-q", "--detach", path, commit+"^{commit}"); err != nil {
 		_ = os.RemoveAll(path)
-		return "", err
+		return "", fmt.Errorf("gitdiff: %w", err)
 	}
 	return path, nil
 }
@@ -40,6 +42,8 @@ func (d Differ) Remove(ctx context.Context, job domain.JobID, dir, path string) 
 	if err != nil {
 		return err
 	}
-	_, err = git(ctx, home, dir, "worktree", "remove", "--force", path)
-	return err
+	if _, err := gitsafe.Run(ctx, home, dir, nil, "worktree", "remove", "--force", path); err != nil {
+		return fmt.Errorf("gitdiff: %w", err)
+	}
+	return nil
 }
