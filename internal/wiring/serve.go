@@ -14,6 +14,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/bus"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
 	"github.com/pablogore/software-factory/internal/platform/outbox"
@@ -54,6 +55,9 @@ type ServeConfig struct {
 	// DevState is where running dev servers are recorded, so the next run
 	// kills what a crash left.
 	DevState string
+	// Homes has the HOME of each job's processes, the git that reads its
+	// dev server's command among them.
+	Homes childenv.Homes
 	// Concurrency and Budget are the scheduler's: how many agents run at
 	// once and the USD a job may spend unless a person raised its own.
 	Concurrency int
@@ -149,7 +153,7 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 		return fail("dev servers", err)
 	}
 	worktrees := gitworktree.New(cfg.Repo, cfg.Base, store)
-	dev := &DevServers{Servers: servers, Worktrees: worktrees, Ports: ranges, Bases: store}
+	dev := &DevServers{Servers: servers, Worktrees: worktrees, Ports: ranges, Bases: store, Homes: cfg.Homes}
 	tokens := jobtoken.New()
 	handler, attempts := Worker(tokens, store, pipelines, nil, gatelock.New(), cfg.Clock, dev, &ContextPacks{Bases: store})
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Listen)

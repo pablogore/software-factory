@@ -41,14 +41,14 @@ type snapshots struct {
 	removed []string
 }
 
-func (s *snapshots) Checkout(_ context.Context, _, commit string) (string, error) {
+func (s *snapshots) Checkout(_ context.Context, _ domain.JobID, _, commit string) (string, error) {
 	if s.err != nil {
 		return "", s.err
 	}
 	return "/snap/" + commit, nil
 }
 
-func (s *snapshots) Remove(_ context.Context, _, path string) error {
+func (s *snapshots) Remove(_ context.Context, _ domain.JobID, _, path string) error {
 	s.removed = append(s.removed, path)
 	return nil
 }
@@ -61,7 +61,7 @@ type repoConfig struct {
 	asked   []string
 }
 
-func (r *repoConfig) CountCommand(_ context.Context, dir, base string) ([]string, error) {
+func (r *repoConfig) CountCommand(_ context.Context, _ domain.JobID, dir, base string) ([]string, error) {
 	r.asked = append(r.asked, dir+"@"+base)
 	return r.command, r.err
 }

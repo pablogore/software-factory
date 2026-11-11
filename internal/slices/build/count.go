@@ -110,12 +110,12 @@ func (g *Gate) testCount(ctx context.Context, job domain.JobID, command []string
 	if err != nil || reason != "" {
 		return nonEmpty(reason), err
 	}
-	snap, err := g.Snapshots.Checkout(ctx, dir, base)
+	snap, err := g.Snapshots.Checkout(ctx, job, dir, base)
 	if err != nil {
 		return nil, fmt.Errorf("copy of base %s: %w", base, err)
 	}
 	before, reason, err := g.count(ctx, job, command, snap, "the base commit "+base)
-	if rmErr := g.Snapshots.Remove(ctx, dir, snap); err == nil && rmErr != nil {
+	if rmErr := g.Snapshots.Remove(ctx, job, dir, snap); err == nil && rmErr != nil {
 		err = fmt.Errorf("copy of base %s: %w", base, rmErr)
 	}
 	if err != nil || reason != "" {

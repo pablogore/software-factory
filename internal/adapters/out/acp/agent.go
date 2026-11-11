@@ -8,11 +8,18 @@
 // E04.2 sandbox. It reads a command's words as written, so it does not see
 // a command another one runs (bash -c, sh -c, python -c, eval, env -S), a
 // path in a variable, a wrapper missing from its list (ionice, setsid,
-// flock and the like) or a git alias that pushes. Its reading of the shell
-// can also be thrown off on purpose: a "\'" inside $'…' ends the quote for
-// it, an escaped backtick nested in backticks is text to it, and in the body
-// of a quoted here-document, the exemption Claude Code's commit messages
-// need, a line such as "EOF)" ends the document for bash and not for it.
+// flock, builtin before a cd and the like), a git alias that pushes or a
+// shell alias. It takes a reserved word for one even when quoted, so
+// 'function' or 'coproc' run as a command hide the word after them. Its
+// reading of the shell can also be thrown off on purpose: a "\'" inside
+// $'…' ends the quote for it, an escaped backtick nested in backticks is
+// text to it, and in the body of a quoted here-document, the exemption
+// Claude Code's commit messages need, a line such as "EOF)" ends the
+// document for bash and not for it. A backslash before a newline joins two
+// lines for bash and not for it, so "cu\<newline>rl" is not curl to it. A
+// redirection's target that starts with "-" is read as a flag and its path
+// is not checked, so ">-/../../x" escapes the worktree once a directory
+// named "-" exists.
 // Read it as a brake on an agent's mistakes, not as full coverage.
 package acp
 

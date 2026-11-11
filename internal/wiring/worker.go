@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pablogore/software-factory/internal/adapters/in/mcpworker"
+	"github.com/pablogore/software-factory/internal/adapters/out/gitdiff"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/platform/jobtoken"
@@ -64,7 +65,7 @@ func WorkerAPI(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate Gate
 func Worker(tokens *jobtoken.Tokens, jobs WorkerStore, p Pipelines, gate GateChecks, locks *gatelock.Locks, clock ports.Clock, dev *DevServers, packs *ContextPacks) (http.Handler, *worker.Attempts) {
 	sub := &worker.Submitter{Tokens: tokens, Jobs: jobs, Pipelines: p, Gate: gate, Locks: locks, Clock: clock}
 	if dev != nil {
-		sub.Servers, sub.Worktrees, sub.Ports, sub.DevCommands = dev.Servers, dev.Worktrees, dev.Ports, baseDevCommand{dev.Bases}
+		sub.Servers, sub.Worktrees, sub.Ports, sub.DevCommands = dev.Servers, dev.Worktrees, dev.Ports, baseDevCommand{dev.Bases, gitdiff.Differ{Homes: dev.Homes}}
 		dev.sub = sub
 	}
 	if packs != nil {

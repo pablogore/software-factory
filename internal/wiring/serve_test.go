@@ -132,7 +132,7 @@ func serveConfig(ctx *specs.Context, clk *tickClock, dests map[string]ports.Dest
 	dir := ctx.Testing().TempDir()
 	return wiring.ServeConfig{
 		Config: "../..", Store: filepath.Join(dir, "factoryd.db"), Repo: dir, Base: "main",
-		DevState: filepath.Join(dir, "devservers"), Concurrency: 1, Budget: 5, Listen: "127.0.0.1:0",
+		DevState: filepath.Join(dir, "devservers"), Homes: childenv.Homes{Root: filepath.Join(dir, "homes")}, Concurrency: 1, Budget: 5, Listen: "127.0.0.1:0",
 		Agents: wiring.ACPAgents(childenv.Homes{Root: filepath.Join(dir, "homes")}, clk), SessionTimeout: serveSessionTimeout, Tick: serveTick, Grace: serveGrace, Clock: clk, Destinations: dests, Log: io.Discard,
 	}
 }

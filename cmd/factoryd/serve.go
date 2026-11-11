@@ -41,7 +41,7 @@ func serve(ctx context.Context, args []string, out io.Writer) error {
 	}
 	clock := wiring.SystemClock{}
 	srv, err := wiring.StartServer(ctx, wiring.ServeConfig{
-		Config: *config, Store: *store, Repo: *repo, Base: *base, DevState: *state,
+		Config: *config, Store: *store, Repo: *repo, Base: *base, DevState: *state, Homes: homes,
 		Concurrency: *concurrency, Budget: *budget, Costs: *costs, Listen: *listen, Agents: wiring.ACPAgents(homes, clock),
 		SessionTimeout: *timeout, Tick: *tick, Grace: *grace, Clock: clock, Log: out,
 	})
