@@ -164,7 +164,7 @@ func workerDemo(ctx context.Context, args []string, out io.Writer) error {
 			_ = servers.StopJob(context.Background(), id)
 		}
 	}()
-	dev := &wiring.DevServers{Servers: servers, Worktrees: dirWorkspace{abs}, Ports: ranges, Bases: store}
+	dev := &wiring.DevServers{Servers: servers, Worktrees: dirWorkspace{abs}, Ports: ranges, Bases: store, Homes: homes}
 	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", *addr)
 	if err != nil {
 		return err

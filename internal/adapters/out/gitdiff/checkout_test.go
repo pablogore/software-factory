@@ -8,7 +8,6 @@ import (
 
 	"github.com/getsyntegrity/go-specs/specs"
 
-	"github.com/pablogore/software-factory/internal/adapters/out/gitdiff"
 	"github.com/pablogore/software-factory/internal/domain"
 )
 
@@ -22,7 +21,7 @@ func TestCheckout(t *testing.T) {
 			must(ctx, dir, "commit", "-q", "-am", "job")
 			write(ctx, dir, "README.md", "uncommitted\n")
 
-			copyDir, err := gitdiff.Differ{}.Checkout(bg, dir, fork)
+			copyDir, err := differ(ctx).Checkout(bg, job, dir, fork)
 
 			ctx.Expect(err).To(specs.BeNil())
 			readme, err := os.ReadFile(filepath.Join(copyDir, "README.md"))
@@ -30,7 +29,7 @@ func TestCheckout(t *testing.T) {
 			ctx.Expect(string(readme)).ToEqual("README.md\n")
 			write(ctx, copyDir, "build/out.txt", "left by the count\n")
 
-			ctx.Expect(gitdiff.Differ{}.Remove(bg, dir, copyDir)).To(specs.BeNil())
+			ctx.Expect(differ(ctx).Remove(bg, job, dir, copyDir)).To(specs.BeNil())
 
 			_, err = os.Stat(copyDir)
 			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
@@ -42,9 +41,9 @@ func TestCheckout(t *testing.T) {
 			hook := filepath.Join(dir, ".git", "hooks", "post-checkout")
 			ctx.Expect(os.WriteFile(hook, []byte("#!/bin/sh\necho hooked > hooked.txt\n"), 0o700)).To(specs.BeNil())
 
-			copyDir, err := gitdiff.Differ{}.Checkout(bg, dir, fork)
+			copyDir, err := differ(ctx).Checkout(bg, job, dir, fork)
 			ctx.Expect(err).To(specs.BeNil())
-			defer func() { _ = gitdiff.Differ{}.Remove(bg, dir, copyDir) }()
+			defer func() { _ = differ(ctx).Remove(bg, job, dir, copyDir) }()
 
 			_, err = os.Stat(filepath.Join(copyDir, "hooked.txt"))
 			ctx.Expect(os.IsNotExist(err)).To(specs.BeTrue())
@@ -53,7 +52,7 @@ func TestCheckout(t *testing.T) {
 		s.It("refuses a ref as the commit to check out", func(ctx *specs.Context) {
 			dir, _ := newRepo(ctx)
 
-			_, err := gitdiff.Differ{}.Checkout(bg, dir, "HEAD")
+			_, err := differ(ctx).Checkout(bg, job, dir, "HEAD")
 
 			ctx.Expect(err).To(specs.MatchError(domain.ErrInvalidValue))
 		})

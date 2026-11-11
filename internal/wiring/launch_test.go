@@ -21,6 +21,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/acp/acpfake"
 	"github.com/pablogore/software-factory/internal/adapters/out/sqlite"
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/wiring"
 )
@@ -134,7 +135,7 @@ func launchConfig(ctx *specs.Context, clk *tickClock, agents *fakeAgents, log *s
 	dir := ctx.Testing().TempDir()
 	return wiring.ServeConfig{
 		Config: "../..", Store: filepath.Join(dir, "factoryd.db"), Repo: launchRepo(ctx), Base: "main",
-		DevState: filepath.Join(dir, "devservers"), Concurrency: 2, Budget: 5, Costs: wiring.CostsSubscription,
+		DevState: filepath.Join(dir, "devservers"), Homes: childenv.Homes{Root: filepath.Join(dir, "homes")}, Concurrency: 2, Budget: 5, Costs: wiring.CostsSubscription,
 		Listen: "127.0.0.1:0", Agents: agents.agents(clk),
 		SessionTimeout: serveSessionTimeout, Tick: serveTick, Grace: serveGrace, Clock: clk, Log: log,
 	}

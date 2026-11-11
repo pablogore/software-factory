@@ -8,6 +8,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/checkrun"
 	"github.com/pablogore/software-factory/internal/adapters/out/configyaml"
 	"github.com/pablogore/software-factory/internal/adapters/out/gitdiff"
+	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/platform/gatelock"
 	"github.com/pablogore/software-factory/internal/ports"
@@ -24,17 +25,18 @@ const GatesFile = ".factory/gates.yaml"
 // commit, is run the same way in the worktree and in a git checkout of that
 // base commit to count their tests. It runs each job's checks under the
 // job's lock in locks, which the worker API's run_gate must share, with the
-// job's own HOME in homes.
+// job's own HOME in homes, which its git runs with too.
 func Gate(jobs ports.JobStore, p Pipelines, worktrees ports.Workspace, bases ports.BaseLog, clock ports.Clock, locks *gatelock.Locks, homes childenv.Homes, command, countCommand []string) *build.Gate {
-	return &build.Gate{Jobs: jobs, Pipelines: p, Worktrees: worktrees, Checks: checkrun.Runner{Homes: homes}, Bases: bases, Diffs: gitdiff.Differ{}, Clock: clock, Command: command, CountCommand: countCommand, RepoConfig: baseGates{}, Snapshots: gitdiff.Differ{}, Locks: locks}
+	git := gitdiff.Differ{Homes: homes}
+	return &build.Gate{Jobs: jobs, Pipelines: p, Worktrees: worktrees, Checks: checkrun.Runner{Homes: homes}, Bases: bases, Diffs: git, Clock: clock, Command: command, CountCommand: countCommand, RepoConfig: baseGates{git}, Snapshots: git, Locks: locks}
 }
 
 // baseGates reads GatesFile as a commit has it, so what a job's branch does
 // to it never reaches the job's own gate.
-type baseGates struct{}
+type baseGates struct{ git gitdiff.Differ }
 
-func (baseGates) CountCommand(ctx context.Context, dir, base string) ([]string, error) {
-	data, ok, err := gitdiff.Differ{}.AtBaseIfAny(ctx, dir, base, GatesFile)
+func (b baseGates) CountCommand(ctx context.Context, job domain.JobID, dir, base string) ([]string, error) {
+	data, ok, err := b.git.AtBaseIfAny(ctx, job, dir, base, GatesFile)
 	if err != nil || !ok {
 		return nil, err
 	}

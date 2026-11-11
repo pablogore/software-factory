@@ -12,6 +12,7 @@ import (
 	"github.com/pablogore/software-factory/internal/adapters/out/gitdiff"
 	"github.com/pablogore/software-factory/internal/domain"
 	"github.com/pablogore/software-factory/internal/platform/bus"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 	"github.com/pablogore/software-factory/internal/platform/portrange"
 	"github.com/pablogore/software-factory/internal/ports"
 	"github.com/pablogore/software-factory/internal/slices/worker"
@@ -25,12 +26,13 @@ const DevServerFile = ".factory/devserver.yaml"
 // with: Servers runs it in the job's worktree from Worktrees, on a port of
 // the job's range in Ports, with the command DevServerFile sets at the base
 // commit Bases recorded for the job, so a job's branch never picks what its
-// dev_server runs.
+// dev_server runs. git reads it with the job's HOME in Homes.
 type DevServers struct {
 	Servers   ports.DevServers
 	Worktrees ports.Workspace
 	Ports     *portrange.Allocator
 	Bases     ports.BaseLog
+	Homes     childenv.Homes
 
 	// sub is the Submitter Worker runs them from.
 	sub *worker.Submitter
@@ -55,14 +57,17 @@ func StartDevServers(ctx context.Context, state string) (*devserver.Servers, err
 }
 
 // baseDevCommand reads DevServerFile as the job's base commit has it.
-type baseDevCommand struct{ bases ports.BaseLog }
+type baseDevCommand struct {
+	bases ports.BaseLog
+	git   gitdiff.Differ
+}
 
 func (b baseDevCommand) DevCommand(ctx context.Context, job domain.JobID, wt ports.Worktree) (ports.DevCommand, error) {
 	base, err := b.bases.Base(ctx, job)
 	if err != nil {
 		return ports.DevCommand{}, err
 	}
-	data, ok, err := gitdiff.Differ{}.AtBaseIfAny(ctx, wt.Path, base, DevServerFile)
+	data, ok, err := b.git.AtBaseIfAny(ctx, job, wt.Path, base, DevServerFile)
 	if err != nil || !ok {
 		return ports.DevCommand{}, err
 	}

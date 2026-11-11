@@ -146,7 +146,7 @@ func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (d
 	if err != nil {
 		return domain.ChecksRun{}, err
 	}
-	count, err := g.countCommand(ctx, wt.Path, base)
+	count, err := g.countCommand(ctx, id, wt.Path, base)
 	if err != nil {
 		return domain.ChecksRun{}, fmt.Errorf("gate: test count command of %q: %w", id, err)
 	}
@@ -172,11 +172,11 @@ func (g *Gate) check(ctx context.Context, id domain.JobID, p domain.Pipeline) (d
 
 // countCommand is the operator's count command, or else the one the repo
 // configures at base, or none: with no base there is no config to read.
-func (g *Gate) countCommand(ctx context.Context, dir, base string) ([]string, error) {
+func (g *Gate) countCommand(ctx context.Context, id domain.JobID, dir, base string) ([]string, error) {
 	if len(g.CountCommand) > 0 || g.RepoConfig == nil || base == "" {
 		return g.CountCommand, nil
 	}
-	return g.RepoConfig.CountCommand(ctx, dir, base)
+	return g.RepoConfig.CountCommand(ctx, id, dir, base)
 }
 
 // NoBase is the reason a job with no base commit recorded fails the gate.
@@ -187,7 +187,7 @@ const NoBase = "no base commit was recorded when the job's worktree was made, so
 // each index flag that hides a file's changes from that diff, and the base,
 // or "" when there is none.
 func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p domain.Pipeline) ([]string, string, error) {
-	flagged, err := g.Diffs.Flagged(ctx, dir)
+	flagged, err := g.Diffs.Flagged(ctx, id, dir)
 	if err != nil {
 		return nil, "", fmt.Errorf("gate: index of %q: %w", id, err)
 	}
@@ -199,7 +199,7 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 	if err != nil {
 		return nil, "", fmt.Errorf("gate: base of %q: %w", id, err)
 	}
-	changes, err := g.Diffs.Changes(ctx, dir, base)
+	changes, err := g.Diffs.Changes(ctx, id, dir, base)
 	if err != nil {
 		return nil, "", fmt.Errorf("gate: diff of %q: %w", id, err)
 	}
@@ -207,7 +207,7 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 	reasons = append(reasons, ProtectedTouched(changes)...)
 	reasons = append(reasons, OutsideAllowed(changes, Roles(p))...)
 	reasons = append(reasons, TestsDeleted(changes)...)
-	marks, err := g.marksAdded(ctx, dir, base, changes)
+	marks, err := g.marksAdded(ctx, id, dir, base, changes)
 	if err != nil {
 		return nil, "", fmt.Errorf("gate: tests of %q: %w", id, err)
 	}
@@ -217,7 +217,7 @@ func (g *Gate) diffRules(ctx context.Context, id domain.JobID, dir string, p dom
 // marksAdded is MarksAdded for each test file changes add or modify, read
 // as base has it and as the worktree at dir has it, uncommitted or not. A
 // repo of its own is no file to read, whatever its name.
-func (g *Gate) marksAdded(ctx context.Context, dir, base string, changes []domain.FileChange) ([]string, error) {
+func (g *Gate) marksAdded(ctx context.Context, id domain.JobID, dir, base string, changes []domain.FileChange) ([]string, error) {
 	var reasons []string
 	for _, c := range changes {
 		if c.Kind == domain.ChangeDeleted || c.Repo != "" || !IsTestFile(c.Path) {
@@ -226,11 +226,11 @@ func (g *Gate) marksAdded(ctx context.Context, dir, base string, changes []domai
 		var before string
 		if c.Kind == domain.ChangeModified {
 			var err error
-			if before, err = g.Diffs.AtBase(ctx, dir, base, c.Path); err != nil {
+			if before, err = g.Diffs.AtBase(ctx, id, dir, base, c.Path); err != nil {
 				return nil, err
 			}
 		}
-		after, err := g.Diffs.InWorktree(ctx, dir, c.Path)
+		after, err := g.Diffs.InWorktree(ctx, id, dir, c.Path)
 		if err != nil {
 			return nil, err
 		}

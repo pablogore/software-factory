@@ -57,20 +57,20 @@ type diffs struct {
 	readErr error
 }
 
-func (d *diffs) Changes(_ context.Context, dir, base string) ([]domain.FileChange, error) {
+func (d *diffs) Changes(_ context.Context, _ domain.JobID, dir, base string) ([]domain.FileChange, error) {
 	d.dir, d.base = dir, base
 	return d.changes, d.err
 }
 
-func (d *diffs) Flagged(context.Context, string) ([]domain.FlaggedFile, error) {
+func (d *diffs) Flagged(context.Context, domain.JobID, string) ([]domain.FlaggedFile, error) {
 	return d.flagged, d.flagErr
 }
 
-func (d *diffs) AtBase(_ context.Context, _, _, file string) (string, error) {
+func (d *diffs) AtBase(_ context.Context, _ domain.JobID, _, _, file string) (string, error) {
 	return d.before[file], d.readErr
 }
 
-func (d *diffs) InWorktree(_ context.Context, _, file string) (string, error) {
+func (d *diffs) InWorktree(_ context.Context, _ domain.JobID, _, file string) (string, error) {
 	return d.after[file], d.readErr
 }
 

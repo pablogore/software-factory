@@ -17,10 +17,16 @@ import (
 	"strings"
 
 	"github.com/pablogore/software-factory/internal/domain"
+	"github.com/pablogore/software-factory/internal/platform/childenv"
 )
 
-// Differ reads diffs with the git of factoryd's environment.
-type Differ struct{}
+// Differ reads diffs with git run for a job with childenv.Base and the
+// job's HOME in Homes, the one its checks run with: git may run what the
+// repo's config, which the builder can write, tells it to, and that must
+// never get factoryd's tokens.
+type Differ struct {
+	Homes childenv.Homes
+}
 
 // Changes lists the files that differ between the worktree at dir,
 // committed or not, and base, the full object name of the commit its branch
@@ -33,18 +39,22 @@ type Differ struct{}
 // untracked folder with its own .git comes there too, marked as a nested
 // repo, even when the base ignores it: git lists it as one entry and never
 // what is inside.
-func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChange, error) {
+func (d Differ) Changes(ctx context.Context, job domain.JobID, dir, base string) ([]domain.FileChange, error) {
 	if base == "" {
 		return nil, fmt.Errorf("gitdiff: %w: base", domain.ErrMissingField)
 	}
 	if !objectName(base) {
 		return nil, fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
 	}
+	home, err := d.home(job)
+	if err != nil {
+		return nil, err
+	}
 	// ^{commit} makes git refuse an object that is not a commit, or not there.
 	// --raw gives each side's mode, which tells a gitlink. The config and
 	// .gitmodules, which the builder can write, may set submodules to be
 	// ignored; --ignore-submodules=none overrides both.
-	out, err := git(ctx, dir, "diff", "--raw", "--no-renames", "--ignore-submodules=none", "-z", base+"^{commit}", "--")
+	out, err := git(ctx, home, dir, "diff", "--raw", "--no-renames", "--ignore-submodules=none", "-z", base+"^{commit}", "--")
 	if err != nil {
 		return nil, err
 	}
@@ -70,12 +80,12 @@ func (Differ) Changes(ctx context.Context, dir, base string) ([]domain.FileChang
 	// paths from the root like git diff's. No --exclude-standard: it would
 	// also take .git/info/exclude, core.excludesFile and the branch's own
 	// .gitignore files, which the builder can all write to hide a file.
-	out, err = git(ctx, dir, "ls-files", "--others", "--full-name", "-z", "--", ":/")
+	out, err = git(ctx, home, dir, "ls-files", "--others", "--full-name", "-z", "--", ":/")
 	if err != nil {
 		return nil, err
 	}
 	untracked := nulFields(out)
-	ignored, err := ignoredAtBase(ctx, dir, base, untracked)
+	ignored, err := ignoredAtBase(ctx, home, dir, base, untracked)
 	if err != nil {
 		return nil, err
 	}
@@ -100,11 +110,11 @@ const gitlink = "160000"
 // files of base ignore. git reads ignore rules only from a worktree, so the
 // base's are written to a scratch repo of their own and paths are checked
 // there, with no exclude file and no core.excludesFile.
-func ignoredAtBase(ctx context.Context, dir, base string, paths []string) (map[string]bool, error) {
+func ignoredAtBase(ctx context.Context, home, dir, base string, paths []string) (map[string]bool, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	out, err := git(ctx, dir, "ls-tree", "-r", "-z", "--full-tree", base+"^{commit}")
+	out, err := git(ctx, home, dir, "ls-tree", "-r", "-z", "--full-tree", base+"^{commit}")
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +134,7 @@ func ignoredAtBase(ctx context.Context, dir, base string, paths []string) (map[s
 		if path.Base(p) != ".gitignore" || (f[0] != "100644" && f[0] != "100755") {
 			continue
 		}
-		rules, err := git(ctx, dir, "cat-file", "blob", f[2])
+		rules, err := git(ctx, home, dir, "cat-file", "blob", f[2])
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +150,7 @@ func ignoredAtBase(ctx context.Context, dir, base string, paths []string) (map[s
 	if !found {
 		return nil, nil
 	}
-	if _, err := git(ctx, scratch, "init", "-q"); err != nil {
+	if _, err := git(ctx, home, scratch, "init", "-q"); err != nil {
 		return nil, err
 	}
 	// git init may copy an exclude file from its templates.
@@ -153,7 +163,7 @@ func ignoredAtBase(ctx context.Context, dir, base string, paths []string) (map[s
 	for _, p := range paths {
 		stdin.WriteString("./" + p + "\x00")
 	}
-	out, err = run(ctx, scratch, stdin.String(), "-c", "core.excludesFile="+os.DevNull, "check-ignore", "--no-index", "--stdin", "-z")
+	out, err = run(ctx, home, scratch, stdin.String(), "-c", "core.excludesFile="+os.DevNull, "check-ignore", "--no-index", "--stdin", "-z")
 	// check-ignore exits 1 when it ignores none of the paths.
 	if exit := (*exec.ExitError)(nil); errors.As(err, &exit) && exit.ExitCode() == 1 {
 		return nil, nil
@@ -171,10 +181,14 @@ func ignoredAtBase(ctx context.Context, dir, base string, paths []string) (map[s
 // Flagged lists the files the index of the worktree at dir marks
 // skip-worktree or assume-unchanged, one entry per flag: git diff and git
 // status skip their worktree changes, so Changes can't see them.
-func (Differ) Flagged(ctx context.Context, dir string) ([]domain.FlaggedFile, error) {
+func (d Differ) Flagged(ctx context.Context, job domain.JobID, dir string) ([]domain.FlaggedFile, error) {
+	home, err := d.home(job)
+	if err != nil {
+		return nil, err
+	}
 	// -v tags each file as -t does, with S for skip-worktree, and in
 	// lowercase when it is assume-unchanged.
-	out, err := git(ctx, dir, "ls-files", "-v", "--full-name", "-z", "--", ":/")
+	out, err := git(ctx, home, dir, "ls-files", "-v", "--full-name", "-z", "--", ":/")
 	if err != nil {
 		return nil, err
 	}
@@ -196,21 +210,29 @@ func (Differ) Flagged(ctx context.Context, dir string) ([]domain.FlaggedFile, er
 
 // AtBase is the content of file, by its path from the repo root, in base,
 // the full object name of a commit, as Changes takes it.
-func (Differ) AtBase(ctx context.Context, dir, base, file string) (string, error) {
+func (d Differ) AtBase(ctx context.Context, job domain.JobID, dir, base, file string) (string, error) {
 	if !objectName(base) {
 		return "", fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
 	}
-	return git(ctx, dir, "cat-file", "blob", base+":"+file)
+	home, err := d.home(job)
+	if err != nil {
+		return "", err
+	}
+	return git(ctx, home, dir, "cat-file", "blob", base+":"+file)
 }
 
 // AtBaseIfAny is AtBase for a file base may not have: false when it has
 // none, and an ErrInvalidValue error when the path is not a file there, such
 // as a folder.
-func (d Differ) AtBaseIfAny(ctx context.Context, dir, base, file string) (string, bool, error) {
+func (d Differ) AtBaseIfAny(ctx context.Context, job domain.JobID, dir, base, file string) (string, bool, error) {
 	if !objectName(base) {
 		return "", false, fmt.Errorf("gitdiff: base %q is not a full commit hash: %w", base, domain.ErrInvalidValue)
 	}
-	entry, err := git(ctx, dir, "ls-tree", "-z", "--full-tree", base, "--", file)
+	home, err := d.home(job)
+	if err != nil {
+		return "", false, err
+	}
+	entry, err := git(ctx, home, dir, "ls-tree", "-z", "--full-tree", base, "--", file)
 	if err != nil {
 		return "", false, err
 	}
@@ -220,7 +242,7 @@ func (d Differ) AtBaseIfAny(ctx context.Context, dir, base, file string) (string
 	if f := strings.Fields(entry); len(f) < 2 || f[1] != "blob" {
 		return "", false, fmt.Errorf("gitdiff: %s at %s is not a file: %w", file, base, domain.ErrInvalidValue)
 	}
-	content, err := d.AtBase(ctx, dir, base, file)
+	content, err := d.AtBase(ctx, job, dir, base, file)
 	return content, err == nil, err
 }
 
@@ -228,8 +250,12 @@ func (d Differ) AtBaseIfAny(ctx context.Context, dir, base, file string) (string
 // worktree at dir, committed or not. A symlink reads as its target, as git
 // keeps it, so AtBase and InWorktree compare alike and nothing outside the
 // worktree is read.
-func (Differ) InWorktree(ctx context.Context, dir, file string) (string, error) {
-	top, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+func (d Differ) InWorktree(ctx context.Context, job domain.JobID, dir, file string) (string, error) {
+	home, err := d.home(job)
+	if err != nil {
+		return "", err
+	}
+	top, err := git(ctx, home, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
@@ -287,20 +313,42 @@ func kind(status string) domain.ChangeKind {
 	}
 }
 
-// git runs git in dir and returns its output untrimmed, since -z output ends
-// in a NUL; a failure carries git's own message.
-func git(ctx context.Context, dir string, args ...string) (string, error) {
-	return run(ctx, dir, "", args...)
+// home is job's HOME in Homes, which git runs with.
+func (d Differ) home(job domain.JobID) (string, error) {
+	home, err := d.Homes.For(job)
+	if err != nil {
+		return "", fmt.Errorf("gitdiff: %w", err)
+	}
+	return home, nil
 }
 
-// run is git with stdin as its input. --no-replace-objects: the
-// refs/replace/ refs are shared with the worktree, so a builder could make
-// the base commit stand for one of its own and hide what it changed. No
-// fsmonitor: it is set in the config the worktree shares, and one that
-// reports no changes makes git trust the index over the files.
-func run(ctx context.Context, dir, stdin string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.fsmonitor=false"}, args...)...)
+// git runs git in dir with home as its HOME and returns its output
+// untrimmed, since -z output ends in a NUL; a failure carries git's own
+// message.
+func git(ctx context.Context, home, dir string, args ...string) (string, error) {
+	return run(ctx, home, dir, "", args...)
+}
+
+// run is git with stdin as its input, with childenv.Base and home as its
+// environment: whatever git runs from the config the worktree shares, such
+// as a hook it defines or a filter, gets no token factoryd holds.
+// --no-replace-objects: the refs/replace/ refs are shared with the
+// worktree, so a builder could make the base commit stand for one of its
+// own and hide what it changed. No fsmonitor: it is set in the config the
+// worktree shares, and one that reports no changes makes git trust the index
+// over the files. No hooks folder: .git/hooks and core.hooksPath are the
+// builder's to write, and git runs a hook whenever it writes the index, as
+// git diff does to refresh it; hooks the config defines by name still run.
+// GIT_NO_LAZY_FETCH: with a promisor remote in that config, git would fetch
+// an object missing from the store over a transport the builder picked.
+// No global or system config, and no attributes file, which git reads from
+// HOME/.config/git even then: the job's HOME is the builder's to write, and
+// a .gitconfig there could, say, give the scratch repo of ignoredAtBase a
+// template whose core.worktree points at the job's .gitignore files.
+func run(ctx context.Context, home, dir, stdin string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.attributesFile=" + os.DevNull}, args...)...)
 	cmd.Dir = dir
+	cmd.Env = append(childenv.Base(home), "GIT_NO_LAZY_FETCH=1", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
