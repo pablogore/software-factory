@@ -124,12 +124,14 @@ or on its author, tell the factory to reject it.
 Start the session that runs `/factory` from the project root with:
 
 ```bash
-CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --strict-mcp-config --setting-sources project,local
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 claude --model sonnet --strict-mcp-config --setting-sources project,local
 ```
 
-It leaves out MCP servers, your user settings (`~/.claude/settings.json`) and
-automatic memory, so the orchestrator's context carries only the project's
-`.claude/` settings and the factory itself. It isn't confirmed yet whether the
+`--model sonnet` is a recommendation: the orchestrator on sonnet spends less
+of your usage limit or your API budget than on opus. The rest leaves out MCP
+servers, your user settings (`~/.claude/settings.json`) and automatic memory,
+so the orchestrator's context carries only the project's `.claude/` settings
+and the factory itself. It isn't confirmed yet whether the
 subagents inherit this setup; that is measured in spike S4.
 
 ## The guide

@@ -19,6 +19,30 @@ tell the user; never work around it.
 /factory <anything>   talk to the factory: ask about jobs, give feedback, file a feature
 ```
 
+## Spending less
+
+This session lasts the whole run, and everything it writes or reads is paid
+again on every later turn. Keep it lean:
+
+- **Paths.** Give each agent the paths to its files (spec, build, reviews),
+  never their content pasted into the prompt; it reads them itself.
+- **Short replies.** Ask each agent for a final reply of 5 lines at most: its
+  verdict and where the detail is. The detail stays in its files. End every
+  prompt with `Reply in 5 lines at most: your verdict and the file with the
+  detail.` The one exception is a spike's builder, whose findings are its reply.
+- **No rereads.** Don't read a file again once you have read it, unless it
+  changed since.
+- **Messages.** Tell the user only what they need to know or decide: a job
+  waiting on a human (needs-human, needs-info, a checkpoint or a pause), a job
+  that failed or is stuck, a run stopped by a cap, a PR ready to merge, and the
+  summary when the run ends. Don't report each transition or each agent that
+  finishes; when there is nothing of that kind, end your turn without a
+  message.
+- **Scripts.** Leave every decision that needs no judgment to the
+  `factory/bin/` scripts: which stage comes next, which jobs to start, which
+  reviewers and models, whether a cap is hit. Run the script and do what it
+  prints; don't work it out in the session or rebuild it from the files.
+
 ## The pipeline
 
 ```
@@ -100,9 +124,9 @@ agent and for the human, not for you. Your context has to last the whole run.
 Spawn every agent with the Agent tool, in the background, with
 `subagent_type` set to the agent's name. Pass `model` from `job.json`
 `agents` for the reviewers, and never for intake, spec-writer, builder or
-approver: their frontmatter sets it. Each agent replies with one line;
-you are notified when it finishes, and you advance that job then. While agents
-run, don't poll and don't wait: end your turn with a one-line status.
+approver: their frontmatter sets it. Each agent replies in a few lines (see
+**Spending less**); you are notified when it finishes, and you advance that job then. While agents
+run, don't poll and don't wait: end your turn (see **Spending less**).
 Whenever a job looks idle (no agent running for it, nothing advancing), run
 `factory/bin/job status` before you wait: it prints one line under each job
 waiting on a human, with the question it asked or why it escalated. Tell the
@@ -167,8 +191,8 @@ Whenever you move a job to `needs-human` and `factory/bin/job` prints
 `triage` instead, the scripts hit a wall and the tech-lead looks first: go to
 **triage**. Escalations from the approver go straight to the human.
 
-Each step below runs when the previous agent or script finishes. Report one
-short line per transition, e.g. `004-dark-mode #12: gate PASS → reviewing (code, ux, ui)`.
+Each step below runs when the previous agent or script finishes. Don't report
+the transitions; tell the user only what **Spending less** lists.
 
 **intake.** Spawn `intake` with `<header>`. It runs once per issue. When it
 returns, read its decision:
