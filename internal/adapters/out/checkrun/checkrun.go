@@ -48,6 +48,9 @@ type Runner struct {
 	// MaxOutput, when positive, is the most bytes of output a run keeps:
 	// the rest is dropped as it comes and the run says so in its notes.
 	MaxOutput int
+	// observe, when set, is told of every signal to a run's group and of
+	// the reap of its leader, so a test can see none comes after it.
+	observe func(step string)
 }
 
 // Run runs command in dir, for job, without a shell, as the leader of its own process
@@ -58,7 +61,9 @@ type Runner struct {
 // still running when ctx ends or Timeout passes gets SIGTERM with its group,
 // and SIGKILL after grace. However the command ends, what is left of its
 // group, such as a child it left in the background, is killed, and Run
-// returns only once no process of the group is left.
+// returns only once no process of the group is left. The command is
+// reaped only after the last signal to its group, so no signal of a run
+// ever reaches a process that reused its pid or its group's id.
 func (r Runner) Run(ctx context.Context, job domain.JobID, dir string, command []string) (domain.ChecksRun, error) {
 	if len(command) == 0 {
 		return domain.ChecksRun{}, fmt.Errorf("checkrun: %w: command", domain.ErrMissingField)
@@ -101,17 +106,24 @@ func (r Runner) Run(ctx context.Context, job domain.JobID, dir string, command [
 		_, _ = io.Copy(out, pr)
 		close(copied)
 	}()
+	g := &group{cmd: cmd, observe: r.observe}
 	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	go func() { exited <- g.untilExit() }()
 	select {
 	case err = <-exited:
 	case <-runCtx.Done():
-		err = stop(cmd, exited)
+		err = stop(g, exited)
 	}
 	duration := time.Since(start)
-	if killErr := killGroup(cmd); killErr != nil {
-		return domain.ChecksRun{}, fmt.Errorf("checkrun: %q in %s: %w", name, dir, killErr)
+	killErr := g.kill()
+	waitErr := g.reap()
+	if err == nil {
+		err = killErr
 	}
+	if err != nil {
+		return domain.ChecksRun{}, fmt.Errorf("checkrun: %q in %s: %w", name, dir, err)
+	}
+	err = waitErr
 	select {
 	case <-copied:
 	case <-time.After(waitDelay):
@@ -140,10 +152,11 @@ func (r Runner) Run(ctx context.Context, job domain.JobID, dir string, command [
 	return run, nil
 }
 
-// stop sends SIGTERM to cmd's group and, if cmd has not exited after grace,
-// SIGKILL, and returns what Wait returned.
-func stop(cmd *exec.Cmd, exited <-chan error) error {
-	terminate(cmd)
+// stop sends SIGTERM to g and, if its leader has not exited after grace,
+// SIGKILL, and returns once the leader exited, with what untilExit
+// returned.
+func stop(g *group, exited <-chan error) error {
+	g.terminate()
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
@@ -151,7 +164,7 @@ func stop(cmd *exec.Cmd, exited <-chan error) error {
 		return err
 	case <-timer.C:
 	}
-	_ = killGroup(cmd)
+	g.killNow()
 	return <-exited
 }
 

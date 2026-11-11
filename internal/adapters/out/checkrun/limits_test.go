@@ -1,4 +1,4 @@
-//go:build unix
+//go:build linux || darwin
 
 package checkrun_test
 
@@ -125,6 +125,18 @@ func TestRunnerLimits(t *testing.T) {
 				ctx.Expect(run.ExitCode).ToEqual(-1)
 				ctx.Expect(run.Output).ToEqual("started\n")
 				ctx.Expect(run.Notes).ToEqual([]string{"timed out: the checks ran over 300ms and were stopped with their process group"})
+				ctx.Expect(alive(pidIn(ctx, pidFile))).To(specs.BeFalse())
+			})
+
+			s.It("kills the processes the checks' own children started too", func(ctx *specs.Context) {
+				dir := t.TempDir()
+				pidFile := filepath.Join(dir, "grandchild.pid")
+				script := "sh -c 'sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; wait' & wait"
+
+				run, err := checkrun.Runner{Homes: homesIn(t), Timeout: 300 * time.Millisecond}.Run(bg, job, dir, []string{"sh", "-c", script})
+
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(run.ExitCode).ToEqual(-1)
 				ctx.Expect(alive(pidIn(ctx, pidFile))).To(specs.BeFalse())
 			})
 		})

@@ -90,6 +90,16 @@ func TestMCP(t *testing.T) {
 				ctx.Expect(toolNames(ctx, cs)).ToEqual([]string{"ask_human", "context_pack", "dev_server", "progress", "submit_result"})
 			})
 
+			s.It("names run_gate nowhere in what the server says of itself and of its tools", func(ctx *specs.Context) {
+				cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer "+noGate)
+				tools, err := cs.ListTools(context.Background(), nil)
+				ctx.Expect(err).To(specs.BeNil())
+				said, err := json.Marshal([]any{cs.InitializeResult(), tools})
+				ctx.Expect(err).To(specs.BeNil())
+				ctx.Expect(strings.Contains(string(said), "run_gate")).To(specs.BeFalse())
+				ctx.Expect(strings.Contains(string(said), "run-gate")).To(specs.BeFalse())
+			})
+
 			s.It("still hands a run_gate call to the submitter, which refuses it, as the HTTP route does", func(ctx *specs.Context) {
 				err := fmt.Errorf("worker: run gate: %w: role %q may not use tool %q", jobtoken.ErrForbidden, "reviewer-code", "run_gate")
 				sub := &submitter{err: err}
@@ -99,6 +109,22 @@ func TestMCP(t *testing.T) {
 				ctx.Expect(res.IsError).ToEqual(true)
 				ctx.Expect(res.Content[0].(*mcp.TextContent).Text).ToEqual("refused (403): " + err.Error())
 				ctx.Expect(sub.gates).ToEqual([]call{{token: noGate, job: "j-1"}})
+			})
+		})
+
+		s.When("the token may run the job's checks", func(s *specs.Spec) {
+			s.It("lists run_gate with its description, as before", func(ctx *specs.Context) {
+				cs := connect(ctx, mcpworker.Handler(&submitter{}), "j-1", "Bearer tok")
+				tools, err := cs.ListTools(context.Background(), nil)
+				ctx.Expect(err).To(specs.BeNil())
+				var gate *mcp.Tool
+				for _, tool := range tools.Tools {
+					if tool.Name == mcpworker.ToolRunGate {
+						gate = tool
+					}
+				}
+				ctx.Expect(gate).To(specs.Not(specs.BeNil()))
+				ctx.Expect(strings.HasPrefix(gate.Description, "Runs the job's deterministic checks in your worktree")).To(specs.BeTrue())
 			})
 		})
 
