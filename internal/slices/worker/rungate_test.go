@@ -178,6 +178,24 @@ func TestRunGate(t *testing.T) {
 			w.untouched(ctx, "j-1")
 		})
 
+		s.When("telling whether a token may run the checks, running none", func(s *specs.Spec) {
+			s.It("lets a builder that lists run_gate on its own job", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "builder", Kind: domain.KindBuild, Tools: gating, Round: 1})
+				ctx.Expect(w.sub.MayRunGate(token, "j-1")).To(specs.BeTrue())
+				ctx.Expect(w.sub.MayRunGate(token, "j-2")).To(specs.BeFalse())
+				ctx.Expect(g.checked()).To(specs.BeEmpty())
+			})
+
+			s.It("does not let a reviewer, even one that lists run_gate, nor a call without a token", func(ctx *specs.Context) {
+				w, g := withGate(newWorld(ctx), gated)
+				token := w.issue(ctx, jobtoken.Grant{Job: "j-1", Role: "reviewer-code", Kind: domain.KindReview, Tools: gating, Round: 1})
+				ctx.Expect(w.sub.MayRunGate(token, "j-1")).To(specs.BeFalse())
+				ctx.Expect(w.sub.MayRunGate("", "j-1")).To(specs.BeFalse())
+				ctx.Expect(g.checked()).To(specs.BeEmpty())
+			})
+		})
+
 		s.When("the job's checks are already running", func(s *specs.Spec) {
 			s.It("refuses a second call at once, saying so, and runs no other check", func(ctx *specs.Context) {
 				w, g := withGate(newWorld(ctx), gated)

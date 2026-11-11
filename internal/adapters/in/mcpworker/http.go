@@ -48,11 +48,13 @@ const AskPath = "/worker/jobs/{job}/ask"
 
 // Submitter decides a result, records a progress message, runs the checks,
 // records a question to a person or gives the context pack, on a job with
-// the token it came with.
+// the token it came with. MayRunGate tells whether a token may run a job's
+// checks, so the MCP server lists run_gate only to whom may call it.
 type Submitter interface {
 	Submit(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
 	Progress(ctx context.Context, token string, job domain.JobID, text string) ([]domain.Event, error)
 	RunGate(ctx context.Context, token string, job domain.JobID) (domain.ChecksRun, error)
+	MayRunGate(token string, job domain.JobID) bool
 	DevServer(ctx context.Context, token string, job domain.JobID) (int, error)
 	StopDevServer(ctx context.Context, token string, job domain.JobID) error
 	AskHuman(ctx context.Context, token string, job domain.JobID, data []byte) ([]domain.Event, error)
