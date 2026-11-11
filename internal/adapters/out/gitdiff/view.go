@@ -3,6 +3,7 @@ package gitdiff
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +31,9 @@ type view struct {
 // the worktree's git folder, which the view doesn't read, so the copy can't
 // be read on its own and nothing can hide behind it.
 func newView(ctx context.Context, home, dir string) (view, error) {
-	out, err := git(ctx, home, dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--git-path", "index", "--show-object-format")
+	// The index comes before --path-format=absolute, which resolves a symlink
+	// at its name, and copyIndex must see the symlink to refuse it.
+	out, err := git(ctx, home, dir, "rev-parse", "--git-path", "index", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--show-object-format")
 	if err != nil {
 		return view{}, err
 	}
@@ -38,7 +41,10 @@ func newView(ctx context.Context, home, dir string) (view, error) {
 	if len(lines) != 4 {
 		return view{}, fmt.Errorf("gitdiff: unexpected git rev-parse output %q: %w", out, domain.ErrInvalidValue)
 	}
-	top, common, index, format := lines[0], lines[1], lines[2], lines[3]
+	index, top, common, format := lines[0], lines[1], lines[2], lines[3]
+	if !filepath.IsAbs(index) {
+		index = filepath.Join(dir, index)
+	}
 	scratch, err := os.MkdirTemp("", "gitdiff-view-")
 	if err != nil {
 		return view{}, fmt.Errorf("gitdiff: %w", err)
@@ -64,13 +70,9 @@ func (v *view) fill(ctx context.Context, common, index, format string) error {
 	if err := os.WriteFile(filepath.Join(info, "alternates"), []byte(filepath.Join(common, "objects")+"\n"), 0o600); err != nil {
 		return fmt.Errorf("gitdiff: %w", err)
 	}
-	data, err := os.ReadFile(index)
-	if err != nil {
-		return fmt.Errorf("gitdiff: %w", err)
-	}
 	copied := filepath.Join(v.scratch, "index.copy")
-	if err := os.WriteFile(copied, data, 0o600); err != nil {
-		return fmt.Errorf("gitdiff: %w", err)
+	if err := copyIndex(index, copied); err != nil {
+		return err
 	}
 	v.env = []string{"GIT_DIR=" + gitDir, "GIT_COMMON_DIR=" + gitDir, "GIT_WORK_TREE=" + v.top}
 	empty, err := run(ctx, v.home, v.scratch, "", v.env, "hash-object", "-t", "tree", "--stdin")
@@ -85,6 +87,47 @@ func (v *view) fill(ctx context.Context, common, index, format string) error {
 	v.env = append(v.env, "GIT_INDEX_FILE="+filepath.Join(v.scratch, "index"))
 	_, err = run(ctx, v.home, v.top, entries, v.env, "update-index", "-z", "--index-info")
 	return err
+}
+
+// maxIndex bounds the index copyIndex copies, far above any real one.
+const maxIndex = 512 << 20
+
+// copyIndex copies the real index at from to to. The builder picks what is
+// at from, and the copy runs in factoryd, where ctx can't stop it: a FIFO
+// there would block it for good and /dev/zero would fill its memory, so it
+// takes only a regular file, not through a symlink, of at most maxIndex.
+func copyIndex(from, to string) error {
+	src, err := openIndex(from)
+	if err != nil {
+		return fmt.Errorf("gitdiff: opening the index: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+	info, err := src.Stat()
+	if err != nil {
+		return fmt.Errorf("gitdiff: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("gitdiff: the index %s is not a regular file: %w", from, domain.ErrInvalidValue)
+	}
+	if info.Size() > maxIndex {
+		return fmt.Errorf("gitdiff: the index %s is over %d bytes: %w", from, maxIndex, domain.ErrInvalidValue)
+	}
+	dst, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("gitdiff: %w", err)
+	}
+	// One byte over the cap tells a file that grew past it since the Stat.
+	n, err := io.Copy(dst, io.LimitReader(src, maxIndex+1))
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("gitdiff: copying the index: %w", err)
+	}
+	if n > maxIndex {
+		return fmt.Errorf("gitdiff: the index %s is over %d bytes: %w", from, maxIndex, domain.ErrInvalidValue)
+	}
+	return nil
 }
 
 // git runs git in the view, from the worktree's top.

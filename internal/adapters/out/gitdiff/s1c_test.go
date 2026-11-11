@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -217,5 +218,60 @@ func TestDemoS1c(t *testing.T) {
 			ctx.Expect(err).To(specs.Not(specs.BeNil()))
 			ctx.Expect(changes).To(specs.BeEmpty())
 		})
+
+		specs.Table(s, badIndexRows(), func(r badIndexRow) string { return r.name }, func(ctx *specs.Context, r badIndexRow) {
+			w := newS1c(ctx)
+			index := filepath.Join(w.dir, ".git", "index")
+			ctx.Expect(os.Remove(index)).To(specs.BeNil())
+			r.plant(ctx, index)
+
+			// In a goroutine, so a read that blocks fails the row, not the run.
+			done := make(chan error, 1)
+			go func() {
+				_, err := w.differ.Changes(context.Background(), job, w.dir, w.fork)
+				done <- err
+			}()
+
+			select {
+			case err := <-done:
+				ctx.Expect(err).To(specs.Not(specs.BeNil()))
+				ctx.Expect(err.Error()).To(specs.Contain(r.want))
+			case <-time.After(10 * time.Second):
+				ctx.Testing().Fatal("Changes did not return")
+			}
+		})
 	})
+}
+
+// badIndexRow puts something in place of the worktree's real index that
+// factoryd must refuse to read, rather than hang or run out of memory;
+// want is in the error copyIndex returns, so git's own parse error doesn't
+// pass for it.
+type badIndexRow struct {
+	name  string
+	plant func(ctx *specs.Context, index string)
+	want  string
+}
+
+func badIndexRows() []badIndexRow {
+	return []badIndexRow{
+		{"fails at once when the index is a FIFO", func(ctx *specs.Context, index string) {
+			ctx.Expect(syscall.Mkfifo(index, 0o600)).To(specs.BeNil())
+		}, "is not a regular file"},
+		{"fails at once when the index is a symlink to /dev/zero", func(ctx *specs.Context, index string) {
+			ctx.Expect(os.Symlink("/dev/zero", index)).To(specs.BeNil())
+		}, "opening the index"},
+		{"fails when the index is a symlink to a regular file", func(ctx *specs.Context, index string) {
+			other := filepath.Join(ctx.Testing().TempDir(), "other")
+			ctx.Expect(os.WriteFile(other, []byte("secret\n"), 0o600)).To(specs.BeNil())
+			ctx.Expect(os.Symlink(other, index)).To(specs.BeNil())
+		}, "opening the index"},
+		{"fails when the index is over the size cap", func(ctx *specs.Context, index string) {
+			f, err := os.Create(index)
+			ctx.Expect(err).To(specs.BeNil())
+			// Sparse: it takes no disk.
+			ctx.Expect(f.Truncate(512<<20 + 1)).To(specs.BeNil())
+			ctx.Expect(f.Close()).To(specs.BeNil())
+		}, "bytes"},
+	}
 }
