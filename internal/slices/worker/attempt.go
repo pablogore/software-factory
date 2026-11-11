@@ -38,21 +38,31 @@ type Attempts struct {
 // token before it was revoked still counts. A session that ended counts as
 // a turn without a result.
 func (a *Attempts) Run(ctx context.Context, s session, job domain.JobID, role, agent, token, prompt string) (bool, error) {
+	handed, _, err := a.run(ctx, s, job, role, agent, token, prompt)
+	return handed, err
+}
+
+// run is Run, and tells too whether it recorded a domain.AgentLimited, so
+// the stage runs again once the agent may go on.
+func (a *Attempts) run(ctx context.Context, s session, job domain.JobID, role, agent, token, prompt string) (handed, limited bool, err error) {
 	missed, limit, err := a.turn(ctx, s, token, prompt)
 	if limit != nil {
-		return a.limited(ctx, job, role, agent, token, *limit)
+		handed, err = a.limited(ctx, job, role, agent, token, *limit)
+		return handed, !handed && err == nil, err
 	}
 	if err != nil || missed == "" {
-		return err == nil, err
+		return err == nil, false, err
 	}
 	missed, limit, err = a.turn(ctx, s, token, Retry(missed))
 	if limit != nil {
-		return a.limited(ctx, job, role, agent, token, *limit)
+		handed, err = a.limited(ctx, job, role, agent, token, *limit)
+		return handed, !handed && err == nil, err
 	}
 	if err != nil || missed == "" {
-		return err == nil, err
+		return err == nil, false, err
 	}
-	return a.failSession(ctx, job, role, token, missed, s.Stderr(), nil)
+	handed, err = a.failSession(ctx, job, role, token, missed, s.Stderr(), nil)
+	return handed, false, err
 }
 
 // Retry is the prompt that asks an agent once more for its result, saying

@@ -115,7 +115,8 @@ type Server struct {
 
 // StartServer opens cfg's store, validates its pipelines, readies the
 // scheduler and the outbox, has the worker API listen, registers the
-// subscribers and starts the bus, which first hands them what was pending.
+// subscribers, picks up the jobs paused on an agent's limit and starts the
+// bus, which first hands them what was pending.
 // An error names the piece that failed, and whatever opened before it is
 // closed again.
 func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
@@ -191,6 +192,16 @@ func StartServer(ctx context.Context, cfg ServeConfig) (*Server, error) {
 	if err := events.Subscribe(LaunchSubscriber, launch, worker.LaunchEvents...); err != nil {
 		cancel()
 		return fail("subscribers", err)
+	}
+	// Pauses on agents' limits are rebuilt before the bus replays what was
+	// pending, so no replayed launch starts a session on a paused agent.
+	ids, err := store.JobIDs(ctx)
+	if err == nil {
+		err = launcher.Resume(work, ids)
+	}
+	if err != nil {
+		cancel()
+		return fail("launcher", err)
 	}
 	if err := events.Start(ctx); err != nil {
 		cancel()

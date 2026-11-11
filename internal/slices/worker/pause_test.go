@@ -94,8 +94,8 @@ func (p pauseWorld) wait(ctx *specs.Context) chan time.Time {
 }
 
 // limit has j-1's builder hit claude's limit, which lets it go on at
-// resumeAt.
-func (p pauseWorld) limit(ctx *specs.Context) {
+// resumeAt. It returns the wait j-1's builder runs again after.
+func (p pauseWorld) limit(ctx *specs.Context) chan time.Time {
 	p.set(nil, 1, false)
 	launch(ctx, p.l, enteredBuild(ctx, p.world, "j-1"))
 	// The session's own time limit, which never runs out here.
@@ -103,6 +103,7 @@ func (p pauseWorld) limit(ctx *specs.Context) {
 	job, _, err := p.store.Load(context.Background(), "j-1")
 	ctx.Expect(err).To(specs.BeNil())
 	ctx.Expect(job.Limited).To(specs.Not(specs.BeNil()))
+	return p.wait(ctx)
 }
 
 func (p pauseWorld) stage(ctx *specs.Context, id domain.JobID) string {
@@ -115,7 +116,7 @@ func TestLaunchPausedAgent(t *testing.T) {
 	specs.Describe(t, "worker.Launcher with an agent paused on its limit", func(s *specs.Spec) {
 		s.It("starts no session on that agent for another job until the limit lets it go on, then starts it", func(ctx *specs.Context) {
 			p := newPauseWorld(ctx, &inline{})
-			p.limit(ctx)
+			relaunch := p.limit(ctx)
 			p.set([]string{ready}, 0, false)
 
 			launch(ctx, p.l, enteredBuild(ctx, p.world, "j-2"))
@@ -138,8 +139,51 @@ func TestLaunchPausedAgent(t *testing.T) {
 			ctx.Expect(started).To(specs.HaveLen(2))
 			ctx.Expect(started[1].Job).ToEqual(domain.JobID("j-2"))
 			ctx.Expect(started[1].Role).ToEqual("builder")
-			// The job that hit the limit is not relaunched.
+			// The job that hit the limit waits for its own wait to end.
 			ctx.Expect(p.stage(ctx, "j-1")).ToEqual("build")
+			close(relaunch)
+			eventually(ctx, func() bool { return p.stage(ctx, "j-1") == domain.StageGate })
+		})
+
+		s.It("runs the attempt that hit the limit again in a new session once the limit lets it go on, spending no attempt", func(ctx *specs.Context) {
+			p := newPauseWorld(ctx, &inline{})
+			relaunch := p.limit(ctx)
+			p.set([]string{ready}, 0, false)
+
+			// Woken early, it waits again.
+			p.clock.set(resumeAt.Add(-time.Minute))
+			close(relaunch)
+			again := p.wait(ctx)
+			ctx.Expect(p.agents.started()).To(specs.HaveLen(1))
+
+			p.clock.set(resumeAt)
+			close(again)
+			eventually(ctx, func() bool { return p.stage(ctx, "j-1") == domain.StageGate })
+
+			started := p.agents.started()
+			ctx.Expect(started).To(specs.HaveLen(2))
+			ctx.Expect(started[1].Job).ToEqual(domain.JobID("j-1"))
+			ctx.Expect(started[1].Role).ToEqual("builder")
+			ctx.Expect(tokenOf(started[1])).To(specs.Not(specs.Equal(tokenOf(started[0]))))
+			ctx.Expect(lastEvents(ctx, p.world, "j-1", 3)).ToEqual([]string{"StageEntered", "AgentLimited", "StageEntered"})
+			ctx.Expect(p.world.history(ctx, "j-1")).To(specs.Not(specs.Contain("AttemptFailed")))
+		})
+
+		s.It("runs it again once more when the new session hits the limit too", func(ctx *specs.Context) {
+			p := newPauseWorld(ctx, &inline{})
+			relaunch := p.limit(ctx)
+
+			p.clock.set(resumeAt)
+			close(relaunch)
+			// The new session's time limit, then its own wait on the limit.
+			p.wait(ctx)
+			again := p.wait(ctx)
+
+			ctx.Expect(p.agents.started()).To(specs.HaveLen(2))
+			ctx.Expect(lastEvents(ctx, p.world, "j-1", 2)).ToEqual([]string{"AgentLimited", "AgentLimited"})
+			p.set([]string{ready}, 0, false)
+			close(again)
+			eventually(ctx, func() bool { return p.stage(ctx, "j-1") == domain.StageGate })
 		})
 
 		s.It("starts a session at once for a job whose role runs on another agent", func(ctx *specs.Context) {

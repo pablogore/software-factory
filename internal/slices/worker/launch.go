@@ -110,14 +110,19 @@ func (l *Launcher) Launch(ctx context.Context, ev domain.Event) error {
 		launch, retry = []string{e.Role}, e.Retry
 	}
 	for _, role := range launch {
-		key := launchKey{job: job.ID, role: role, round: job.Round, entry: entry, retry: retry}
-		if !l.claim(key) {
-			continue
-		}
-		done := l.Scheduler.Submit(ctx, job.ID, func(ctx context.Context) error { return l.attempt(ctx, key) })
-		go l.report(ctx, key, done)
+		l.submit(ctx, launchKey{job: job.ID, role: role, round: job.Round, entry: entry, retry: retry})
 	}
 	return nil
+}
+
+// submit hands Scheduler key's attempt, unless it was handed over already,
+// without waiting for it.
+func (l *Launcher) submit(ctx context.Context, key launchKey) {
+	if !l.claim(key) {
+		return
+	}
+	done := l.Scheduler.Submit(ctx, key.job, func(ctx context.Context) error { return l.attempt(ctx, key) })
+	go l.report(ctx, key, done)
 }
 
 // savedIn is the stage entry the job was in once ev was saved, from its
@@ -176,7 +181,9 @@ func (l *Launcher) claim(key launchKey) bool {
 
 // attempt runs key's attempt in a new session, unless the job left its round
 // or stage entry while it waited for a slot, or waits for later when the
-// role's agent is paused on its limit. A role, worktree or agent that fails to start the
+// role's agent is paused on its limit. A session that ends on its agent's
+// limit runs the attempt again, in a new session, once the agent may go on.
+// A role, worktree or agent that fails to start the
 // session is a failed attempt, so the role runs again or the job hits a
 // wall instead of waiting for a session that never came.
 func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
@@ -219,8 +226,13 @@ func (l *Launcher) attempt(ctx context.Context, key launchKey) error {
 		_ = sess.Close()
 	})
 	defer stop()
-	_, err = l.Attempts.Run(run, sess, key.job, role.Name, role.Agent, token, prompt)
+	_, limited, err := l.Attempts.run(run, sess, key.job, role.Name, role.Agent, token, prompt)
 	stop()
+	if limited {
+		// The pause spends no attempt: the same attempt runs again once
+		// the agent may go on.
+		go l.later(ctx, key, l.Attempts.paused.pausedFor(role.Agent, l.Attempts.Clock.Now()))
+	}
 	if err == nil || !expired() {
 		return err
 	}

@@ -210,6 +210,28 @@ func load(ctx context.Context, q querier, id domain.JobID) (domain.Job, ports.Ve
 	return job, v, nil
 }
 
+// JobIDs lists every saved job's ID, in order, so a starting server finds
+// the jobs whose work lived only in the one that stopped.
+func (s *Store) JobIDs(ctx context.Context) (_ []domain.JobID, err error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: job ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }() // rows.Err reports what matters
+	ids := []domain.JobID{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("sqlite: job ids: %w", err)
+		}
+		ids = append(ids, domain.JobID(id))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sqlite: job ids: %w", err)
+	}
+	return ids, nil
+}
+
 // Apply implements ports.JobStore: the job is read, decided and saved with
 // Decide's events and the actions asked for in one transaction, rolled back
 // on the first failure.
