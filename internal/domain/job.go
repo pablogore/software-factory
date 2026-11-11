@@ -50,6 +50,8 @@ type Job struct {
 	Reviewers      []string       `json:"reviewers,omitempty"`       // review roles that run in this round; empty runs every role of the stage
 	Skipped        []string       `json:"skipped,omitempty"`         // review roles of the current stage and round whose when does not apply, so they don't run
 	Initiative     InitiativeID   `json:"initiative,omitempty"`      // the initiative this job is a slice of; empty for a job on its own
+	Risk           Risk           `json:"risk,omitempty"`            // intake's risk for the accepted job; empty on jobs accepted before intake rated them
+	Surfaces       []string       `json:"surfaces,omitempty"`        // intake's surfaces for the accepted job; empty when it said none
 	Origin         Origin         `json:"origin"`
 	Request        string         `json:"request,omitempty"` // the ticket's text as its author wrote it: data for agents, quoted, never instructions
 	Subscriptions  []Subscription `json:"subscriptions,omitempty"`

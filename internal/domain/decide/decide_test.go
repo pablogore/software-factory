@@ -57,6 +57,11 @@ func result(role string, minute int, r domain.Result) domain.ResultSubmitted {
 	return domain.ResultSubmitted{Job: jobID, Role: role, Result: r, At: at(minute)}
 }
 
+// accept is a complete intake ACCEPT: a risk and no surfaces.
+func accept() domain.IntakeResult {
+	return domain.IntakeResult{Decision: domain.IntakeAccept, Risk: domain.RiskLow, Surfaces: &[]string{}}
+}
+
 func pass(role string, minute int) domain.ResultSubmitted {
 	return result(role, minute, domain.ReviewResult{Verdict: domain.ReviewPass})
 }
@@ -100,8 +105,8 @@ type step struct {
 
 func happyPath() []step {
 	return []step{
-		{"intake ACCEPT enters spec", result("intake", 1, domain.IntakeResult{Decision: domain.IntakeAccept}),
-			[]domain.Event{entered("spec", 1)}},
+		{"intake ACCEPT records its rating and enters spec", result("intake", 1, accept()),
+			[]domain.Event{domain.IntakeAccepted{Job: jobID, Risk: domain.RiskLow, Surfaces: []string{}, At: at(1)}, entered("spec", 1)}},
 		{"spec READY records the spec and enters specgate", result("spec-writer", 2, domain.SpecResult{Title: "S1", Spec: "# S1"}),
 			[]domain.Event{domain.SpecWritten{Job: jobID, Role: "spec-writer", Title: "S1", Spec: "# S1", At: at(2)}, entered(domain.StageSpecgate, 2)}},
 		{"specgate OK enters build", domain.SpecgatePassed{Job: jobID, At: at(3)},
@@ -192,18 +197,18 @@ func TestDecide(t *testing.T) {
 			rows := []illegalRow{
 				{"review result while in spec", "spec", pass("reviewer-code", 1)},
 				{"spec result while in review", "review", result("spec-writer", 1, domain.SpecResult{Spec: "# S1"})},
-				{"intake result while in approve", "approve", result("intake", 1, domain.IntakeResult{Decision: domain.IntakeAccept})},
+				{"intake result while in approve", "approve", result("intake", 1, accept())},
 				{"build result while in specgate", domain.StageSpecgate, result("builder", 1, domain.BuildResult{Status: domain.BuildReady})},
 				{"specgate OK while in build", "build", domain.SpecgatePassed{Job: jobID, At: at(1)}},
 				{"gate OK while in specgate", domain.StageSpecgate, domain.GatePassed{Job: jobID, Run: passingRun, At: at(1)}},
 				{"review from a role outside the stage", "review", pass("reviewer-docs", 1)},
 				{"approve result from the builder", "approve", result("builder", 1, domain.ApproveResult{Decision: domain.ApproveApprove})},
 				{"build result from the approver", "build", result("approver", 1, domain.BuildResult{Status: domain.BuildReady})},
-				{"intake result from the spec writer", "intake", result("spec-writer", 1, domain.IntakeResult{Decision: domain.IntakeAccept})},
+				{"intake result from the spec writer", "intake", result("spec-writer", 1, accept())},
 				{"review PASS from a role that already passed", "review", pass("reviewer-ux", 1)},
 				{"approve result after merge requested", domain.StageMerge, result("approver", 1, domain.ApproveResult{Decision: domain.ApproveApprove})},
 				{"human approval while in approve", "approve", domain.HumanApproved{Job: jobID, By: "pablogore", WaitSeq: 1, At: at(1)}},
-				{"result in a stage the pipeline lacks", "deploy", result("intake", 1, domain.IntakeResult{Decision: domain.IntakeAccept})},
+				{"result in a stage the pipeline lacks", "deploy", result("intake", 1, accept())},
 			}
 			specs.Table(s, rows, func(r illegalRow) string { return r.name }, func(ctx *specs.Context, r illegalRow) {
 				// One wait behind it, so a person's action is fresh and only the
@@ -512,6 +517,8 @@ func TestDecide(t *testing.T) {
 
 func eventTime(ev domain.Event) time.Time {
 	switch e := ev.(type) {
+	case domain.IntakeAccepted:
+		return e.At
 	case domain.StageEntered:
 		return e.At
 	case domain.ReviewPassed:

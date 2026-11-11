@@ -104,7 +104,7 @@ func TestStop(t *testing.T) {
 			rows := []eventRow{
 				{"another stop changes nothing", stop("pablogore", 1)},
 				{"a stop without a name changes nothing", stop("", 1)},
-				{"an intake ACCEPT changes nothing", result("intake", 1, domain.IntakeResult{Decision: domain.IntakeAccept})},
+				{"an intake ACCEPT changes nothing", result("intake", 1, accept())},
 				{"a build READY changes nothing", result("builder", 1, domain.BuildResult{Status: domain.BuildReady})},
 				{"a review PASS changes nothing", pass("reviewer-code", 1)},
 				{"an APPROVE changes nothing", result("approver", 1, domain.ApproveResult{Decision: domain.ApproveApprove})},
@@ -153,7 +153,7 @@ func TestStop(t *testing.T) {
 				{"rejects a stop in review", "review", domain.StopRequested{Job: other, By: "pablogore", At: at(1)}},
 				{"rejects a stop in a stopped job", domain.StageStopped, domain.StopRequested{Job: other, By: "pablogore", At: at(1)}},
 				{"rejects a stop without a job", "build", domain.StopRequested{By: "pablogore", At: at(1)}},
-				{"rejects an intake ACCEPT in intake", "intake", domain.ResultSubmitted{Job: other, Role: "intake", Result: domain.IntakeResult{Decision: domain.IntakeAccept}, At: at(1)}},
+				{"rejects an intake ACCEPT in intake", "intake", domain.ResultSubmitted{Job: other, Role: "intake", Result: accept(), At: at(1)}},
 				{"rejects a gate OK in gate", domain.StageGate, domain.GatePassed{Job: other, Run: passingRun, At: at(1)}},
 				{"rejects a failing gate in gate", domain.StageGate, domain.GateFailed{Job: other, Run: failingRun, At: at(1)}},
 				{"rejects a specgate OK in specgate", domain.StageSpecgate, domain.SpecgatePassed{Job: other, At: at(1)}},

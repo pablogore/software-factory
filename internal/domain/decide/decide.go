@@ -252,6 +252,8 @@ func Apply(job domain.Job, evs []domain.Event) domain.Job {
 		case domain.SliceDropped:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", nil, nil, nil
 			job = leftNeedsHuman(job)
+		case domain.IntakeAccepted:
+			job.Risk, job.Surfaces = e.Risk, e.Surfaces
 		case domain.JobRejected:
 			job.Stage, job.InfoFrom, job.Reviewers, job.Passed, job.Changes = domain.StageRejected, "", nil, nil, nil
 			job = leftNeedsHuman(job)
@@ -304,7 +306,8 @@ func decideResult(job domain.Job, e domain.ResultSubmitted, p domain.Pipeline) (
 	case domain.IntakeResult:
 		switch r.Decision {
 		case domain.IntakeAccept:
-			return next(job, p, i, e.At), nil
+			rated := domain.IntakeAccepted{Job: job.ID, Risk: r.Risk, Surfaces: slices.Clone(*r.Surfaces), At: e.At}
+			return append([]domain.Event{rated}, next(job, p, i, e.At)...), nil
 		case domain.IntakeNeedsInfo:
 			return []domain.Event{domain.NeedsInfo{Job: job.ID, From: stage.Name, At: e.At}}, nil
 		case domain.IntakeReject:

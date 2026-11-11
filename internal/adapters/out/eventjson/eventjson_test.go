@@ -32,7 +32,7 @@ func samples() []sample {
 	id, ini := jobID, domain.InitiativeID("ini-1")
 	t := at(1)
 	return []sample{
-		{"intake result", domain.ResultSubmitted{Job: id, Role: "intake", Result: domain.IntakeResult{Decision: domain.IntakeAccept, Slices: []domain.Slice{{ID: "S1", Title: "Save"}}, Reason: "fits"}, At: t}},
+		{"intake result", domain.ResultSubmitted{Job: id, Role: "intake", Result: domain.IntakeResult{Decision: domain.IntakeAccept, Slices: []domain.Slice{{ID: "S1", Title: "Save"}}, Reason: "fits", Risk: domain.RiskLow, Surfaces: &[]string{"ui"}}, At: t}},
 		{"spec result", domain.ResultSubmitted{Job: id, Role: "spec-writer", Result: domain.SpecResult{Title: "S1", Spec: "# S1"}, At: t}},
 		{"build result", domain.ResultSubmitted{Job: id, Role: "builder", Result: domain.BuildResult{Status: domain.BuildReady, Summary: "done"}, At: t}},
 		{"review result", domain.ResultSubmitted{Job: id, Role: "reviewer-code", Result: domain.ReviewResult{Verdict: domain.ReviewChanges, Findings: []domain.Finding{{File: "a.go", Line: 3, Severity: "high", Category: "bug", Role: "reviewer-code", Message: "nil"}}}, At: t}},
@@ -61,6 +61,7 @@ func samples() []sample {
 		{"AttemptFailed", domain.AttemptFailed{Job: id, Role: "builder", Reason: "no result submitted", Stderr: []string{"error: model overloaded"}, At: t}},
 		{"AttemptRetried", domain.AttemptRetried{Job: id, Role: "builder", Retry: 1, At: t}},
 		{"NeedsInfo", domain.NeedsInfo{Job: id, From: "intake", Question: "Dark mode for everyone?", At: t}},
+		{"IntakeAccepted", domain.IntakeAccepted{Job: id, Risk: domain.RiskMedium, Surfaces: []string{"ui"}, At: t}},
 		{"JobRejected", domain.JobRejected{Job: id, Reason: "duplicate", At: t}},
 		{"MergeRequested", domain.MergeRequested{Job: id, At: t}},
 		{"MergeCompleted", domain.MergeCompleted{Job: id, At: t}},
@@ -134,6 +135,16 @@ func TestEventJSON(t *testing.T) {
 			slices.Sort(got)
 
 			ctx.Expect(slices.Compact(got)).ToEqual(want)
+		})
+
+		s.It("decodes an intake ACCEPT saved before intake rated risk and surfaces", func(ctx *specs.Context) {
+			env := eventjson.Envelope{Name: "ResultSubmitted", At: at(1),
+				Data: []byte(`{"job":"job-1","role":"intake","kind":"intake","result":{"decision":"ACCEPT"},"at":"2026-11-06T20:01:00Z"}`)}
+
+			got, err := eventjson.Decode(env)
+
+			ctx.Expect(err).To(specs.BeNil())
+			ctx.Expect(got).ToEqual(domain.ResultSubmitted{Job: jobID, Role: "intake", Result: domain.IntakeResult{Decision: domain.IntakeAccept}, At: at(1)})
 		})
 
 		specs.Table(s, samples(), func(r sample) string {
