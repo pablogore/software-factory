@@ -442,11 +442,16 @@ func git(ctx context.Context, home, dir string, args ...string) (string, error) 
 // template whose core.worktree points at the job's .gitignore files.
 // GIT_CEILING_DIRECTORIES at dir's parent: with the worktree's .git deleted,
 // git would find the repo the worktree sits in, the main checkout, and read
-// its index and its files as the worktree's.
+// its index and its files as the worktree's. A path with a ":" fails
+// instead: git splits GIT_CEILING_DIRECTORIES at ":", and the halves would
+// leave no ceiling over dir.
 func run(ctx context.Context, home, dir, stdin string, env []string, args ...string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", fmt.Errorf("gitdiff: %w", err)
+	}
+	if strings.Contains(abs, ":") {
+		return "", fmt.Errorf("gitdiff: path %s has a \":\", which GIT_CEILING_DIRECTORIES can't hold: %w", abs, domain.ErrInvalidValue)
 	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.attributesFile=" + os.DevNull}, args...)...)
 	cmd.Dir = dir
