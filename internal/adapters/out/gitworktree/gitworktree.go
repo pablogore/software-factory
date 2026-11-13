@@ -54,8 +54,10 @@ func (w *Workspace) Prepare(ctx context.Context, job domain.JobID) (ports.Worktr
 		return ports.Worktree{}, err
 	}
 	if _, err := os.Stat(wt.Path); err == nil {
-		// Reusing it as it is keeps work a previous run left there.
-		head, err := w.git(ctx, job, wt.Path, "rev-parse", "--abbrev-ref", "HEAD")
+		// Reusing it as it is keeps work a previous run left there. The
+		// ceiling keeps git from reading the main checkout's branch when the
+		// worktree's .git is gone.
+		head, err := w.gitEnv(ctx, job, wt.Path, []string{"GIT_CEILING_DIRECTORIES=" + filepath.Dir(wt.Path)}, "rev-parse", "--abbrev-ref", "HEAD")
 		if err != nil {
 			return ports.Worktree{}, err
 		}
@@ -168,7 +170,9 @@ func backupRef(job domain.JobID) string {
 // worktree names the job's path and branch, refusing ids that would land
 // outside .worktrees. The path is absolute whatever the repo was given as:
 // git runs in other folders than the one the repo is relative to, and drops
-// a relative GIT_CEILING_DIRECTORIES entry.
+// a relative GIT_CEILING_DIRECTORIES entry. A path with a ":" is refused:
+// git splits GIT_CEILING_DIRECTORIES at ":", and the halves would leave no
+// ceiling over the worktree.
 func (w *Workspace) worktree(job domain.JobID) (ports.Worktree, error) {
 	id := string(job)
 	if id == "" {
@@ -180,6 +184,9 @@ func (w *Workspace) worktree(job domain.JobID) (ports.Worktree, error) {
 	path, err := filepath.Abs(filepath.Join(w.repo, ".worktrees", id))
 	if err != nil {
 		return ports.Worktree{}, err
+	}
+	if strings.Contains(path, ":") {
+		return ports.Worktree{}, fmt.Errorf("worktree path %s has a \":\", which GIT_CEILING_DIRECTORIES can't hold: %w", path, domain.ErrInvalidValue)
 	}
 	return ports.Worktree{
 		Job:    job,
